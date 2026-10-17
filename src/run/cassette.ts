@@ -47,6 +47,7 @@ import {
   type PlatformBaseline,
   type DeviceBridgeRecord,
   Assertion as AssertionSchema,
+  COUNT_BOUND_PARAMS,
   ScenarioObject,
   VERDICT_MODIFIER_KEYS,
   FIDELITY_TIERS,
@@ -4297,6 +4298,14 @@ export function parseCassetteObject(raw: unknown): { cassette: Cassette } | { er
     const r = AssertionSchema.safeParse(a);
     if (r.success) return;
     const detail = `scenario.assert[${i}]: ${r.error.issues.map((iss) => `${iss.path.join(".") || "<root>"}: ${iss.message}`).join("; ")}`;
+    // A recognised assertion whose ONLY defect is a count bound no run can meet (refused at load since 4.11.0) drops
+    // nothing from replay: it reaches the evaluator, which names the bound in a FAIL. Tolerated with a warning so a
+    // frozen record keeps replaying, verifying and rehashing as before. Every other issue (another `custom` refine
+    // such as the regex-shaped tool glob, or a union that failed on a sibling field) is still refused.
+    if (r.error.issues.every(isCountBoundIssue)) {
+      warn(`::warning:: [cassette] ${detail} — this assertion can never pass; it grades FAIL\n`);
+      return;
+    }
     if (isFutureCassette)
       warn(
         `::warning:: [cassette] unrecognized assertion (tolerated — cassette v${recordedVersion} is newer than v${CASSETTE_VERSION}): ${detail}\n`,
@@ -4310,6 +4319,11 @@ export function parseCassetteObject(raw: unknown): { cassette: Cassette } | { er
         `${assertErrors.join("; ")}. Fix the assertion, or re-record.`,
     };
   return { cassette };
+}
+
+/** A schema issue raised by a count-bound refine (`COUNT_BOUND_PARAMS`), not by any other check. */
+function isCountBoundIssue(iss: { code: string; params?: unknown }): boolean {
+  return iss.code === "custom" && (iss.params as { kind?: unknown } | undefined)?.kind === COUNT_BOUND_PARAMS.kind;
 }
 
 /** The committed cassettes under `dir` whose fingerprint has drifted (baseline/skill) — the re-record

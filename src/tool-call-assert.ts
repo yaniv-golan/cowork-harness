@@ -15,6 +15,7 @@
  */
 import type { AssertContext } from "./assert.js";
 import type { ToolCalledObject, ToolNotCalledObject, ToolCallRecord } from "./types.js";
+import { negativeToolCall, toolCallCountBoundError, toolCalledEffectiveMin, toolCallLabel } from "./types.js";
 import { compileUserRegex } from "./regex.js";
 import { scrubForTerminal } from "./io.js";
 import { REDACTION_TOKEN_RE, hasRedactionToken, regexNamesRedactableLiteral } from "./redactable-literal.js";
@@ -92,7 +93,8 @@ export function checkToolCallObject(
   warnIfRegexish: (key: string, pattern: string) => void,
 ): KeyResult {
   const fail = (message: string): KeyResult => ({ pass: false, message });
-  const negative = key === "tool_not_called";
+  const negative = negativeToolCall(key, o);
+  const label = toolCallLabel(key, o);
   const globs = Array.isArray(o.tool) ? o.tool : [o.tool];
   for (const g of globs) warnIfRegexish(key, g);
   const shownTool = globs.join(" | ");
@@ -249,11 +251,13 @@ export function checkToolCallObject(
     return {
       pass: true,
       evidence:
-        `tool_not_called: no ${shownTool} call satisfied every predicate — ${named.filter(inScope).length} in scope ${scope} checked` +
+        `${label}: no ${shownTool} call satisfied every predicate — ${named.filter(inScope).length} in scope ${scope} checked` +
         notChecked(),
     };
   }
-  const min = (o as ToolCalledObject).count?.min ?? 1;
+  const bound = toolCallCountBoundError((o as ToolCalledObject).count);
+  if (bound !== undefined) return fail(bound);
+  const min = toolCalledEffectiveMin((o as ToolCalledObject).count);
   const max = (o as ToolCalledObject).count?.max;
   const n = satisfied.length;
   if (n === 0 && min === 0 && (max === undefined || unknown.length <= max))

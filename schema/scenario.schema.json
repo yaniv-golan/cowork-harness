@@ -235,7 +235,7 @@
             ]
           },
           "tool_called": {
-            "description": "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*. Legacy tool spellings the agent binary canonicalizes (Task/Agent, KillShell/TaskStop, ...) match either way. OBJECT form `{tool, input, input_any, result, scope, subagent_type, count}` asserts what the call carried, where it ran and what its paired result said — use it, not transcript_*, to check a command that RAN",
+            "description": "a called tool matched this glob (* = any run, ? = one char; exact when literal; anchored, case-sensitive) — e.g. mcp__workspace__*. Legacy tool spellings the agent binary canonicalizes (Task/Agent, KillShell/TaskStop, ...) match either way. OBJECT form `{tool, input, input_any, result, scope, subagent_type, count}` asserts what the call carried, where it ran and what its paired result said — use it, not transcript_*, to check a command that RAN. `count: {max: 0}` alone means never called and is graded as tool_not_called (its tier refusal and redaction rules apply)",
             "anyOf": [
               {
                 "type": "string",
@@ -313,11 +313,11 @@
                     "minLength": 1
                   },
                   "count": {
-                    "description": "how many calls must satisfy every predicate; default `{min: 1}`",
+                    "description": "how many calls must satisfy every predicate; default `{min: 1}`. `{max: 0}` alone means never called (min 0) and is graded as `tool_not_called`, including its tier refusal and redaction rules; any other lone `max` still needs at least one call",
                     "type": "object",
                     "properties": {
                       "min": {
-                        "description": "minimum satisfying calls (default 1)",
+                        "description": "minimum satisfying calls (default 1, or 0 when `max` is 0)",
                         "type": "integer",
                         "minimum": 0,
                         "maximum": 9007199254740991
@@ -1582,7 +1582,7 @@
                 "description": "fixed, authored checkable claims — a pinned judge grades each; results align by INDEX (not re-extracted per rep)"
               },
               "min_pass": {
-                "description": "how many rubric claims must pass for the assert to pass (default: all; do NOT rely on all for a gating scenario)",
+                "description": "how many rubric claims must pass for the assert to pass (default: all; do NOT rely on all for a gating scenario). Above the number of rubric claims it can never pass, and is refused at load",
                 "anyOf": [
                   {
                     "type": "string",
