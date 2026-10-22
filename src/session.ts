@@ -303,7 +303,7 @@ export const SessionConfig = z.strictObject({
  *  from the other two with nothing in the baseline to justify the difference. Dozens of keys in the
  *  binary's settable-env table meet (a) alone; (b) and (c) select nine of these. **Or (d): Desktop itself lets no
  *  user-supplied value of the key reach an agent it spawns** (it strips it from the user env it forwards), whether or
- *  not the spawn sets it; (d) selects the last three (Desktop 2.26454.0).
+ *  not the spawn sets it; (d) selects three keys at Desktop 2.26454.0 and two more at 3.1623.4.
  *  KNOWN AND DELIBERATELY NOT SCRUBBED: `CLAUDE_CODE_COORDINATOR_MODE` itself, which enables the second
  *  key above and swaps the coordinator system prompt and the Task tool description. It fails (b) as
  *  currently written — the harness models no coordinator surface — so scrubbing it would suppress a
@@ -345,6 +345,11 @@ export const SCRUBBED_AGENT_ENV_KEYS = [
   "CLAUDE_CODE_SIMPLE",
   "CLAUDE_AGENT_SDK_MCP_NO_PREFIX",
   "CLAUDE_CODE_PROCESS_WRAPPER",
+  // Rule (d), Desktop 3.1623.4: the base env sets CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS to "" and deletes every case
+  // variant of it from the user env it overlays; the bundled-skills-plugin dir key is deleted in every case variant
+  // before Desktop sets (or omits) its own value.
+  "CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS",
+  "CLAUDE_CODE_DESKTOP_SKILLS_PLUGIN_DIR",
   // Rule (a)-(c): a skill-contract key (`agent_env.artifacts_root` authors it) that moves where a skill writes its run
   // status. The Cowork spawn never sets it, so an operator's export would move it on protocol/hostloop alone.
   "COWORK_ARTIFACTS_ROOT",

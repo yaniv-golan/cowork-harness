@@ -14,11 +14,13 @@
     "CLAUDE_CODE_ENTRYPOINT": "Desktop 1.40609.0 / agent 2.1.247, re-read by hand: W2's deployment ternary was HOISTED into a same-chunk helper — `function uH(e){return e===`3p`?`claude-desktop-3p`:`claude-desktop`}`, called as `CLAUDE_CODE_ENTRYPOINT:uH(n.type)` (was the inline `n.type===`3p`?...` through 1.37937.1). Same predicate, same two literals: a pure refactor. The golden value below is unchanged and is NOT W2's value in any case — W1 is applied last and hard-sets `CLAUDE_CODE_ENTRYPOINT:`local-agent`` after the `t.Cl({...})` spread, so the 1p session receives `local-agent` on both builds. resolveSpawnValue resolves the hoisted form by inlining the callee body from the window's OWN chunk (B13) and refuses any other body; a bare 2-char minified name hopped against the joined bundle would land elsewhere.",
     "PYTHONDONTWRITEBYTECODE": "Desktop 2.16120.0, hand-read from W2: `...MCP_CONNECTION_NONBLOCKING:`true`,API_TIMEOUT_MS:String(uEr),PYTHONDONTWRITEBYTECODE:`1`,CLAUDE_CODE_DISABLE_CRON:e.disableCron||!AC()?`1`:``,...` — a BARE key with no gate, no sessionType branch and no deployment branch (it sits before the 3p attribution spread, so 1p and 3p both receive it). The key's other asar occurrence is the /^PYTHONDONTWRITEBYTECODE$/ entry of the env-forward regex list for MCP server processes, not a spawn setter.",
     "CLAUDE_CODE_SIMPLE": "Desktop 2.26454.0, hand-read from W2 (the base-env helper): an unconditional `CLAUDE_CODE_SIMPLE:`0`` literal right after `CLAUDE_CODE_DISABLE_TERMINAL_TITLE:`1``, before the 3p spread. Pinned.",
-    "CLAUDE_AGENT_SDK_MCP_NO_PREFIX": "Desktop 2.26454.0, hand-read from W2: an unconditional `CLAUDE_AGENT_SDK_MCP_NO_PREFIX:`0`` literal right after `CLAUDE_CODE_SIMPLE:`0``. Pinned."
+    "CLAUDE_AGENT_SDK_MCP_NO_PREFIX": "Desktop 2.26454.0, hand-read from W2: an unconditional `CLAUDE_AGENT_SDK_MCP_NO_PREFIX:`0`` literal right after `CLAUDE_CODE_SIMPLE:`0``. Pinned.",
+    "CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS": "Desktop 3.1623.4, hand-read from W2 (the base-env builder): `return{CLAUDE_CODE_ENTRYPOINT:<fn>(n.type),CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS:``,ANTHROPIC_BASE_URL:e.apiHost,…` — an unconditional empty string, no gate or deployment branch."
   },
   "env": {
     "CLAUDE_CODE_IS_COWORK": "1",
     "CLAUDE_CODE_ENTRYPOINT": "local-agent",
+    "CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS": "",
     "CLAUDE_CODE_TAGS": "lam_session_type:chat",
     "CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST": "1",
     "CLAUDE_CODE_ENABLE_ASK_USER_QUESTION_TOOL": "true",

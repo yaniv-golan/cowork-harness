@@ -255,6 +255,12 @@ const SPAWN_PIN_KEYS: readonly string[] = [
   // tree stops writing __pycache__/.pyc. (The key's OTHER occurrence in the asar is the env-FORWARD regex
   // list for MCP server processes, not a spawn setter.)
   "PYTHONDONTWRITEBYTECODE",
+  // Desktop 3.1623.4. UNCONDITIONAL "" in W2, right after CLAUDE_CODE_ENTRYPOINT; the same builder's caller then
+  // deletes any case variant of it (and of CLAUDE_CODE_ENTRYPOINT) from the user env it overlays, so no user value
+  // reaches the agent (SCRUBBED_AGENT_ENV_KEYS rule (d)). Agent 2.1.308 reads it to rename the entrypoint on its
+  // request attribution header, and only when CLAUDE_CODE_ENTRYPOINT is a 3p desktop value, so "" is rejected with a
+  // debug line. Pinned, like its "" neighbours USE_LOCAL_OAUTH/USE_STAGING_OAUTH.
+  "CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS",
   "USE_LOCAL_OAUTH",
   "USE_STAGING_OAUTH",
 ];
@@ -326,6 +332,12 @@ const EXTRA_ROWS: Record<string, { class: SpawnEnvClass; reason: string; sites: 
     reason:
       "from the account config's contextWindowByModel; the agent reads it only for an unknown model or under DISABLE_COMPACT; unset in every observed session; not modeled",
     sites: ["post-write", "observed"],
+  },
+  CLAUDE_CODE_DESKTOP_SKILLS_PLUGIN_DIR: {
+    class: "host-loop-unmodeled",
+    reason:
+      "Desktop 3.1623.4 writes the install path of its bundled account-skills plugin after the env is built (through a helper, not a direct write), when that plugin is passed with --plugin-dir and managed settings do not disable sideloading (any user case variant is deleted first); agent 2.1.308 uses it to mark that plugin's skills as the host-named account skills folder. The harness never stages Desktop's bundled skills plugin, so the key has nothing to act on; not modeled",
+    sites: ["observed"],
   },
   CLAUDE_CODE_PLUGIN_ATTRIBUTION: {
     class: "attribution-metadata",
