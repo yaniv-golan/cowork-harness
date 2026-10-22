@@ -1668,11 +1668,20 @@ nothing in context and changes no tool-selection outcome.
 ## Anthropic's built-in skills (`anthropic-skills`) are not staged
 
 **Real Cowork behaviour:** every local session also loads a plugin Desktop maintains per organization
-and account, named `anthropic-skills` ("Anthropic-managed skills for Claude Desktop"). Desktop passes the
-folder as an ordinary session plugin, and its skills are listed as `anthropic-skills:<name>`. It also sets
-`CLAUDE_CODE_DESKTOP_SKILLS_PLUGIN_DIR` to the same path. That variable loads nothing. For a Desktop
-entrypoint it marks the plugin as the account's skills, which reserves the `anthropic-skills:` names for
-it. Despite the name, Desktop merges three sources into the plugin:
+and account, named `anthropic-skills` ("Anthropic-managed skills for Claude Desktop"). How it reaches the
+agent depends on the lane:
+
+- **Host loop:** Desktop passes the folder as the first ordinary session plugin, so its skills are named
+  `anthropic-skills:<name>`. It also sets `CLAUDE_CODE_DESKTOP_SKILLS_PLUGIN_DIR` to the same path. That
+  variable loads nothing. For a Desktop entrypoint it marks the plugin as the account's skills, which
+  reserves the `anthropic-skills:` names for it.
+- **VM loop:** the folder is not passed as a plugin. Its `skills/` directory is mapped to the session's
+  `.claude/skills`, so the skills appear under their bare names.
+
+The model learns about these skills two ways. Desktop's system prompt lists them in `<available_skills>`,
+a section the harness does not render for any skill. The agent's own skill listing names them too.
+
+Despite the name, Desktop merges three sources into the plugin:
 
 - **Skills built into the app.** Some are archives shipped in `app.asar` (`docx`, `pdf`, `pdf-reading`,
   `pptx`, `xlsx`, `frontend-design` at Desktop 3.1623.4). Others are generated from prompts in the app's
@@ -1685,12 +1694,12 @@ Each manifest entry carries `creatorType` (`anthropic` or `user`), and Desktop u
 kinds differ. Only `user` skills can be edited, are held for a security scan, or are attributed. When an
 organization turns Skills off, Desktop serves a separate built-ins-only copy of the plugin.
 
-**Harness behaviour:** the plugin is not staged at any tier. A run's `<available_skills>` lists only the
+**Harness behaviour:** the plugin is not staged at any tier. The agent's skill listing names only the
 skills and plugins the scenario stages, and `CLAUDE_CODE_DESKTOP_SKILLS_PLUGIN_DIR` is never set.
 
 **What this means for a skill under test.** In real Cowork, a skill competes with around 20 Anthropic
 skills for the model's attention. A request about a PDF, a spreadsheet or a slide deck can be routed to
-`anthropic-skills:pdf` or `anthropic-skills:xlsx` instead of to your skill. A harness run cannot show
+Anthropic's `pdf` or `xlsx` skill instead of to your skill. A harness run cannot show
 that routing. A skill that passes here may still lose its trigger in production to a built-in one with
 an overlapping description. It also cannot rely on a built-in skill being present, for example by
 telling the model to "use the docx skill".
