@@ -332,6 +332,15 @@ export function readObservedSpawnEnv(input: ObservedSpawnEnvInput): ObservedSpaw
       appVersion: input.appVersion,
       nativeAgentVersions: sortedUnique(selected.map((d) => d.agentVersion).filter((v): v is string => v !== null)),
       sessions: selected.length,
+      // A dump names its keys, not its session, so the only kind it can show is "scheduled": Desktop sets the
+      // scheduled-run key on a scheduled-task session and no other (S6g guards that). Any other dump could be an
+      // ordinary task or another typed session, so it is counted as unknown rather than guessed.
+      sessionKinds: {
+        interactive: 0,
+        scheduled: selected.filter((d) => d.names.has("CLAUDE_CODE_HOST_SCHEDULED_RUN")).length,
+        other: 0,
+        unknown: selected.filter((d) => !d.names.has("CLAUDE_CODE_HOST_SCHEDULED_RUN")).length,
+      },
       keysAll: committed.filter((n) => seen.get(n) === selected.length),
       keysSome: committed.filter((n) => seen.get(n)! < selected.length),
       withheld,
@@ -426,9 +435,12 @@ export function checkObservedAgainstHarness(
         `observedSpawnEnv: Desktop's host-loop spawn carries ${k}, classed ${c.class}, but the harness host loop does not set it — model it or reclassify it in src/sync/spawn-env-registry.ts; do NOT bypass with --allow-empty`,
       );
   }
-  // A key the registry calls absent by default that every observed session carries: the reason is out of date.
+  // A key the registry calls absent by default that every observed session carries: the reason is out of date. Except
+  // the scheduled-run key when every dump was a scheduled task: there, carrying it is what the kind means.
+  const allScheduled = block.sessionKinds !== undefined && block.sessionKinds.scheduled === block.sessions;
   for (const k of block.keysAll) {
     const c = classifySpawnEnvKey(k, "observed");
+    if (allScheduled && k === "CLAUDE_CODE_HOST_SCHEDULED_RUN") continue;
     if (c && DEFAULT_ABSENT.has(c.class))
       notes.push(
         `observedSpawnEnv: ${k} is classed ${c.class} (absent by default) but every observed session carries it — re-check its classification in src/sync/spawn-env-registry.ts`,

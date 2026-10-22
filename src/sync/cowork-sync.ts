@@ -1691,6 +1691,7 @@ function extractFromAsar(
     for (const f of checkVmAgentStagingFacts(bundleFiles)) flag(unknown, f);
     const subagentFps = readSubagentFingerprints();
     for (const f of checkSubagentPromptFacts(bundleFiles, subagentFps)) flag(unknown, f);
+    for (const f of checkScheduledSessionFacts(bundleFiles)) flag(unknown, f);
     const spawn = deriveSpawnEnv(bundle, gates, bundleFiles);
     const { deltas: spawnDeltas, notes } = partitionSpawnFlags(spawn.flags);
     for (const f of spawnDeltas) flag(unknown, f);
@@ -3337,6 +3338,65 @@ export function extractSubagentComposition(files: Map<string, string>): {
     ...(generator ? { generator } : {}),
     ...(readOnly ? { readOnly } : {}),
   };
+}
+
+/** The code that makes a scheduled-task session differ from an ordinary one (Desktop >=2.42304.0). An observation
+ *  from a scheduled run cannot see what only an ordinary session gets, so each difference is pinned here by shape,
+ *  with its constants resolved to their values; a reshape is a loud flag, never a silent widening:
+ *   (1) a session started for a scheduled task is typed `"scheduled"`;
+ *   (2) `send_user_message` is offered only to an UNTYPED session, from the server config of gate 3045399524;
+ *   (3) a scheduled session loses AskUserQuestion and the onboarding role picker;
+ *   (4) its frame artifacts are cleared unless gate 1978029737 `scheduledRunFrameArtifacts` is on.
+ *  The scheduled-run spawn env key has its own guard (S6g). SCHEDULED_SESSION_WITHHELD_TOOLS (types.ts) lists the tools
+ *  (2) and (3) withhold that a Desktop server of its own declares. */
+export function checkScheduledSessionFacts(files: Map<string, string>): string[] {
+  const flags: string[] = [];
+  const miss = (what: string, why: string) => flags.push(`scheduled-session: ${what} anchor missing — ${why}`);
+  const literal = (ref: string, module: string): string | null => {
+    const r = resolveNamespaceRef(ref, module, files);
+    const m = r && r.chunk.match(new RegExp(`(?<![\\w$.])${reEsc(r.local)}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
+    return m ? m[1]! : null;
+  };
+  const find = (re: RegExp) => {
+    for (const module of files.values()) {
+      const m = re.exec(module);
+      if (m) return { m, module };
+    }
+    return null;
+  };
+
+  const typed = find(/!([\w$]+)\.sessionType&&\1\.scheduledTaskId&&\(\1\.sessionType=([\w$]+(?:\.[\w$]+)?)\)/);
+  if (!typed) miss("scheduled session type", "a session with a scheduledTaskId is no longer given a session type at start");
+  else if (literal(typed.m[2]!, typed.module) !== "scheduled")
+    miss("scheduled session type", `the type given to a scheduled-task session no longer resolves to "scheduled"`);
+
+  const sum = find(
+    /\.safeParse\([\w$.]+\("3045399524",void 0\)\)\.data\?\?\{enabled:!1\},([\w$]+)=![\w$]+\.sessionType&&\(([\w$]+)\.enabled===!0\|\|Array\.isArray\(\2\.enabled\)&&!!([\w$]+)&&\2\.enabled\.includes\(\3\)\)/,
+  );
+  if (!sum)
+    miss(
+      "send_user_message predicate",
+      "the offer is no longer `!sessionType && (config.enabled === true || config.enabled includes the model)` over gate 3045399524 — what an ordinary session gets can no longer be read from a scheduled observation",
+    );
+  else if (!new RegExp(`hasSendUserMessage:${reEsc(sum.m[1]!)}[,}]`).test(sum.module))
+    miss("send_user_message predicate", "the predicate no longer feeds `hasSendUserMessage` in the same module");
+
+  const ask = find(
+    /([\w$]+)\.scheduledTaskId&&\(([\w$]+)\.disallowedTools=\[\.\.\.\2\.disallowedTools\?\?\[\],"AskUserQuestion",([\w$]+(?:\.[\w$]+)?)\]\)/,
+  );
+  if (!ask) miss("scheduled tool removals", "a scheduled session no longer loses exactly AskUserQuestion and one other tool");
+  else if (literal(ask.m[3]!, ask.module) !== "mcp__cowork-onboarding__show_onboarding_role_picker")
+    miss("scheduled tool removals", "the second tool a scheduled session loses is no longer the onboarding role picker");
+
+  const fa = find(/([\w$]+)\.scheduledTaskId&&!([\w$]+)\(\)&&\(\1\.frameArtifactsEnabled=void 0\)/);
+  if (!fa) miss("scheduled frame artifacts", "a scheduled session's frame artifacts are no longer cleared behind a gate");
+  else if (
+    !new RegExp(`function ${reEsc(fa.m[2]!)}\\(\\)\\{return [\\w$.]+\\(\\)&&[\\w$.]+\\("1978029737","scheduledRunFrameArtifacts",!0,`).test(
+      fa.module,
+    )
+  )
+    miss("scheduled frame artifacts", `the gate ${fa.m[2]} is no longer scheduledRunFrameArtifacts (1978029737, default on)`);
+  return flags;
 }
 
 /** sha16 of a branch text after minifier-identifier normalization: every ${...} interpolation is

@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   readDesktopInitSurface,
+  sessionKindOf,
   desktopInstalledAtMs,
   DESKTOP_SESSIONS_DISPLAY,
   type InitSurfaceInput,
@@ -203,6 +204,8 @@ describe("readDesktopInitSurface — selection and the recorded block", () => {
       agentVersion: AGENT,
       appVersion: "9.100.0",
       observed: true,
+      // These fixture dirs have no `local_<id>-*.json` record beside them, so no kind can be read.
+      sessionKinds: { interactive: 0, scheduled: 0, other: 0, unknown: 4 },
       servers: {
         cowork: { presence: "some", toolsAll: ["present_files", "save_skill"], toolsSome: ["create_artifact"] },
         plugins: { presence: "all", toolsAll: ["list_plugins"], toolsSome: [] },
@@ -406,5 +409,47 @@ describe("desktopInstalledAtMs — the install time, not the build time", () => 
 
   it("is null when there is no bundle, which selects no frames", () => {
     expect(desktopInstalledAtMs(join(tmpdir(), "no-such-dir-xyz", "app.asar"))).toBeNull();
+  });
+});
+
+// The session kind comes from the session's own record, `<parent>/local_<id>.json`, beside `<parent>/<id prefix>/`.
+// Only `sessionType` and `scheduledTaskId` are read, and only a count leaves the reader.
+describe("sessionKindOf — the kind of the session that wrote an audit log", () => {
+  let dir: string;
+  const audit = (prefix: string) => join(dir, prefix, "audit.jsonl");
+  const session = (prefix: string, records: Record<string, unknown>[] | string[]) => {
+    mkdirSync(join(dir, prefix), { recursive: true });
+    writeFileSync(audit(prefix), frame({ servers: [own("cowork")], tools: ["mcp__cowork__present_files"] }) + "\n");
+    records.forEach((r, i) =>
+      writeFileSync(join(dir, `local_${prefix}-0000-4000-8000-00000000007${i}.json`), typeof r === "string" ? r : JSON.stringify(r)),
+    );
+  };
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "session-kind-"));
+    session("aaaa0001", [{ sessionType: "scheduled", scheduledTaskId: "fixture-task", emailAddress: BAIT.email }]);
+    session("aaaa0002", [{ emailAddress: BAIT.email }]);
+    session("aaaa0003", [{ sessionType: "dispatch_child" }]);
+    session("aaaa0004", [{ sessionType: "scheduled" }]);
+    session("aaaa0005", [{}, {}]);
+    session("aaaa0006", ["{not json"]);
+    session("aaaa0007", []);
+    session("aaaa0008", [{ sessionType: 7 }]);
+  });
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("reads scheduled, ordinary and other typed sessions from the record", () => {
+    expect(sessionKindOf(audit("aaaa0001"))).toBe("scheduled");
+    expect(sessionKindOf(audit("aaaa0002"))).toBe("interactive");
+    expect(sessionKindOf(audit("aaaa0003"))).toBe("other");
+  });
+  it("never guesses: a scheduled record without its task id, two records, bad JSON, no record, a non-string type", () => {
+    for (const p of ["aaaa0004", "aaaa0005", "aaaa0006", "aaaa0007", "aaaa0008"]) expect(sessionKindOf(audit(p)), p).toBe("unknown");
+  });
+  it("counts kinds in the recorded block and lets nothing else from the record out", () => {
+    const r = readDesktopInitSurface({ ...input(), dir });
+    expect(r.surface.sessionKinds).toEqual({ interactive: 1, scheduled: 1, other: 1, unknown: 5 });
+    expect(everythingEmitted(r)).not.toContain(BAIT.email);
+    expect(everythingEmitted(r)).not.toContain("fixture-task");
+    expect(DesktopInitSurface.safeParse(r.surface).success).toBe(true);
   });
 });

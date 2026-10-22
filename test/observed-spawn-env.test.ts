@@ -497,3 +497,27 @@ describe("observed spawn-env oracle — the committed 2.31226.1 observation", ()
       expect(classifySpawnEnvKey(k, "observed")?.class, k).toBe("deliberately-unset");
   });
 });
+
+// A dump cannot name its session, so the only kind it shows is "scheduled", from the key Desktop sets on a
+// scheduled-task session alone; every other dump is counted as unknown.
+describe("observed spawn-env oracle — session kinds", () => {
+  const read = (keys: string[]) =>
+    readObservedSpawnEnv(
+      input(
+        logsDir({
+          "main1.log": startApp("2026-10-09 22:46:06", "2.31226.1"),
+          "main.log": [session("2026-10-10 11:28:40"), dump({ when: "2026-10-10 11:28:43", keys })].join("\n"),
+        }),
+      ),
+    );
+  it("a dump carrying the scheduled-run key counts as scheduled, and that key is not reported as misclassified", () => {
+    const r = read([...CORE, "CLAUDE_CODE_HOST_SCHEDULED_RUN"]);
+    expect(r.block).toMatchObject({ observed: true, sessionKinds: { interactive: 0, scheduled: 1, other: 0, unknown: 0 } });
+    expect(r.block.observed && r.block.keysAll).toContain("CLAUDE_CODE_HOST_SCHEDULED_RUN");
+    expect(r.notes.join("\n")).not.toMatch(/CLAUDE_CODE_HOST_SCHEDULED_RUN is classed/);
+    expect(ObservedSpawnEnv.safeParse(r.block).success).toBe(true);
+  });
+  it("a dump without it is unknown, never assumed interactive", () => {
+    expect(read([...CORE]).block).toMatchObject({ sessionKinds: { interactive: 0, scheduled: 0, other: 0, unknown: 1 } });
+  });
+});
