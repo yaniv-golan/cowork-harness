@@ -3548,6 +3548,77 @@ describe("checkSubagentPromptFacts — the unreachable-folder ternary (Desktop 2
   });
 });
 
+// Desktop 3.1623.4: the ternary moved into a statement (the else arm of the mounted-folder arm), and the generator
+// takes an admin read-only folder list as a sixth argument, `<ns>.<reader>(<folders>??[])`, whose reader returns []
+// on any non-3p deployment. A folder in the list renders `(${list.includes(f)?<ns>.<marker>(line):line})`.
+describe("checkSubagentPromptFacts — the read-only folder list (Desktop 3.1623.4)", () => {
+  const MANIFEST =
+    'function mani(e,n,usf,mn,a,ro){const o=nm(usf,!0),s=new Set(rc(usf,a));const c=[...r?[`- \\`${r}\\` (this session\'s outputs folder; shell: \\`${e}/mnt/outputs/\\`)`]:[],...(i??[]).map(t=>{let q=s.has(t)?`shell: \\`${e}/mnt/${o.get(t)}/\\``:pol.a()===void 0?"the shell cannot reach this folder":NS.ZJ;return`- \\`${t}\\` (${ro.includes(t)?NS.RO(q):q})`})];const l=NS.kw.join(", ");const u=`Synthetic relative-path clause naming \\`${n}\\`.`;return c.length===0?`\\n\\n${l} synthetic empty-list variant. ${u}`:`\\n\\n${l} synthetic list variant. ${u} Synthetic tail.\\n\\nSynthetic folder heading:\\n`+c.join(`\\n`)+(ro.length>0?`\\n\\nSynthetic read-only paragraph.`:"")}';
+  const CALL = '${h?mani(i,t,usf,mn,hof,NS.RD(usf??[])):""}';
+  const EXPORTS =
+    'Object.defineProperty(exports,"a",{enumerable:!0,get:function(){return Zpol}});' +
+    'function Zpol(){if(zt.B2()&&zt.z2().type!=="3p")return;return zt.P0().workspace.fileReadCheck}' +
+    'Object.defineProperty(exports,"ZJ",{enumerable:!0,get:function(){return Zq}});var Zq="Synthetic policy-only message.";' +
+    'Object.defineProperty(exports,"RD",{enumerable:!0,get:function(){return Zrd}});' +
+    'function Zrd(e){let t=zt.ro();if(!t?.length||zt.z2().type!=="3p")return[];return e.filter(x=>t.includes(x))}';
+  const roFiles = (edit: (s: string) => string = (s) => s) =>
+    new Map([["index.chunk-gen.js", edit(subagentBundle({ manifest: MANIFEST, call: CALL }) + EXPORTS)]]);
+  // Every decoy below must actually change the fixture, or its red proves nothing.
+  const mutate = (from: string, to: string) => {
+    const files = roFiles((s) => s.replace(from, to));
+    expect(files.get("index.chunk-gen.js"), `mutation did not apply: ${from}`).not.toBe(roFiles().get("index.chunk-gen.js"));
+    return files;
+  };
+  const base = extractSubagentComposition(roFiles())!;
+  const slices = extractSubagentBranchSlices(roFiles())!;
+  const committed = {
+    versions: {
+      "3.1623.4": {
+        hl: subagentBranchFingerprint(slices.hl),
+        vm: subagentBranchFingerprint(slices.vm),
+        manifest: subagentBranchFingerprint(base.manifest),
+        suffix: subagentBranchFingerprint(base.suffix),
+      },
+    },
+  };
+  const flags = (files: Map<string, string>) => checkSubagentPromptFacts(files, committed).join("\n");
+
+  it("slices the statement-form ternary through a nested-paren call, and the clean fixture has no flags", () => {
+    expect(base.defaultArm).toBe("the shell cannot reach this folder");
+    expect(base.predicate).toBe("pol.a()===void 0");
+    expect(base.generator).toEqual({ name: "mani", params: ["e", "n", "usf", "mn", "a", "ro"] });
+    expect(base.readOnly).toEqual({ listParam: "ro" });
+    expect(checkSubagentPromptFacts(roFiles(), committed)).toEqual([]);
+  });
+  it("a WIDENED predicate is captured whole and refused, never trimmed to the reader call", () => {
+    const files = mutate(':pol.a()===void 0?"the shell', ':Q()||pol.a()===void 0?"the shell');
+    expect(extractSubagentComposition(files)?.predicate).toBe("Q()||pol.a()===void 0");
+    expect(flags(files)).toMatch(/unreachable-folder predicate anchor missing/);
+  });
+  it("a read-only reader that lost its 3p early return flags", () => {
+    expect(flags(mutate('if(!t?.length||zt.z2().type!=="3p")return[];', "if(!t?.length)return[];"))).toMatch(
+      /no longer returns \[\] first on a non-3p deployment/,
+    );
+  });
+  it("the read-only list passed unfiltered flags", () => {
+    expect(flags(mutate("NS.RD(usf??[])", "usf"))).toMatch(/read-only argument is not/);
+  });
+  it("a reader filtering some other list than the rendered folders flags", () => {
+    expect(flags(mutate("NS.RD(usf??[])", "NS.RD(hof??[])"))).toMatch(/no longer filters the rendered folders/);
+  });
+  it("a reader that does not resolve flags", () => {
+    expect(flags(mutate("NS.RD(usf??[])", "NS.RX(usf??[])"))).toMatch(/reader NS\.RX could not be resolved/);
+  });
+  it("read-only rendering in an unrecognised shape flags (the gate cannot be proved)", () => {
+    expect(flags(mutate("${ro.includes(t)?NS.RO(q):q}", '${q}${ro.includes(t)?" read-only":""}'))).toMatch(
+      /renders something read-only in a shape this check does not recognise/,
+    );
+  });
+  it("the hl-gated call naming a different function from the fingerprinted generator flags", () => {
+    expect(flags(mutate("${h?mani(i,t,", "${h?other(i,t,"))).toMatch(/fingerprinted manifest generator is mani/);
+  });
+});
+
 /** The Desktop 1.32352.0 install shape: a BLOCK-bodied arrow wrapping the `??` chain in a pre-pass that
  *  can deny before any link, and a post-pass that can overturn the chain's ALLOW. */
 function blockBodyInstall(): string {

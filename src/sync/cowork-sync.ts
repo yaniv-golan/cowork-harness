@@ -3237,6 +3237,35 @@ export const UNREACHABLE_FOLDER_PHRASE = "the shell cannot reach this folder";
 
 /** `(${<pred>?"<default>":<ns>.<id>})` — the unreachable-folder ternary (Desktop >=2.37337.1). */
 const UNREACHABLE_TERNARY = /\(\$\{([^?{}`"]+)\?"((?:[^"\\]|\\.)*)":([\w$]+(?:\.[\w$]+)?)\}\)/;
+/** Desktop >=3.1623.4 hoists the same ternary into a statement, as the else arm of the mounted-folder arm:
+ *  `` …?`shell: …`:<pred>?"<default>":<ns>.<id>; ``. Anchored on the mounted arm's closing backtick and the
+ *  outer `:`, with `:` excluded from the predicate, so a widened predicate (`Q()||<reader>()===void 0`) is
+ *  captured whole and refused by check 7a rather than trimmed down to the reader call. */
+const UNREACHABLE_TERNARY_STMT = /`:([^?:{}`"]+)\?"((?:[^"\\]|\\.)*)":([\w$]+(?:\.[\w$]+)?);/;
+/** Desktop >=3.1623.4: a folder in the admin read-only list renders `(${<list>.includes(<f>)?<ns>.<id>(<line>):<line>})`. */
+const READ_ONLY_RENDER = /\$\{([\w$]+)\.includes\(([\w$]+)\)\?[\w$]+(?:\.[\w$]+)?\(([\w$]+)\):\3\}/;
+
+/** Split the argument list of the call whose `(` is at `open` at depth-0 commas. Null if it never closes. */
+function callArgsAt(src: string, open: number): string[] | null {
+  const args: string[] = [];
+  let depth = 0;
+  let start = open + 1;
+  for (let i = open; i < src.length; i++) {
+    const c = src[i];
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth === 0) {
+        args.push(src.slice(start, i));
+        return args;
+      }
+    } else if (c === "," && depth === 1) {
+      args.push(src.slice(start, i));
+      start = i + 1;
+    }
+  }
+  return null;
+}
 
 export function extractSubagentComposition(files: Map<string, string>): {
   module: string;
@@ -3246,6 +3275,10 @@ export function extractSubagentComposition(files: Map<string, string>): {
   defaultArm?: string;
   /** The ternary's predicate source, as written; check 7a resolves its reader. */
   predicate?: string;
+  /** The manifest generator's own name and parameter list (check 7b/7c bind the call site to them). */
+  generator?: { name: string; params: string[] };
+  /** Whether the generator source renders anything read-only (check 7c then requires the 1p gate). */
+  readOnly?: { listParam: string } | "unrecognized";
 } | null {
   const module = [...files.values()].find((c) => c.includes("exist only in the sandbox"));
   if (!module) return null;
@@ -3272,7 +3305,7 @@ export function extractSubagentComposition(files: Map<string, string>): {
   let defaultArm: string | undefined;
   let predicate: string | undefined;
   const parts = [...bodies];
-  const tern = UNREACHABLE_TERNARY.exec(fnSrc);
+  const tern = UNREACHABLE_TERNARY.exec(fnSrc) ?? UNREACHABLE_TERNARY_STMT.exec(fnSrc);
   if (tern) {
     const ref = resolveNamespaceRef(tern[3]!, module, files);
     const alt = ref && ref.chunk.match(new RegExp(`(?<![\\w$.])${reEsc(ref.local)}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
@@ -3285,11 +3318,25 @@ export function extractSubagentComposition(files: Map<string, string>): {
   const manifest = parts.join("\u0000");
   // Suffix: read the composition site, then resolve the trailing interpolation's identifier against
   // this module's own `<ident>="…"` binding. Never matched by name.
-  const comp = module.match(/return`\\n\\n\$\{[\w$.]+\([\s\S]{0,200}?\}\$\{[\w$]+\?[\w$]+\([^)]*\):""\}\$\{([\w$]+)\}`/);
+  // The manifest call admits one level of nested parentheses: 3.1623.4 passes `<ns>.<id>(<folders>??[])` as a
+  // sixth argument.
+  const comp = module.match(/return`\\n\\n\$\{[\w$.]+\([\s\S]{0,200}?\}\$\{[\w$]+\?[\w$]+\((?:[^()]|\([^()]*\))*\):""\}\$\{([\w$]+)\}`/);
   if (!comp) return null;
   const decl = module.match(new RegExp(`(?<![\\w$])${reEsc(comp[1])}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
   if (!decl) return null;
-  return { module, manifest, suffix: decl[1]!, ...(defaultArm !== undefined ? { defaultArm, predicate } : {}) };
+  const sig = /^function ([\w$]+)\(([^)]*)\)/.exec(fnSrc);
+  const generator = sig ? { name: sig[1]!, params: sig[2]!.split(",").filter(Boolean) } : undefined;
+  // Anything read-only in the generator must be recognisable, so check 7c can prove a 1p sub-agent never gets it.
+  const ro = READ_ONLY_RENDER.exec(fnSrc);
+  const readOnly = ro ? { listParam: ro[1]! } : fnSrc.includes("read-only") ? ("unrecognized" as const) : undefined;
+  return {
+    module,
+    manifest,
+    suffix: decl[1]!,
+    ...(defaultArm !== undefined ? { defaultArm, predicate } : {}),
+    ...(generator ? { generator } : {}),
+    ...(readOnly ? { readOnly } : {}),
+  };
 }
 
 /** sha16 of a branch text after minifier-identifier normalization: every ${...} interpolation is
@@ -3530,6 +3577,45 @@ export function checkSubagentPromptFacts(
           "manifest call bindings",
           `the substitution map's vmCwd is ${subst[1]} but its hostCwd fallback is ${subst[3]} — the fallback must be the same vm root`,
         );
+      // The call these bindings were read from must be the call to the generator that was fingerprinted;
+      // otherwise every binding above, and 7c below, describes some other function.
+      if (comp.generator && manifestCall[2] !== comp.generator.name)
+        miss(
+          "manifest call bindings",
+          `the hl-gated call names ${manifestCall[2]} but the fingerprinted manifest generator is ${comp.generator.name}`,
+        );
+    }
+    // (7c) Desktop 3.1623.4 renders folders in an admin read-only list with a "read-only" marker, plus a closing
+    //      paragraph. The list comes from a reader that returns [] on any non-3p deployment, which is the only reason a
+    //      1p sub-agent's manifest is unchanged. Triggered by the RENDERING, not by the call's argument count, so a
+    //      build that reads the list inside the generator still has to prove the same gate.
+    if (comp.readOnly !== undefined) {
+      const roMiss = (why: string) => miss("read-only folder gate", why);
+      const ro = comp.readOnly;
+      const at = manifestCall ? manifestCall.index + manifestCall[0].indexOf("(") : -1;
+      const args = at >= 0 ? callArgsAt(comp.module, at) : null;
+      const idx = ro === "unrecognized" || !comp.generator ? -1 : comp.generator.params.indexOf(ro.listParam);
+      const feed = args && idx >= 0 ? /^([\w$]+(?:\.[\w$]+)?)\(([\w$]+)\?\?\[\]\)$/.exec(args[idx] ?? "") : null;
+      const ref = feed ? resolveNamespaceRef(feed[1]!, comp.module, files) : null;
+      if (ro === "unrecognized")
+        roMiss(
+          "the manifest generator renders something read-only in a shape this check does not recognise — a 1p sub-agent may now get it",
+        );
+      else if (idx < 0)
+        roMiss(`the read-only list ${ro.listParam} is not a parameter of the manifest generator — its source cannot be proved 3p-only`);
+      else if (!feed)
+        roMiss(
+          `the manifest call's read-only argument is not \`<reader>(<folders>??[])\` (got ${JSON.stringify((args?.[idx] ?? "").slice(0, 60))})`,
+        );
+      else if (feed[2] !== args![2])
+        roMiss(`the read-only reader filters ${feed[2]} but the manifest renders ${args![2]} — it no longer filters the rendered folders`);
+      else if (!ref) roMiss(`the read-only reader ${feed[1]} could not be resolved — classify it before admitting the rendering`);
+      else if (
+        !new RegExp(
+          `function ${reEsc(ref.local)}\\([\\w$]+\\)\\{let ([\\w$]+)=[\\w$.]+\\(\\);if\\(!\\1\\?\\.length\\|\\|[\\w$.]+\\(\\)\\.type!=="3p"\\)return\\[\\];`,
+        ).test(ref.chunk)
+      )
+        roMiss(`the reader ${feed[1]} no longer returns [] first on a non-3p deployment — a 1p sub-agent may now get read-only markers`);
     }
     const manifestFp = subagentBranchFingerprint(comp.manifest);
     const suffixFp = subagentBranchFingerprint(comp.suffix);
