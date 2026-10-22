@@ -177,6 +177,20 @@ describe("checkInitSurfaceObserved (check 7)", () => {
     expect(checkInitSurfaceObserved({ name: "desktop-9.json", json: block(true) }, false).status).toBe("PASS");
   });
 
+  it("passes a scheduled-only observation but says, every run, which tools rest on the static check", () => {
+    const json = {
+      provenance: { desktopInitSurface: { observed: true, sessionKinds: { interactive: 0, scheduled: 1, other: 0, unknown: 0 } } },
+    };
+    const r = checkInitSurfaceObserved({ name: "desktop-9.json", json }, false);
+    expect(r.status).toBe("PASS");
+    expect(r.alwaysShowDetail).toBe(true);
+    expect(r.detail).toMatch(/scheduled-task sessions only — cowork\.send_user_message .*static check, not observed/);
+    const mixed = {
+      provenance: { desktopInitSurface: { observed: true, sessionKinds: { interactive: 1, scheduled: 1, other: 0, unknown: 0 } } },
+    };
+    expect(checkInitSurfaceObserved({ name: "desktop-9.json", json: mixed }, false).detail).toBe("desktop-9.json: observed");
+  });
+
   it("FAILS an unobserved one, and names the dedicated override (never --allow-empty)", () => {
     const r = checkInitSurfaceObserved({ name: "desktop-9.json", json: block(false) }, false);
     expect(r.status).toBe("FAIL");

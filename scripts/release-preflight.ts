@@ -41,7 +41,7 @@ import { parse as parseYaml } from "yaml";
 import { checkVersions } from "./check-versions.js";
 import { checkSurfaceSinceLastTag } from "./check-surface.js";
 import { compareBaselineVersions } from "../src/baseline.js";
-import { ObservedSpawnEnv, SearchAnchors } from "../src/types.js";
+import { ObservedSpawnEnv, SCHEDULED_SESSION_WITHHELD_TOOLS, SearchAnchors } from "../src/types.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const r = (p: string) => readFileSync(join(REPO_ROOT, p), "utf8");
@@ -180,8 +180,25 @@ export const ALLOW_UNOBSERVED_INIT_SURFACE_FLAG = "--allow-unobserved-init-surfa
 /** Check 7 — pure over the newest baseline's parsed JSON, so it is unit-testable without a checkout. */
 export function checkInitSurfaceObserved(newest: { name: string; json: unknown }, allowUnobserved: boolean): CheckResult {
   const name = "newest baseline's Desktop init surface is observed";
-  const block = (newest.json as { provenance?: { desktopInitSurface?: { observed?: unknown } } } | null)?.provenance?.desktopInitSurface;
-  if (block?.observed === true) return { name, status: "PASS", detail: `${newest.name}: observed` };
+  const block = (
+    newest.json as {
+      provenance?: { desktopInitSurface?: { observed?: unknown; sessionKinds?: { interactive?: number; scheduled?: number } } };
+    } | null
+  )?.provenance?.desktopInitSurface;
+  if (block?.observed === true) {
+    // A scheduled-task read is a valid observation, but it cannot show what Desktop gives an ordinary session only;
+    // say which tools rest on sync's static check instead, every run.
+    const k = block.sessionKinds;
+    const scheduledOnly = k !== undefined && (k.scheduled ?? 0) > 0 && !k.interactive;
+    if (!scheduledOnly) return { name, status: "PASS", detail: `${newest.name}: observed` };
+    const staticOnly = Object.entries(SCHEDULED_SESSION_WITHHELD_TOOLS).flatMap(([srv, ts]) => ts.map((t) => `${srv}.${t}`));
+    return {
+      name,
+      status: "PASS",
+      alwaysShowDetail: true,
+      detail: `${newest.name}: observed from scheduled-task sessions only — ${staticOnly.join(", ")} (and AskUserQuestion and the onboarding role picker) are asserted by sync's static check, not observed`,
+    };
+  }
   const why =
     block === undefined
       ? `${newest.name} carries no provenance.desktopInitSurface — re-sync it with a current cowork-harness`
