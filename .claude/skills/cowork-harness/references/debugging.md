@@ -26,7 +26,7 @@ Docker, no re-record.
 
 | Situation | Symptom | Reach for (in order) |
 |---|---|---|
-| **The skill misbehaved** | wrong output, an unexpected gate, a denied tool, an opaque crash | `inspect` — what did it produce? · `trace <run-dir> --view <view>` — what did it actually do (tools, gates, sub-agent tree)? · `verify-run` — re-assert cheaply when only an assertion is wrong · `diff <old-run> <new-run>` — what changed since it worked · `chat` — reproduce it by hand |
+| **The skill misbehaved** | wrong output, an unexpected gate, a denied tool, an opaque crash | `inspect` — what did it produce? · `trace <run-dir> --view <view>` — what did it actually do (tools; gates are the questions view, as there is no gates view; the sub-agent tree is the dispatches view)? · `verify-run` — re-assert cheaply when only an assertion is wrong · `diff <old-run> <new-run>` — what changed since it worked · `chat` — reproduce it by hand |
 | **A green you don't trust** | an assert that may have tested nothing, a stale cassette, an auto-answered or decided gate | `replay --explain` — the evidence trail behind each *passing* assert · `replay --mutate` — perturbs a CAPPED SAMPLE of recorded JSON values (10/file, 50 total) and reports which perturbations NOTHING caught; the report names the sample size, so read it as a sample not a total (reporting only; never moves the verdict/exit code) · `lint` — assertions on the wrong CI lane / mixed-class keys · `verify-cassettes` — privacy + staleness over committed cassettes · the Gotchas landmine catalog — how a check passes vacuously · `run --repeat N` / `skill --repeat N` — did it pass, or pass once? · `stats` — flaky or expensive over time |
 
 A failed run also records `errorSource` (where the failure originated) and `stderrLogPath` (the captured
@@ -98,7 +98,8 @@ already-written evidence*, not re-run-and-hope. Use them to diagnose a failure (
 decide which assertions from *Assertions: two orthogonal axes* in `assertions-guide.md` are worth adding):
 
 - **`cowork-harness trace <run-dir> --view <view>`** — focuses one of the run's rollups (the per-tool
-  call-count/timing table, the sub-agent dispatch tree, the gate lifecycle, the tool/error rollups, …);
+  call-count/timing table, the sub-agent dispatch tree, the gate lifecycle as `--view questions` (not `gates`), the
+  tool/error rollups, …);
   bare `trace` digests the whole run. The view set is actively being extended — run `trace --help` for
   the current list rather than relying on a fixed enumeration here.
 - **`lane: local|remote`** (scenario key, default `local`) — which Cowork lane's DELIVERY CONTRACT the run
