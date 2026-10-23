@@ -2290,15 +2290,14 @@ function artifactCaptureDefects(
     return out;
   }
   const scope = chunk.slice(decl.index + decl[0].length, installAt);
-  const id = reEsc(map);
-  const writers = [...scope.matchAll(new RegExp(`(?<![\\w$.])${id}\\.set\\(`, "g"))];
+  const writers = [...scope.matchAll(new RegExp(`(?<![\\w$.])${reEsc(map)}\\.set\\(`, "g"))];
   if (writers.length !== 1)
     add("map writer", `the capture map \`${map}\` has ${writers.length} writers in its scope (expected exactly one, the Artifact hook)`);
-  if (new RegExp(`(?<![\\w$.])${id}=(?!=)`).test(scope)) add("map", `the capture map \`${map}\` is reassigned in its scope`);
-  if (new RegExp(`(?<![=!<>])=${id}(?=[,;)}])`).test(scope)) add("map", `the capture map \`${map}\` is aliased in its scope`);
+  if (new RegExp(`(?<![\\w$.])${reEsc(map)}=(?!=)`).test(scope)) add("map", `the capture map \`${map}\` is reassigned in its scope`);
+  if (new RegExp(`(?<![=!<>])=${reEsc(map)}(?=[,;)}])`).test(scope)) add("map", `the capture map \`${map}\` is aliased in its scope`);
   const writer = writers[0];
   if (writers.length === 1 && writer.index !== undefined) {
-    const key = scope.slice(writer.index).match(new RegExp(`^${id}\\.set\\([\\w$]+\\.([\\w$]+),`))?.[1];
+    const key = scope.slice(writer.index).match(new RegExp(`^${reEsc(map)}\\.set\\([\\w$]+\\.([\\w$]+),`))?.[1];
     if (key !== "tool_use_id")
       add("key", `the hook stores the capture under \`${key ?? "?"}\`, not tool_use_id — the lookup can never find it`);
     // The matcher of the hook that writes it.
