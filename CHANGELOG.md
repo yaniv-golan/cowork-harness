@@ -90,6 +90,13 @@ All notable changes to this project are documented here. The format is based on
 - **`docs/fidelity-gaps.md`: Anthropic's built-in skills plugin is not staged.** Real Cowork also loads a
   per-account `anthropic-skills` plugin; the entry says what its absence hides from a skill under test.
 
+
+### Fixed
+
+- **The debugging guide and the companion skill's debugging reference name `trace`'s gate view.** It is
+  `--view questions`; there is no `gates` view. An agent reading the reference had suggested `trace --view gates`,
+  which `trace` refuses.
+
 ## [4.10.0] — 2026-10-16
 
 ### Upgrade notes
