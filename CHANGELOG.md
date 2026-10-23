@@ -23,9 +23,13 @@ All notable changes to this project are documented here. The format is based on
     on a first-party deployment. The session the harness models selects none, so the harness does not set it.
   - **Artifact permission checks (not modelled):** Desktop's Artifact path hook now also covers the tools of the
     `claude-artifacts` MCP server. For that server's file publishing, Desktop records each file's identity before
-    the approval card and re-checks it after, including its content hash, and refuses a file on a drive that gives
-    files no stable identity. `sync` now checks that code end to end.
+    the approval card and re-checks it after, including its content hash, and refuses files whose drive cannot
+    identify them. `sync` checks how the recorded identity reaches the permission check, the widened matcher, and
+    that refusal; it does not check the re-check itself (the hash, how the file is reopened).
   - **Cassettes:** see the Upgrade note.
+- **`sync` requires the permission check's approval-window refusal in every build that has the check.** The
+  refusal of a file that changed between the approval card and the answer has been in every such build since Desktop
+  1.32352.0, but `sync` did not check for it until now; a build without it is refused.
 - **`sync` checks that the typed-artifact tools stay out of scheduled tasks.** They come from a server the
   init-surface read never records, so the Desktop code that withholds them from a scheduled task is the only place
   that difference can be checked.
