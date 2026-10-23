@@ -1512,6 +1512,35 @@ function matchBrace(text: string, open: number): number {
   return -1;
 }
 
+/** The top-level, comma-separated arguments of the call whose `(` is at `open`, or null when it does not close. */
+function topLevelArgs(text: string, open: number): string[] | null {
+  const args: string[] = [];
+  let depth = 0;
+  let from = open + 1;
+  let i = open;
+  while (i < text.length) {
+    const lit = skipLiteralAt(text, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
+    const c = text[i];
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth === 0) {
+        args.push(text.slice(from, i));
+        return args;
+      }
+    } else if (c === "," && depth === 1) {
+      args.push(text.slice(from, i));
+      from = i + 1;
+    }
+    i++;
+  }
+  return null;
+}
+
 /** Split a `a??b??c` expression on its TOP-LEVEL `??` operators. */
 function splitNullish(expr: string): string[] {
   const ops: string[] = [];
@@ -2227,7 +2256,8 @@ const reEsc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
  *  named through a namespace reference (captured). */
 const WIDENED_ARTIFACT_MATCHER = /RegExp\(`\^\(\?:Artifact\[A-Za-z\]\*\|mcp__\$\{([\w$.]+)\}__\.\+\)\$`\)/;
 
-/** Desktop 3.6556.1's per-call file capture for Artifact publishing, verified end to end. Returns `[what, why]` per
+/** Desktop 3.6556.1's per-call file capture for Artifact publishing, pinned at its plumbing (lookup, map, matcher, the
+ *  two denies; not the re-check's hashing or reopen). Returns `[what, why]` per
  *  defect. The Artifact PreToolUse path hook was widened to the `claude-artifacts` MCP server's tools; for its file
  *  publishing it records each file's identity in a closure-local Map keyed by `tool_use_id`, and the canUseTool block
  *  opens with a lookup that hands the capture to the pre-pass as a 4th argument:
@@ -2322,7 +2352,12 @@ function artifactCaptureDefects(
       ? trim[2]
       : chunk.match(new RegExp(`(?<![\\w$.])${reEsc(trim[2])}=(\\d+)(?![\\w$.])`))?.[1]
     : undefined;
-  if (!trim || deletes !== 2 || new RegExp(`(?<![\\w$.])${reEsc(map)}\\.clear\\(`).test(scope))
+  if (!trim)
+    add(
+      "map removal",
+      `the hook's size-trim loop on \`${map}\` is no longer in its pinned shape — re-pin it if the bound and the eviction are unchanged`,
+    );
+  else if (deletes !== 2 || new RegExp(`(?<![\\w$.])${reEsc(map)}\\.clear\\(`).test(scope))
     add(
       "map removal",
       `the capture map \`${map}\` is emptied somewhere besides the hook's size trim and the lookup — a capture can vanish before it is read`,
@@ -2834,6 +2869,13 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     //     pre-pass runs FIRST and can deny outright, and a post-pass can turn the chain's ALLOW into a
     //     DENY. Accepting the block shape without pinning both would silence three flags and leave two
     //     new decision points unmodelled — the exact way B16/B18 failed open.
+    // An expression-form install has no pre-pass, so no capture lookup either: with the matcher widened to an MCP
+    // server (3.6556.1 on), that is a permission wrapper with none of the capture's checks.
+    if (block === null && WIDENED_ARTIFACT_MATCHER.test(consuming))
+      miss(
+        "canUseTool capture lookup",
+        "the Artifact hook still covers an MCP server's tools, but the permission wrapper is in expression form, with no pre-pass and no per-call file capture — reclassify before admitting it",
+      );
     if (block !== null) {
       // Desktop 3.6556.1: the block may open with a per-call capture lookup ahead of the pre-pass (see
       // artifactCaptureDefects). The pre-pass binding is then read from what follows it.
@@ -2846,12 +2888,19 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
           )
         : null;
       const afterPrelude = prelude ? block.slice(prelude[0].length) : block;
-      const pre = afterPrelude.match(/^(?:const|let|var) ([\w$]+)=(await )?([\w$]+)\(([^()]*)\)/);
-      if (!pre) {
-        miss("canUseTool wrapper", "the block body does not open with a pre-pass binding — classify the new shape before admitting it");
+      const pre = afterPrelude.match(/^(?:const|let|var) ([\w$]+)=(await )?([\w$]+)\(/);
+      const preArgs = pre ? topLevelArgs(afterPrelude, pre[0].length - 1) : null;
+      if (!pre || !preArgs) {
+        if (WIDENED_ARTIFACT_MATCHER.test(consuming))
+          miss(
+            "canUseTool capture lookup",
+            "the Artifact hook covers an MCP server's tools, but the permission wrapper does not open with the pinned capture lookup and pre-pass binding — re-pin the new shape before admitting it",
+          );
+        else
+          miss("canUseTool wrapper", "the block body does not open with a pre-pass binding — classify the new shape before admitting it");
       } else {
         const [, resultId, awaited, preFn] = pre;
-        for (const [what, why] of artifactCaptureDefects(consuming, files, block, prelude, pre[4].split(","), preFn)) miss(what, why);
+        for (const [what, why] of artifactCaptureDefects(consuming, files, block, prelude, preArgs, preFn)) miss(what, why);
         // The await rule again, for the pre-pass: an un-awaited async call yields a Promise, so the early
         // deny never fires and `finish` is not a function. Both new decision points go inert in silence.
         if (!awaited && new RegExp(`async function ${reEsc(preFn)}\\(`).test(consuming))

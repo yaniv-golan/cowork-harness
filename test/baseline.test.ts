@@ -3837,9 +3837,9 @@ describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)",
       "Ue.set(e.tool_use_id,c);(function(e){let Ue=new Map;Ue.set(e.tool_use_id,[])})();",
       /capture map anchor.*redeclared/,
     ],
-    // Shared rules, on the capture shape: the lookup without its delete no longer parses as a lookup; an un-awaited
-    // pre-pass makes the early deny and the post-pass inert.
-    [".delete dropped from the lookup", "Ue.delete(k.toolUseID);const a=", "const a=", /canUseTool wrapper anchor missing/],
+    // Shared rules, on the capture shape: the lookup without its delete no longer parses as a lookup (and, with the
+    // matcher widened, is named as the capture); an un-awaited pre-pass makes the early deny and the post-pass inert.
+    [".delete dropped from the lookup", "Ue.delete(k.toolUseID);const a=", "const a=", /capture lookup/],
     ["pre-pass un-awaited", "const a=await ss(g,S,d,i)", "const a=ss(g,S,d,i)", /canUseTool wrapper await/],
     ["rewritten-input deny removed", "updatedInput differs from the request", "updatedInput differs", /capture rewritten-input deny/],
     ["no-identity deny removed", "no stable identity", "no identity", /capture no-identity deny/],
@@ -3906,6 +3906,26 @@ describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)",
       expect(f[0]).toMatch(/capture lookup/);
     });
   }
+
+  // An expression-form install has no pre-pass, so none of the capture's checks run: with the matcher widened it must
+  // flag (it gave 0 flags while the widened-matcher gate sat inside the block-form arm).
+  it("expression-form install with the matcher widened → exactly 1 flag (capture lookup)", () => {
+    const files = pathHookFiles({
+      consuming: (c) => 'const q=require("./index.chunk-NS.js");var eh=RegExp(`^(?:Artifact[A-Za-z]*|mcp__${q.EO}__.+)$`);' + c,
+    });
+    files.set("index.chunk-NS.js", NS_CHUNK);
+    expect(checkPathHookFacts(pathHookFiles())).toEqual([]); // control: the same install, matcher not widened
+    const f = checkPathHookFacts(files);
+    expect(f).toHaveLength(1);
+    expect(f[0]).toMatch(/capture lookup/);
+  });
+
+  // The pre-pass call's arguments are read with balanced parentheses: a nested call in an argument is an argument.
+  it("capture shape: a nested call as the pre-pass's 4th argument is read as that argument (binding flag, not a parse failure)", () => {
+    const f = checkPathHookFacts(captureFiles((s) => s.split("await ss(g,S,d,i)").join("await ss(g,S,d,Array.from(i??[]))")));
+    expect(f).toHaveLength(1);
+    expect(f[0]).toMatch(/capture binding/);
+  });
 
   it("capture DECOY: a same-named Map's writers outside the declaring scope → no flags", () => {
     // `other()` already carries two writers on its own `Ue`; one more before the real declaration is still outside.

@@ -18,14 +18,16 @@ All notable changes to this project are documented here. The format is based on
 
 - **`latest` moves to `desktop-3.6556.2`** (agent **2.1.308**, unchanged). The Cowork system prompt and the egress
   allowlist are unchanged from `desktop-3.1623.4`. Observed, as before, from a local scheduled task. Desktop 3.6556.1
-  was not synced separately: nothing Cowork-related differs between it and 3.6556.2.
+  was not synced separately: no Cowork-related difference between it and 3.6556.2 was found.
   - **Spawn env:** Desktop now sets `CLAUDE_CODE_ATTRIBUTION_PROJECT` when exactly one claude.ai Project is selected
     on a first-party deployment. The session the harness models selects none, so the harness does not set it.
   - **Artifact permission checks (not modelled):** Desktop's Artifact path hook now also covers the tools of the
     `claude-artifacts` MCP server. For that server's file publishing, Desktop records each file's identity before
     the approval card and re-checks it after, including its content hash, and refuses files whose drive cannot
     identify them. `sync` checks how the recorded identity reaches the permission check, the widened matcher, and
-    that refusal; it does not check the re-check itself (the hash, how the file is reopened).
+    that refusal, and refuses a build whose permission wrapper loses the capture while the hook still covers that
+    server's tools; it does not check the re-check itself (the hash, how the file is reopened). In a build with the
+    capture, it also requires the existing refusal of an approval whose arguments differ from the request.
   - **Cassettes:** see the Upgrade note.
 - **`sync` requires the permission check's approval-window refusal in every build that has the check.** The
   refusal of a file that changed between the approval card and the answer has been in every such build since Desktop
