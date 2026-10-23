@@ -195,7 +195,7 @@ export const PINNED_GATES: Record<string, string> = {
   // 1.46388.3 (see its entry below). A pinned drift alone WARNS + still writes.
   "245679952": "suggestSkillsEnabled", // live on/force — gates whether suggest_skills renders at all
   // proactive (unprompted) suggest mode. DEAD IN DESKTOP CODE FROM 1.46388.3: 2 occurrences in the 1.40609.1
-  // and 1.44121.1 asars, 0 in every asar from 1.46388.3 through 2.7032.0, and the `proactiveSkillSuggestEnabled`
+  // and 1.44121.1 asars, 0 in every asar from 1.46388.3 through 3.6556.2, and the `proactiveSkillSuggestEnabled`
   // name is gone too. From that build Desktop gives suggest_skills its proactive description and `trigger`
   // param unconditionally whenever the tool is declared. Up to 1.44121.1 the gate was live, with three effects:
   // the description swap, `trigger`, and a swapped suggest-guidance line in the generated
@@ -2223,6 +2223,106 @@ const PATH_GATE_MAP_LITERAL = `\\{Read:"file_path",Write:"file_path",Edit:"file_
 
 const reEsc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** Desktop 3.6556.1's per-call file capture for Artifact publishing, verified end to end. Returns `[what, why]` per
+ *  defect. The Artifact PreToolUse path hook was widened to the `claude-artifacts` MCP server's tools; for its file
+ *  publishing it records each file's identity in a closure-local Map keyed by `tool_use_id`, and the canUseTool block
+ *  opens with a lookup that hands the capture to the pre-pass as a 4th argument:
+ *
+ *      let M=new Map;e.hooks={…{matcher:H.source,hooks:[async e=>{…M.set(e.tool_use_id,c)…}]}…};
+ *      let K=e.canUseTool;K&&(e.canUseTool=async(e,n,r)=>{let i=M.get(r.toolUseID);M.delete(r.toolUseID);
+ *        let a=await P(e,n,v,i);…})
+ *
+ *  `H` is `` RegExp(`^(?:Artifact[A-Za-z]*|mcp__${<ns>}__.+)$`) `` with `<ns>` resolving to "claude-artifacts". The
+ *  pre-pass re-checks the captured files after approval (content hash included) and denies a file with no stable
+ *  identity. Without the lookup a 4-parameter pre-pass gets no capture and denies every such publish, so the lookup is
+ *  required whenever the pre-pass takes one. The Map rules are scoped to its declaring body (declaration → install):
+ *  minified names recur across a chunk, so a bundle-wide count would read unrelated bindings. */
+function artifactCaptureDefects(
+  chunk: string,
+  files: Map<string, string>,
+  block: string,
+  prelude: RegExpMatchArray | null,
+  callArgs: string[],
+  preFn: string,
+): [string, string][] {
+  const out: [string, string][] = [];
+  const add = (what: string, why: string) => out.push([`canUseTool capture ${what}`, why]);
+  const params = chunk.match(new RegExp(`(?<![\\w$])(?:async )?function ${reEsc(preFn)}\\(([^)]*)\\)`))?.[1].split(",") ?? [];
+  const body = braceBodyOf(chunk, `async function ${preFn}(`) ?? braceBodyOf(chunk, `function ${preFn}(`) ?? "";
+  if (!prelude) {
+    if (params.length >= 4 || /artifact-file:/.test(body))
+      add(
+        "lookup",
+        `the pre-pass \`${preFn}\` takes a per-call file capture but the block no longer looks it up — every captured publish would be refused`,
+      );
+    return out;
+  }
+  const [, binding, map, field] = prelude;
+  const word = (id: string) => new RegExp(`(?<![\\w$.])${reEsc(id)}(?![\\w$])`, "g");
+
+  // The capture reaches the pre-pass, and only the pre-pass.
+  if (callArgs[3] !== binding) add("binding", `the looked-up capture \`${binding}\` is not the pre-pass's 4th argument`);
+  else {
+    const reads = (block.slice(prelude[0].length).match(word(binding)) ?? []).length;
+    if (reads !== 1)
+      add("binding", `the looked-up capture \`${binding}\` is read ${reads} times after the lookup — only the pre-pass may take it`);
+  }
+  // The pre-pass consumes it as the capture list of its re-check, or the lookup is decorative.
+  const p4 = params[3];
+  if (!p4 || !new RegExp(`[\\w$]+\\(${reEsc(p4)}\\?\\?\\[\\]`).test(body))
+    add(
+      "pre-pass parameter",
+      `the pre-pass \`${preFn}\` no longer re-checks its 4th parameter as the file capture — the lookup is decorative`,
+    );
+  // The two denies that come with this shape.
+  if (!/updatedInput differs from the request/.test(body))
+    add("rewritten-input deny", "the pre-pass no longer denies an approval whose arguments differ from the request");
+  if (!/no stable identity/.test(body)) add("no-identity deny", "the pre-pass no longer refuses a file on a drive with no stable identity");
+  // The SDK's camelCase field is the hook payload's tool_use_id; the store key is checked below.
+  if (field !== "toolUseID") add("key", `the lookup reads \`${field}\`, not toolUseID — it can never find what the hook stored`);
+
+  const installAt = chunk.search(/(?:const|let|var) ([\w$]+)=([\w$]+)\.canUseTool;\1&&\(/);
+  // A declaration (`let M=new Map` or `,M=new Map` in a declaration list), never a bare `M=new Map` reassignment —
+  // otherwise a reassignment would become the scope start and hide itself.
+  const decl = [...chunk.slice(0, installAt).matchAll(new RegExp(`(?:(?:const|let|var) |,)${reEsc(map)}=new Map(?![\\w$])`, "g"))].at(-1);
+  if (!decl || decl.index === undefined) {
+    add("map", `the capture map \`${map}\` has no \`new Map\` declaration ahead of the canUseTool install`);
+    return out;
+  }
+  const scope = chunk.slice(decl.index + decl[0].length, installAt);
+  const id = reEsc(map);
+  const writers = [...scope.matchAll(new RegExp(`(?<![\\w$.])${id}\\.set\\(`, "g"))];
+  if (writers.length !== 1)
+    add("map writer", `the capture map \`${map}\` has ${writers.length} writers in its scope (expected exactly one, the Artifact hook)`);
+  if (new RegExp(`(?<![\\w$.])${id}=(?!=)`).test(scope)) add("map", `the capture map \`${map}\` is reassigned in its scope`);
+  if (new RegExp(`(?<![=!<>])=${id}(?=[,;)}])`).test(scope)) add("map", `the capture map \`${map}\` is aliased in its scope`);
+  const writer = writers[0];
+  if (writers.length === 1 && writer.index !== undefined) {
+    const key = scope.slice(writer.index).match(new RegExp(`^${id}\\.set\\([\\w$]+\\.([\\w$]+),`))?.[1];
+    if (key !== "tool_use_id")
+      add("key", `the hook stores the capture under \`${key ?? "?"}\`, not tool_use_id — the lookup can never find it`);
+    // The matcher of the hook that writes it.
+    const head = [...scope.slice(0, writer.index).matchAll(/matcher:([\w$]+)\.source,hooks:/g)].at(-1)?.[1];
+    const tmpl = head
+      ? chunk.match(
+          new RegExp(
+            `(?<![\\w$.])${reEsc(head)}=RegExp\\(\`\\^\\(\\?:Artifact\\[A-Za-z\\]\\*\\|mcp__\\$\\{([\\w$.]+)\\}__\\.\\+\\)\\$\`\\)`,
+          ),
+        )
+      : null;
+    const ref = tmpl ? resolveNamespaceRef(tmpl[1], chunk, files) : null;
+    const ns = ref ? ref.chunk.match(new RegExp(`(?<![\\w$.])${reEsc(ref.local)}="([^"]*)"`))?.[1] : undefined;
+    if (!tmpl)
+      add(
+        "matcher",
+        "the hook that stores the capture is no longer the Artifact family widened to one MCP server — reclassify before admitting it",
+      );
+    else if (ns !== "claude-artifacts")
+      add("matcher", `the widened Artifact hook's server resolves to ${ns === undefined ? "nothing" : `"${ns}"`}, not "claude-artifacts"`);
+  }
+  return out;
+}
+
 /** Desktop 2.16120.0's canUseTool terminal wrapper, verified against its definition. Returns the reason
  *  the wrapper is NOT the judged-input pin, or null when it is. The real body is:
  *
@@ -2691,11 +2791,23 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     //     DENY. Accepting the block shape without pinning both would silence three flags and leave two
     //     new decision points unmodelled — the exact way B16/B18 failed open.
     if (block !== null) {
-      const pre = block.match(/^(?:const|let|var) ([\w$]+)=(await )?([\w$]+)\(/);
+      // Desktop 3.6556.1: the block may open with a per-call capture lookup ahead of the pre-pass (see
+      // artifactCaptureDefects). The pre-pass binding is then read from what follows it.
+      const p3 = consuming
+        .match(/(?:const|let|var) ([\w$]+)=([\w$]+)\.canUseTool;\1&&\(\2\.canUseTool=async\(([^)]*)\)=>\{/)?.[3]
+        .split(",")[2];
+      const prelude = p3
+        ? block.match(
+            new RegExp(`^(?:const|let|var) ([\\w$]+)=([\\w$]+)\\.get\\(${reEsc(p3)}\\.([\\w$]+)\\);\\2\\.delete\\(${reEsc(p3)}\\.\\3\\);`),
+          )
+        : null;
+      const afterPrelude = prelude ? block.slice(prelude[0].length) : block;
+      const pre = afterPrelude.match(/^(?:const|let|var) ([\w$]+)=(await )?([\w$]+)\(([^()]*)\)/);
       if (!pre) {
         miss("canUseTool wrapper", "the block body does not open with a pre-pass binding — classify the new shape before admitting it");
       } else {
         const [, resultId, awaited, preFn] = pre;
+        for (const [what, why] of artifactCaptureDefects(consuming, files, block, prelude, pre[4].split(","), preFn)) miss(what, why);
         // The await rule again, for the pre-pass: an un-awaited async call yields a Promise, so the early
         // deny never fires and `finish` is not a function. Both new decision points go inert in silence.
         if (!awaited && new RegExp(`async function ${reEsc(preFn)}\\(`).test(consuming))
@@ -2710,6 +2822,13 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
             miss("canUseTool wrapper vm-deny", "the pre-pass no longer carries a /sessions VM-path deny — a VM path could reach the tool");
           if (!/finish/.test(preBody))
             miss("canUseTool wrapper finish", "the pre-pass no longer builds a finish() continuation — the post-pass veto cannot fire");
+          // The post-pass's own deny: a file that changed between the approval request and the answer. Present
+          // in every block-form build (1.32352.0 on), so required unconditionally here.
+          if (!/across the approval window/.test(preBody))
+            miss(
+              "canUseTool wrapper approval-window",
+              "the pre-pass no longer denies a file that changed across the approval window — an approved call can act on a swapped file",
+            );
         }
         // The early deny must be consulted BEFORE the chain runs.
         if (!new RegExp(`(?<![\\w$])${reEsc(resultId)}\\?\\.[\\w$]+\\)return`).test(block))
@@ -3346,7 +3465,8 @@ export function extractSubagentComposition(files: Map<string, string>): {
  *   (1) a session started for a scheduled task is typed `"scheduled"`;
  *   (2) `send_user_message` is offered only to an UNTYPED session, from the server config of gate 3045399524;
  *   (3) a scheduled session loses AskUserQuestion and the onboarding role picker;
- *   (4) its frame artifacts are cleared unless gate 1978029737 `scheduledRunFrameArtifacts` is on.
+ *   (4) its frame artifacts are cleared unless gate 1978029737 `scheduledRunFrameArtifacts` is on;
+ *   (5) from 3.6556.1, the typed-artifact tools and the prompt's frame-tools section go to untyped, unscheduled sessions only.
  *  Every site is counted BUNDLE-WIDE, as S6g does: a refactor that adds a second site beside the pinned one must flag,
  *  not hide behind the first match. The bundle already holds sites that are not extras, and each is pinned by shape:
  *  the prompt builders that RECEIVE `hasSendUserMessage` (a destructuring read) and forward it, and the Code tab's own
@@ -3448,6 +3568,20 @@ export function checkScheduledSessionFacts(files: Map<string, string>): string[]
       ).test(fa.module)
     )
       miss("scheduled frame artifacts", `the gate ${fa.m[2]} is no longer scheduledRunFrameArtifacts (1978029737, default on)`);
+
+  // (5) Desktop 3.6556.1: the typed-artifact tools and the prompt's frame-tools section go only to an untyped session
+  // with no scheduled task. They are served by a remote MCP server the init surface never reads, so this predicate is
+  // the only place the difference can be seen. Required once the bundle builds a frame-tools section.
+  if ([...files.values()].some((m) => m.includes("frameToolsSection:"))) {
+    const frame = all(
+      /([\w$]+)=[\w$]+&&([\w$]+)\.sessionType===void 0&&\(\2\.scheduledTaskId\?\?[\w$]+\.getActiveSession\([\w$]+\)\?\.scheduledTaskId\)===void 0,[\w$]+=\1\?/g,
+    );
+    if (frame.length !== 1)
+      miss(
+        "scheduled frame tools",
+        `the typed-artifact tools are gated by ${frame.length} pinned \`sessionType===void 0 && scheduledTaskId===void 0\` predicates (expected exactly one) — a scheduled observation can no longer tell what an ordinary session gets`,
+      );
+  }
   return flags;
 }
 

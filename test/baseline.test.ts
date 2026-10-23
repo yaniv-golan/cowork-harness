@@ -2676,6 +2676,20 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     expect(env).toEqual(golden);
   });
 
+  // Desktop 3.6556.1 constructs CLAUDE_CODE_ATTRIBUTION_PROJECT (one selected claude.ai Project, first-party). It is
+  // ALLOWLISTED, and an allowlisted key never reaches the derived env whatever its guard — that, not the spread's
+  // condition, is why the golden map stays unchanged. Unclassified, the same key hard-fails and nulls the whole env.
+  it("CLAUDE_CODE_ATTRIBUTION_PROJECT: allowlisted, so the real asar derives an env without it", () => {
+    expect(classifySpawnEnvKey("CLAUDE_CODE_ATTRIBUTION_PROJECT", "window")?.class).toBe("non-cowork-session");
+    const bundle = readRealBundleOrSkip();
+    if (!bundle) return;
+    const gates = decodeFcacheGates();
+    if (!gates) return;
+    const { env, keys } = deriveSpawnEnv(bundle, gates, readRealBundleFilesOrSkip() ?? undefined);
+    expect(env).not.toBeNull();
+    if (keys.includes("CLAUDE_CODE_ATTRIBUTION_PROJECT")) expect(env).not.toHaveProperty("CLAUDE_CODE_ATTRIBUTION_PROJECT");
+  });
+
   // Non-circular oracle for asarGateIds over the REAL asar: every key of the gate-defaults RULE TABLE
   // (`<id>:{rule:…}`, Desktop 2.19675.0+) is counted by a regex independent of the extractor and must
   // appear in its output. An identifier-only lookahead missed all 136 entries on 2.19675.0, which read as 55
@@ -3625,7 +3639,7 @@ function blockBodyInstall(): string {
   return (
     `async function ss(e,n,r){if(e!=="Artifact")return null;const s=async x=>x;` +
     `if(String(n.file_path).startsWith("/sessions"))return{vmPathDeny:{behavior:"deny",message:"is a VM path. In this session the Artifact tool publishes from the host filesystem"},finish:s};` +
-    `const f=await stat(n.file_path);return{finish:async x=>x&&f?x:{behavior:"deny",message:"changed"}}}` +
+    `const f=await stat(n.file_path);return{finish:async x=>x&&f?x:{behavior:"deny",message:"changed across the approval window"}}}` +
     `const Se=e.canUseTool;Se&&(e.canUseTool=async(g,S,k)=>{` +
     `const a=await ss(g,S,d);` +
     `if(a?.vmPathDeny)return a.vmPathDeny;` +
@@ -3701,6 +3715,97 @@ describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)",
 
   it("block-bodied install with pre/post-pass → no flags", () => {
     expect(checkPathHookFacts(blockFiles())).toEqual([]);
+  });
+
+  it("block form: the approval-window deny removed from the pre-pass → exactly 1 flag", () => {
+    const f = checkPathHookFacts(blockFiles((s) => s.replace("changed across the approval window", "changed")));
+    expect(f).toHaveLength(1);
+    expect(f[0]).toMatch(/canUseTool wrapper approval-window anchor missing/);
+  });
+
+  // Desktop 3.6556.1: the Artifact path hook is widened to the `claude-artifacts` MCP server and, for its file
+  // publishing, records each file's identity per tool_use_id in a closure-local Map. The canUseTool block opens with
+  // a lookup that hands the capture to a 4-parameter pre-pass. A same-named Map in another scope is the decoy real
+  // builds carry (minified names recur across a chunk).
+  const captureInstall = () =>
+    'var eh=RegExp(`^(?:Artifact[A-Za-z]*|mcp__${t.EO}__.+)$`),Hn="claude-artifacts";export{Hn as EO};' +
+    "function other(e){let Ue=new Map;Ue.set(e.tool_use_id,1);Ue.set(e.tool_use_id,2);return Ue}" +
+    'async function Qm(c,f){return c.length===f.length?void 0:"files"}' +
+    `async function ss(e,n,r,i){if(e!=="Artifact"&&!e.startsWith("mcp__claude-artifacts__"))return null;const s=async x=>x;` +
+    `const u=async x=>x&&x.updatedInput&&x.updatedInput!==n?{behavior:"deny",message:"updatedInput differs from the request"}:x;` +
+    `if(String(n.file_path).startsWith("/sessions"))return{vmPathDeny:{behavior:"deny",message:"is a VM path. In this session the Artifact tool publishes from the host filesystem"},finish:s};` +
+    `if(n.dev===0)return{vmPathDeny:{behavior:"deny",message:"is on a drive that gives files no stable identity"},finish:s};` +
+    `if(n.files)return{finish:async x=>(await Qm(i??[],n.files))?{behavior:"deny",message:"source changed or unverifiable across the approval window"}:u(x)};` +
+    `const f=await stat(n.file_path);return{finish:async x=>x&&f?u(x):{behavior:"deny",message:"changed across the approval window"}}}` +
+    "let Ue=new Map;e.hooks={...e.hooks,PreToolUse:[{matcher:eh.source,hooks:[async e=>{const c=[];" +
+    "Ue.set(e.tool_use_id,c);for(let k of Ue.keys()){if(Ue.size<=16)break;Ue.delete(k)}return{}}]}]};" +
+    `const Se=e.canUseTool;Se&&(e.canUseTool=async(g,S,k)=>{let i=Ue.get(k.toolUseID);Ue.delete(k.toolUseID);` +
+    `const a=await ss(g,S,d,i);` +
+    `if(a?.vmPathDeny)return a.vmPathDeny;` +
+    `const o=xe(g,S)??await Xt(g,S,k.decisionReason,j,f)??Qt(g,S,k.decisionReason,n)??await Se(g,S,k);` +
+    `return a===null?o:a.finish(o)});`;
+  const captureFiles = (mutate?: (s: string) => string) =>
+    pathHookFiles({
+      consuming: (c) => {
+        const swapped = c.replace(/const Se=e\.canUseTool;[\s\S]*$/, () => captureInstall());
+        return mutate ? mutate(swapped) : swapped;
+      },
+    });
+
+  it("3.6556.1 capture shape (widened hook, scoped Map, lookup, 4-parameter pre-pass) → no flags", () => {
+    expect(checkPathHookFacts(captureFiles())).toEqual([]);
+  });
+
+  // Each refactor-shaped mutation of the capture shape must give EXACTLY one flag naming what moved.
+  const CAPTURE_MUT: ReadonlyArray<readonly [string, string, string, RegExp]> = [
+    // Without the lookup the pre-pass gets no capture: every file publish is refused, silently.
+    ["lookup dropped, 4-parameter pre-pass kept", "let i=Ue.get(k.toolUseID);Ue.delete(k.toolUseID);", "", /capture lookup/],
+    ["capture not passed to the pre-pass", "await ss(g,S,d,i)", "await ss(g,S,d)", /capture binding/],
+    ["capture passed as a different argument", "await ss(g,S,d,i)", "await ss(g,S,i,d)", /capture binding/],
+    ["capture read again after the lookup", "if(a?.vmPathDeny)", "i&&log(i);if(a?.vmPathDeny)", /capture binding/],
+    ["4th parameter unused by the pre-pass (decorative lookup)", "Qm(i??[],n.files)", "Qm([],n.files)", /capture pre-pass parameter/],
+    [
+      "second writer in the Map's scope",
+      "Ue.set(e.tool_use_id,c);",
+      "Ue.set(e.tool_use_id,c);Ue.set(e.tool_use_id,c);",
+      /capture map writer/,
+    ],
+    ["Map aliased in its scope", "let Ue=new Map;e.hooks=", "let Ue=new Map,Zq=Ue;e.hooks=", /capture map anchor/],
+    ["Map reassigned in its scope", "let Ue=new Map;e.hooks=", "let Ue=new Map;Ue=new Map;e.hooks=", /capture map anchor/],
+    ["hook stores under a different key", "Ue.set(e.tool_use_id,c)", "Ue.set(e.tool_name,c)", /capture key/],
+    [
+      "lookup reads a different field",
+      "Ue.get(k.toolUseID);Ue.delete(k.toolUseID)",
+      "Ue.get(k.toolUseId);Ue.delete(k.toolUseId)",
+      /capture key/,
+    ],
+    ["server namespace literal renamed", 'Hn="claude-artifacts"', 'Hn="claude-artifactz"', /capture matcher/],
+    ["matcher arm removed", "|mcp__${t.EO}__.+)$`)", ")$`)", /capture matcher/],
+    ["rewritten-input deny removed", "updatedInput differs from the request", "updatedInput differs", /capture rewritten-input deny/],
+    ["no-identity deny removed", "no stable identity", "no identity", /capture no-identity deny/],
+  ];
+  for (const [name, from, to, re] of CAPTURE_MUT) {
+    it(`capture MUTATION: ${name} → exactly 1 flag`, () => {
+      const files = captureFiles((s) => {
+        expect(s.split(from).length - 1).toBe(1);
+        return s.split(from).join(to); // not replace(): a `$\`` in the replacement would expand
+      });
+      const f = checkPathHookFacts(files);
+      expect(f).toHaveLength(1);
+      expect(f[0]).toMatch(re);
+    });
+  }
+
+  it("capture DECOY: a same-named Map's writers outside the declaring scope → no flags", () => {
+    // `other()` already carries two writers on its own `Ue`; one more before the real declaration is still outside.
+    expect(
+      checkPathHookFacts(captureFiles((s) => s.replace("let Ue=new Map;e.hooks=", "Ue.set(e.tool_use_id,c);let Ue=new Map;e.hooks="))),
+    ).toEqual([]);
+  });
+
+  it("back-compat: a pre-3.6556.1 block (no lookup, 3-parameter pre-pass) needs neither the lookup nor its denies", () => {
+    const f = checkPathHookFacts(blockFiles());
+    expect(f).toEqual([]);
   });
 
   // Desktop 2.16120.0: the chain's terminal is no longer a bare call of the saved original — its answer
