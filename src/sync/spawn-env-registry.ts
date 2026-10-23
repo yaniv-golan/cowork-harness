@@ -98,6 +98,13 @@ const SPAWN_ENV_ALLOWLIST: Record<string, readonly [SpawnEnvClass, string]> = {
   ],
   CLAUDE_PROJECT_UUID: ["non-cowork-session", "project-session-conditional (absent for the modeled standard chat session)"],
   CLAUDE_PROJECT_TOOL: ["non-cowork-session", "project-session-conditional (absent for the modeled standard chat session)"],
+  // Desktop 3.6556.1: names the selected claude.ai Project for the agent's usage-attribution headers. Set only when
+  // EXACTLY ONE project is selected and the deployment is first-party. Not scrubbed from the operator layer: Desktop
+  // strips no user-supplied value of it, and the harness models no attribution header.
+  CLAUDE_CODE_ATTRIBUTION_PROJECT: [
+    "non-cowork-session",
+    "project-session-conditional: exactly one selected claude.ai Project, first-party only (absent for the modeled standard chat session)",
+  ],
   MCP_CONNECT_TIMEOUT_MS: ["gate-conditional-off", "gate 434204418-conditional (off; arrives with MCP_CONNECTION_NONBLOCKING:'0')"],
   ENABLE_TOOL_SEARCH: ["gate-conditional-off", "gate 1129419822-conditional (dark)"],
   CLAUDE_CODE_SKIP_PRECOMPACT_LOAD: ["gate-conditional-off", "gate 4153934152-conditional (off)"],
