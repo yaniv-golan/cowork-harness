@@ -6,6 +6,30 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **Cassettes: re-stamp or re-record one recorded through `baseline: latest`.** `latest` moves to `desktop-3.6556.2`
+  (see Changed), so such a cassette reports `[stale] baseline moved 3.1623.4 → 3.6556.2 since record — re-record`.
+  Re-stamping `fingerprint.baseline` clears it. The agent is unchanged (2.1.308): a cassette recorded on it gets no
+  `agent-version:` note from the re-stamp, and one recorded on an earlier agent keeps the note it already had. The
+  bundled cassettes are re-stamped; they were recorded on 2.1.299 and keep that note.
+
+### Changed
+
+- **`latest` moves to `desktop-3.6556.2`** (agent **2.1.308**, unchanged). The Cowork system prompt and the egress
+  allowlist are unchanged from `desktop-3.1623.4`. Observed, as before, from a local scheduled task. Desktop 3.6556.1
+  was not synced separately: nothing Cowork-related differs between it and 3.6556.2.
+  - **Spawn env:** Desktop now sets `CLAUDE_CODE_ATTRIBUTION_PROJECT` when exactly one claude.ai Project is selected
+    on a first-party deployment. The session the harness models selects none, so the harness does not set it.
+  - **Artifact permission checks (not modelled):** Desktop's Artifact path hook now also covers the tools of the
+    `claude-artifacts` MCP server. For that server's file publishing, Desktop records each file's identity before
+    the approval card and re-checks it after, including its content hash, and refuses a file on a drive that gives
+    files no stable identity. `sync` now checks that code end to end.
+  - **Cassettes:** see the Upgrade note.
+- **`sync` checks that the typed-artifact tools stay out of scheduled tasks.** They come from a server the
+  init-surface read never records, so the Desktop code that withholds them from a scheduled task is the only place
+  that difference can be checked.
+
 ## [4.11.0] - 2026-10-23
 
 ### Upgrade notes

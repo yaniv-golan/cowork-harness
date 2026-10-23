@@ -432,7 +432,11 @@ This is **not a harness gap**. Startup folder access works in both commands; the
 > `out_dir`, `root` and every `files[].path` / `files[].from` against the outputs root and blocks on any
 > resolver error. It is inert for the session this harness models — no Artifact tool is registered when the
 > frame-artifacts flag is off — which is why it is recorded rather than built. The harness's own
-> `src/hostloop/pretooluse-path-hook.ts` models no part of it.
+> `src/hostloop/pretooluse-path-hook.ts` models no part of it. **Since Desktop 3.6556.1** the matcher also covers
+> every tool of the `claude-artifacts` MCP server (a remote server Desktop connects), and for that server's file
+> publishing the hook records each file's identity before the approval card; the permission check re-verifies it
+> after approval, content hash included, and refuses a file on a drive that gives files no stable identity. Also
+> not modeled; `sync` checks the code.
 
 **Real Cowork behaviour:** Cowork has two mutually exclusive artifact mechanisms, and a given session
 runs exactly one of them. The legacy mechanism bind-mounts one host directory per artifact into the
