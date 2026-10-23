@@ -4,7 +4,7 @@ description: Test or debug a Claude Code skill/plugin under Claude Cowork's runt
 metadata:
   author: cowork-harness
   version: 4.11.0
-  tracks-harness: cowork-harness 4.11.0 (baseline desktop-3.1623.4)
+  tracks-harness: cowork-harness 4.11.0 (baseline desktop-3.6556.2)
 ---
 
 # cowork-harness
@@ -27,7 +27,7 @@ full landmine catalog in [`references/gotchas.md`](references/gotchas.md) are th
 Read them.
 
 > **Version note:** the facts and `file:line` pointers here track `cowork-harness 4.11.0` (baseline
-> `desktop-3.1623.4`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
+> `desktop-3.6556.2`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
 ## Preflight — make sure the harness can actually run
