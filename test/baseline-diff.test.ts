@@ -259,6 +259,52 @@ describe("renderChangelog / formatDiffLines — Desktop init surface", () => {
     expect(plain(observed, next)).toContain("Desktop server `cowork`: tool(s) DISAPPEARED: `save_skill`");
   });
 
+  // A scheduled-only observation: Desktop never offers send_user_message to a scheduled task, so its absence is the
+  // session kind, not a removal — but only when the diff itself shows the kinds becoming scheduled-only.
+  const kinds = (scheduled: number, interactive = 0) => ({ interactive, scheduled, other: 0, unknown: 0 });
+  const GATE = "sendUserMessageConfig:3045399524";
+  const withKinds = (b: ReturnType<typeof block>, k?: object, gateOn: boolean | null = true) => ({
+    provenance: {
+      ...(gateOn === null ? {} : { gates: { [GATE]: { on: gateOn, source: "force" } } }),
+      desktopInitSurface: { ...b.provenance.desktopInitSurface, ...(k ? { sessionKinds: k } : {}) },
+    },
+  });
+  // The renderer reads the gate from the NEW baseline, as the CLI passes it.
+  const mdNext = (a: object, b: object) => renderChangelog(diffBaselines(a, b), b);
+  const ordinary = block({ cowork: srv(["present_files", "send_user_message"]) });
+  const scheduledRead = block({ cowork: srv(["present_files"]) });
+  it("send_user_message missing from a scheduled-only read is reported as not observable, not DISAPPEARED", () => {
+    const out = mdNext(withKinds(ordinary), withKinds(scheduledRead, kinds(1)));
+    expect(out).toContain("- Desktop init surface session kinds read: 1 scheduled");
+    expect(out).toContain("- Desktop server `cowork`: `send_user_message` not observed: every session read was a scheduled task");
+    expect(out).not.toContain("DISAPPEARED");
+    expect(out).not.toContain(GENERIC);
+  });
+  it("the same scheduled-only drop is still DISAPPEARED when the gate is off, unrecorded, or not passed in", () => {
+    for (const gateOn of [false, null]) {
+      const out = mdNext(withKinds(ordinary), withKinds(scheduledRead, kinds(1), gateOn));
+      expect(out, String(gateOn)).toContain("tool(s) DISAPPEARED: `send_user_message`");
+      expect(out, String(gateOn)).not.toContain("not observed");
+    }
+    expect(md(withKinds(ordinary), withKinds(scheduledRead, kinds(1)))).toContain("tool(s) DISAPPEARED: `send_user_message`");
+    expect(
+      formatDiffLines(diffBaselines(withKinds(ordinary), withKinds(scheduledRead, kinds(1))), withKinds(scheduledRead, kinds(1))).join(
+        "\n",
+      ),
+    ).toContain("`send_user_message` not observed");
+  });
+  it("the same drop with no kinds shown is still DISAPPEARED", () => {
+    expect(md(ordinary, scheduledRead)).toContain("- Desktop server `cowork`: tool(s) DISAPPEARED: `send_user_message`");
+  });
+  it("the same drop when an ordinary session was also read is still DISAPPEARED", () => {
+    const out = mdNext(withKinds(ordinary), withKinds(scheduledRead, kinds(1, 1)));
+    expect(out).toContain("tool(s) DISAPPEARED: `send_user_message`");
+  });
+  it("a tool not withheld from scheduled sessions is still DISAPPEARED on a scheduled-only read", () => {
+    const out = mdNext(withKinds(block({ cowork: srv(["present_files", "save_skill"]) })), withKinds(scheduledRead, kinds(1)));
+    expect(out).toContain("tool(s) DISAPPEARED: `save_skill`");
+  });
+
   it("a tool appearing is named", () => {
     const next = block({
       cowork: srv(["present_files", "propose_skills", "save_skill"], ["create_artifact"]),
@@ -359,6 +405,24 @@ describe("renderChangelog / formatDiffLines — observed spawn env", () => {
     expect(out).toContain("`TZ` moved from every session to some sessions");
     expect(out).not.toContain(GENERIC);
     expect(plain(a, b)).toContain("Desktop host-loop spawn env: key(s) APPEARED: `NEW_KEY`");
+  });
+
+  it("the scheduled-run key arriving with a scheduled-only read is the kind, not an APPEARED key", () => {
+    const b0 = obs(["PATH", "TZ"]);
+    const b1 = obs(["CLAUDE_CODE_HOST_SCHEDULED_RUN", "NEW_KEY", "PATH", "TZ"]);
+    const sched = {
+      provenance: {
+        observedSpawnEnv: { ...b1.provenance.observedSpawnEnv, sessionKinds: { interactive: 0, scheduled: 1, other: 0, unknown: 0 } },
+      },
+    };
+    const out = md(b0, sched);
+    expect(out).toContain("- Desktop host-loop spawn env session kinds read: 1 scheduled");
+    expect(out).toContain("`CLAUDE_CODE_HOST_SCHEDULED_RUN` now in every session because every session read was a scheduled task");
+    expect(out).toContain("- Desktop host-loop spawn env: key(s) APPEARED: `NEW_KEY`");
+    expect(out).not.toMatch(/APPEARED: [^\n]*CLAUDE_CODE_HOST_SCHEDULED_RUN/);
+    expect(out).not.toContain(GENERIC);
+    // Without the kinds in the diff it is an ordinary appearance.
+    expect(md(b0, b1)).toMatch(/APPEARED: [^\n]*CLAUDE_CODE_HOST_SCHEDULED_RUN/);
   });
 
   it("an unobserved → observed change says so", () => {

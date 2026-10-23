@@ -41,7 +41,13 @@ import { parse as parseYaml } from "yaml";
 import { checkVersions } from "./check-versions.js";
 import { checkSurfaceSinceLastTag } from "./check-surface.js";
 import { compareBaselineVersions } from "../src/baseline.js";
-import { ObservedSpawnEnv, SearchAnchors } from "../src/types.js";
+import {
+  ObservedSpawnEnv,
+  SCHEDULED_SESSION_WITHHELD_TOOL_GATES,
+  SCHEDULED_SESSION_WITHHELD_TOOLS,
+  SearchAnchors,
+  withheldToolGateOn,
+} from "../src/types.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const r = (p: string) => readFileSync(join(REPO_ROOT, p), "utf8");
@@ -180,8 +186,53 @@ export const ALLOW_UNOBSERVED_INIT_SURFACE_FLAG = "--allow-unobserved-init-surfa
 /** Check 7 — pure over the newest baseline's parsed JSON, so it is unit-testable without a checkout. */
 export function checkInitSurfaceObserved(newest: { name: string; json: unknown }, allowUnobserved: boolean): CheckResult {
   const name = "newest baseline's Desktop init surface is observed";
-  const block = (newest.json as { provenance?: { desktopInitSurface?: { observed?: unknown } } } | null)?.provenance?.desktopInitSurface;
-  if (block?.observed === true) return { name, status: "PASS", detail: `${newest.name}: observed` };
+  const block = (
+    newest.json as {
+      provenance?: {
+        desktopInitSurface?: {
+          observed?: unknown;
+          sessionKinds?: { interactive?: number; scheduled?: number; other?: number; unknown?: number };
+        };
+      };
+    } | null
+  )?.provenance?.desktopInitSurface;
+  if (block?.observed === true) {
+    // A scheduled-task read is a valid observation, but it cannot show what Desktop gives an ordinary session only;
+    // say which tools rest on sync's static check instead, every run.
+    const k = block.sessionKinds;
+    // A baseline from before session kinds were recorded passes as before, but says so: a block that drops the
+    // field must not read as a confirmed ordinary session.
+    if (k === undefined)
+      return { name, status: "PASS", alwaysShowDetail: true, detail: `${newest.name}: observed (no session kinds recorded)` };
+    // Only an untyped (ordinary) session can show these tools; without one, say what rests on the static check.
+    if ((k.interactive ?? 0) > 0) return { name, status: "PASS", detail: `${newest.name}: observed` };
+    const scheduledOnly = (k.scheduled ?? 0) > 0 && !k.other && !k.unknown;
+    const read = scheduledOnly
+      ? "observed from scheduled-task sessions only"
+      : "observed, but no ordinary session was confirmed among those read";
+    // The static check proves the code path that offers a tool to an untyped session; whether its gate is on is the
+    // baseline's own gates row, so name the tools whose gate is off or unrecorded separately.
+    const withheld = Object.entries(SCHEDULED_SESSION_WITHHELD_TOOLS).flatMap(([srv, ts]) => ts.map((t) => ({ srv, t })));
+    const gated = withheld.filter(({ srv, t }) => withheldToolGateOn(newest.json, srv, t)).map(({ srv, t }) => `${srv}.${t}`);
+    const gateOff = withheld
+      .filter(({ srv, t }) => !withheldToolGateOn(newest.json, srv, t))
+      .map(({ srv, t }) => `${srv}.${t} (gate ${SCHEDULED_SESSION_WITHHELD_TOOL_GATES[`${srv}.${t}`]} off or unrecorded)`);
+    const parts = [
+      `${[...gated, "AskUserQuestion and the onboarding role picker"].join(", ")}: sync's static check asserts the code path, not observed`,
+      ...(gateOff.length ? [`${gateOff.join(", ")}: nothing says an ordinary session gets it`] : []),
+    ];
+    // The two observations classify sessions independently (the session record vs the scheduled-run spawn key); if
+    // they disagree on whether a scheduled task was read, one reader has drifted.
+    const spawnScheduled = (newest.json as { provenance?: { observedSpawnEnv?: { sessionKinds?: { scheduled?: number } } } } | null)
+      ?.provenance?.observedSpawnEnv?.sessionKinds?.scheduled;
+    if (spawnScheduled !== undefined && spawnScheduled > 0 !== (k.scheduled ?? 0) > 0)
+      return {
+        name,
+        status: "WARN",
+        detail: `${newest.name}: ${read}, but the spawn-env observation ${spawnScheduled > 0 ? "did" : "did not"} read a scheduled run — the two session-kind readers disagree; ${parts.join("; ")}`,
+      };
+    return { name, status: "PASS", alwaysShowDetail: true, detail: `${newest.name}: ${read} — ${parts.join("; ")}` };
+  }
   const why =
     block === undefined
       ? `${newest.name} carries no provenance.desktopInitSurface — re-sync it with a current cowork-harness`
@@ -218,7 +269,7 @@ export function checkSpawnEnvObserved(newest: { name: string; json: unknown }, a
       status: "WARN",
       detail: `${newest.name}: declared unobservable (${b.declared}) — post-construction spawn-env coverage is down to the minimal scanner; ship notes should say so`,
     };
-  const why = `${newest.name} records observedSpawnEnv no-session — run one Cowork task with 'Only on this computer' on, under that Desktop, then re-run \`cowork-harness sync\``;
+  const why = `${newest.name} records observedSpawnEnv no-session — run one local Cowork task (a scheduled task where an interactive local task is not offered) under that Desktop, then re-run \`cowork-harness sync\``;
   if (allowUnobserved)
     return {
       name,

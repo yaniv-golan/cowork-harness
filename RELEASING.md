@@ -266,8 +266,8 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       re-run `sync`, or pass `--allow-unobserved-spawn-env` for an emergency release (a declared `lane-gone` only
       warns); fails if it carries no schema-valid `agentBinary.searchAnchors` — stage the agent and re-run `sync`,
       or pass `--allow-missing-search-anchors` for an emergency release (no run against it can serve a frozen
-      search corpus). The first two need a task with *Only on this computer* on, from an account that still offers local tasks (in
-      our observation, a Team-plan organization), and the re-run `sync` refuses to write if Desktop is signed in to
+      search corpus). The first two need one local task: an interactive one with *Only on this computer* on where the account still
+      offers it, otherwise a local scheduled task (in our observation, on a Team-plan organization), and the re-run `sync` refuses to write if Desktop is signed in to
       a different organisation from the one this machine last synced under (`provenance.captureOrg`; see
       [docs/maintenance.md](./docs/maintenance.md#per-release-runbook)); fails if the covered surface lost or changed
       a leaf since the last release tag and the bumped version is not a major — the same check as

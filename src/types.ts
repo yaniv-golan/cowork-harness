@@ -301,6 +301,40 @@ const DesktopInitServer = z.strictObject({
 });
 const isSortedUnique = (xs: readonly string[]) => xs.every((x, i) => i === 0 || xs[i - 1] < x);
 
+/** How many of the observed sessions were of each kind. Since the local interactive lane went away a sync can only
+ *  observe a SCHEDULED-task session, which Desktop gives fewer tools and a scheduled-run env key, so the kind is what
+ *  makes a diff between two baselines readable. Counts only. `unknown`: the kind could not be read. */
+export const SessionKinds = z.strictObject({
+  interactive: z.number().int().nonnegative(),
+  scheduled: z.number().int().nonnegative(),
+  other: z.number().int().nonnegative(),
+  unknown: z.number().int().nonnegative(),
+});
+export type SessionKinds = z.infer<typeof SessionKinds>;
+
+/** Tools Desktop withholds from a scheduled-task session that an ordinary (untyped) session can get. Since the local
+ *  interactive lane went away, the only local session a sync can observe is a scheduled one, so these never appear
+ *  in `desktopInitSurface`; `checkScheduledSessionFacts` (src/sync/cowork-sync.ts) asserts the code that withholds them instead. */
+export const SCHEDULED_SESSION_WITHHELD_TOOLS: Readonly<Record<string, readonly string[]>> = {
+  cowork: ["send_user_message"],
+};
+
+/** The gate a withheld tool ALSO needs before an ordinary session gets it, keyed `<server>.<tool>`, as its
+ *  `provenance.gates` row. The static check proves only the code path (`!sessionType && <gate config>`); whether the
+ *  gate is on is that row, so a scheduled read's missing tool reads as the session kind only while the row is on. */
+export const SCHEDULED_SESSION_WITHHELD_TOOL_GATES: Readonly<Record<string, string>> = {
+  "cowork.send_user_message": "sendUserMessageConfig:3045399524",
+};
+
+/** Whether an ordinary session on `baseline` would be offered a withheld tool, as far as gates say: true when the tool
+ *  needs no gate, else only when its `provenance.gates` row is `on: true`. A missing row is false. */
+export function withheldToolGateOn(baseline: unknown, server: string, tool: string): boolean {
+  const gate = SCHEDULED_SESSION_WITHHELD_TOOL_GATES[`${server}.${tool}`];
+  if (gate === undefined) return true;
+  const row = (baseline as { provenance?: { gates?: Record<string, { on?: unknown } | undefined> } } | null)?.provenance?.gates?.[gate];
+  return row?.on === true;
+}
+
 /** `provenance.desktopInitSurface` — the tool surface Desktop's own servers declared in real Cowork
  *  sessions of the synced release. STRICT at every level, so any key beyond these (a `cwd`, a raw server
  *  list, a frame count) fails validation. Enforced before sync writes it and over every committed baseline
@@ -311,6 +345,8 @@ export const DesktopInitSurface = z
     agentVersion: z.string().min(1),
     appVersion: z.string().min(1),
     observed: z.boolean(),
+    /** Absent on baselines synced before Desktop 3.1623.4. */
+    sessionKinds: SessionKinds.optional(),
     servers: z.strictObject({
       cowork: DesktopInitServer.optional(),
       plugins: DesktopInitServer.optional(),
@@ -320,6 +356,7 @@ export const DesktopInitSurface = z
   .superRefine((v, ctx) => {
     const names = Object.keys(v.servers);
     if (!v.observed && names.length > 0) ctx.addIssue({ code: "custom", message: "observed:false must carry no servers" });
+    if (!v.observed && v.sessionKinds) ctx.addIssue({ code: "custom", message: "observed:false must carry no sessionKinds" });
     for (const [name, s] of Object.entries(v.servers)) {
       if (!s) continue;
       if (!isSortedUnique(s.toolsAll) || !isSortedUnique(s.toolsSome))
@@ -350,6 +387,8 @@ export const ObservedSpawnEnv = z.discriminatedUnion("observed", [
       appVersion: z.string().min(1),
       nativeAgentVersions: z.array(DottedVersion),
       sessions: z.number().int().positive(),
+      /** Absent on baselines synced before Desktop 3.1623.4. */
+      sessionKinds: SessionKinds.optional(),
       keysAll: z.array(SpawnEnvKeyName),
       keysSome: z.array(SpawnEnvKeyName),
       withheld: z.number().int().nonnegative(),

@@ -130,7 +130,7 @@ describe("agent_env — the tier-uniform gated-env knob", () => {
     }
   });
 
-  it("SCRUBBED_AGENT_ENV_KEYS is exactly the twelve keys of rules (a)-(d)", () => {
+  it("SCRUBBED_AGENT_ENV_KEYS is exactly the fourteen keys of rules (a)-(d)", () => {
     expect([...SCRUBBED_AGENT_ENV_KEYS].sort()).toEqual(
       [
         "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
@@ -145,6 +145,8 @@ describe("agent_env — the tier-uniform gated-env knob", () => {
         "CLAUDE_AGENT_SDK_MCP_NO_PREFIX",
         "CLAUDE_CODE_PROCESS_WRAPPER",
         "COWORK_ARTIFACTS_ROOT",
+        "CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS",
+        "CLAUDE_CODE_DESKTOP_SKILLS_PLUGIN_DIR",
       ].sort(),
     );
   });
@@ -244,7 +246,13 @@ describe("PYTHONDONTWRITEBYTECODE reaches the agent spawn env on every tier (Des
 // the key: with one that pins it, the baseline overlay would produce the pinned value whether or not the scrub ran.
 describe("keys Desktop strips from user env do not reach the agent from the operator's shell", () => {
   afterEach(() => vi.unstubAllEnvs());
-  const RULE_D = { CLAUDE_CODE_SIMPLE: "1", CLAUDE_AGENT_SDK_MCP_NO_PREFIX: "1", CLAUDE_CODE_PROCESS_WRAPPER: "/usr/bin/env" } as const;
+  const RULE_D = {
+    CLAUDE_CODE_SIMPLE: "1",
+    CLAUDE_AGENT_SDK_MCP_NO_PREFIX: "1",
+    CLAUDE_CODE_PROCESS_WRAPPER: "/usr/bin/env",
+    CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS: "operator_name",
+    CLAUDE_CODE_DESKTOP_SKILLS_PLUGIN_DIR: "/tmp/operator-skills",
+  } as const;
   const withoutKey = (k: string) => {
     const base = loadBaseline("latest");
     const env = { ...(base.spawn?.env ?? {}) } as Record<string, string>;

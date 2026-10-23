@@ -49,8 +49,10 @@ silently half-derived spawn contract is not a state it can produce.
 
 When Claude Desktop updates (on a machine that has the app installed):
 
-**Before syncing, run one Cowork task with *Only on this computer* on** (on an account that still offers local
-tasks; in our observation, a Team-plan organization). Without one, `provenance.desktopInitSurface` and
+**Before syncing, run one local Cowork session.** In our observation (Desktop 3.1623.4, a Team-plan organization) the
+new-task screen sends every task to the cloud, so the local session you can still run is a **scheduled task**: create
+one in Claude Desktop and let it fire once. An ordinary task with *Only on this computer* on also works, where an
+account still offers it. Without a local session, `provenance.desktopInitSurface` and
 `provenance.observedSpawnEnv` are recorded unobserved and `npm run preflight` refuses the release.
 
 ```bash
@@ -127,7 +129,7 @@ Another runtime knob in the same family: `COWORK_HARNESS_RESOURCE_INTERVAL_MS` s
 Old staged binaries are re-downloadable from Anthropic's own release channel. For the **container/microvm** tiers the harness needs the **Linux/arm64 ELF**, so download it directly and point the resolver at it:
 
 ```bash
-V=2.1.299   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
+V=2.1.308   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
 # The release channel is NOT always the stable one — Desktop also stages release CANDIDATES, served only
 # from .../claude-code-releases/rc/<commit>/, and the commit cannot be discovered from the network (the
 # `stable` and `latest` pointers name other versions). Read it from the same baseline; every baseline
@@ -386,9 +388,20 @@ committed baseline and say why in that baseline's `$comment`.
      an unobserved newest baseline; `--allow-unobserved-init-surface` downgrades that to a warning for an
      emergency release.
    - **After the local-lane sunset.** From 2026-10-06 new Pro and Max Cowork tasks run in the cloud, and a
-     cloud session writes no local init frame. So before syncing, run one local task on an account that
-     still gets local tasks (in our observation, a Team-plan organization); otherwise the surface is recorded unobserved and the preflight refuses
-     it.
+     cloud session writes no local init frame. By Desktop 3.1623.4 the only local session we can start is a
+     scheduled task, so run one before syncing; otherwise the surface is recorded unobserved and the preflight
+     refuses it.
+   - **Which kind of session was read.** The block records `sessionKinds`: how many of the sessions read were
+     ordinary (`interactive`), `scheduled`, another typed session (`other`), or `unknown`, from each session's own
+     record (its type and scheduled-task id only; nothing else from that file is kept). Desktop gives a scheduled
+     task fewer tools than an ordinary one — no `send_user_message`, no `AskUserQuestion`, no onboarding role
+     picker — so a scheduled-only read cannot show them. `sync` asserts the code that withholds them instead (a
+     scheduled-task session is typed `scheduled`; `send_user_message` is offered only to an untyped session; the
+     two removed tools; the frame-artifacts gate), and blocks the write if that code changes shape or a second site
+     appears beside it. The check proves the code path, not the gate: when the diff shows the read became
+     scheduled-only AND the new baseline's `sendUserMessageConfig` gate is on, a missing `send_user_message` is
+     reported as not observable rather than removed; otherwise it stays DISAPPEARED. The preflight names the tools
+     that rest on the static check, and any whose gate is off.
    - **Reading the diff.** A tool or server appearing or disappearing is the signal. A tool moving between
      `toolsAll` and `toolsSome` depends on which kinds of session happened to be read (at 2.7032.0 some
      sessions lack the four artifact tools), so treat that as a prompt to look, not as evidence.
@@ -412,9 +425,13 @@ committed baseline and say why in that baseline's `$comment`.
      registry the window scan, the post-construction scanner and this reader all use). An unclassified name that
      Desktop's bundle carries blocks the write and is named locally: classify it, with a reason, and re-sync. A
      name pinned or harness-set there must also be in the env the harness host loop spawns, or the write blocks.
+   - **Session kind.** A dump names its keys, not its session, so `sessionKinds` here can only tell a scheduled
+     task, by the `CLAUDE_CODE_HOST_SCHEDULED_RUN` key Desktop sets on one and no other; every other dump counts
+     as `unknown`. On a scheduled-only read that key is in every session, which is the kind, not a classification
+     error.
    - **Unobserved.** No local host-loop task under this Desktop build: `sync` prints a `WARNING` and records
-     `observed: false, reason: "no-session"`. **Remedy:** run one Cowork task with *Only on this computer* on
-     (on an account that still offers local tasks — see *After the local-lane sunset* above; otherwise declare it
+     `observed: false, reason: "no-session"`. **Remedy:** run one local Cowork session — a scheduled task, or an
+     ordinary task with *Only on this computer* on where offered (see *After the local-lane sunset* above; otherwise declare it
      with `--spawn-env-unobservable no-local-entitlement`), then re-run `sync`. `npm run preflight` refuses to release it; `--allow-unobserved-spawn-env` downgrades
      that to a warning for an emergency release. Log entries for the build that cannot be read block the write
      instead, since that is the reader or the format drifting, not a missing session.

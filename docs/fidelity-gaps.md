@@ -21,12 +21,12 @@ For how the harness *enforces* the limitations it does reproduce (sealed filesys
 
 ## On this page
 
-Every `##` below is one gap (or one scoping note). Grouped, since there are 39 of them.
+Every `##` below is one gap (or one scoping note). Grouped, since there are 40 of them.
 
 - **Read first** — [Which Cowork LANE this harness models](#which-cowork-lane-this-harness-models--read-first-it-scopes-everything-below) · [Fidelity tier differences](#fidelity-tier-differences)
 - **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [A workspace fixture starts with a fresh conversation](#a-workspace-fixture-starts-with-a-fresh-conversation) · [Deletes in `outputs/` follow the baseline's recorded mount mode](#deletes-in-outputs-follow-the-baselines-recorded-mount-mode) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
 - **Files & delivery** — [Artifacts](#artifacts--two-mechanisms-neither-modeled) · [File delivery](#file-delivery--present_files-here-senduserfile-on-remote-cowork) · [Browser↔webview↔human-interaction boundary (interactive artifacts)](#browserwebviewhuman-interaction-boundary-interactive-artifacts)
-- **Tools, skills & plugins** — [A plugin's declared MCP servers run here; production stubs them conditionally](#a-plugins-declared-mcp-servers-run-here-production-stubs-them-under-conditions-the-harness-cannot-see) · [Skill/plugin discovery SDK-MCP servers](#skillplugin-discovery-sdk-mcp-servers--modeled-on-containerhostloop-microvmprotocol-pending) · [Skill argument collection](#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here) · [Skill authoring](#skill-authoring--save_skill-and-propose_skills-are-not-modeled) · [Hooks](#hooks--the-harness-installs-one-of-productions-six) · [Browser tools are not served](#browser-tools-are-not-served--and-egress-assertions-say-nothing-about-that-path) · [VM tiers have no workspace tool aliases](#vm-tiers-have-no-workspace-tool-aliases) · [Hostloop: the substituted plugin path shares the VM path's suffix](#hostloop-the-substituted-plugin-path-shares-the-vm-paths-suffix-real-coworks-does-not)
+- **Tools, skills & plugins** — [A plugin's declared MCP servers run here; production stubs them conditionally](#a-plugins-declared-mcp-servers-run-here-production-stubs-them-under-conditions-the-harness-cannot-see) · [Skill/plugin discovery SDK-MCP servers](#skillplugin-discovery-sdk-mcp-servers--modeled-on-containerhostloop-microvmprotocol-pending) · [Skill argument collection](#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here) · [Skill authoring](#skill-authoring--save_skill-and-propose_skills-are-not-modeled) · [Anthropic's built-in skills are not staged](#anthropics-built-in-skills-anthropic-skills-are-not-staged) · [Hooks](#hooks--the-harness-installs-one-of-productions-six) · [Browser tools are not served](#browser-tools-are-not-served--and-egress-assertions-say-nothing-about-that-path) · [VM tiers have no workspace tool aliases](#vm-tiers-have-no-workspace-tool-aliases) · [Hostloop: the substituted plugin path shares the VM path's suffix](#hostloop-the-substituted-plugin-path-shares-the-vm-paths-suffix-real-coworks-does-not)
 - **Prompt & model** — [System-prompt reconstruction](#system-prompt-reconstruction) · [Server-driven system-prompt patches (`coworkSyspromptMap`)](#server-driven-system-prompt-patches-coworksyspromptmap) · [Model selection](#model-selection--the-harness-inherits-the-local-cli-default) · [Thinking forced on for managed-config models](#thinking-forced-on-for-managed-config-models-thinkingalwaysonmodels) · [Protocol-tier sub-agents get no Cowork environment append](#protocol-tier-sub-agents-get-no-cowork-environment-append) · [The silent-turn reminder is served by capability, and it lands in the graded corpus](#the-silent-turn-reminder-is-served-by-capability-and-it-lands-in-the-graded-corpus)
 - **Identity & environment** — [Auto-memory: the off switch is modeled, the memory keys are not](#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn)
 - **Sandbox & egress** — [`--raw` mode bypasses the egress sandbox](#--raw-mode-bypasses-the-egress-sandbox) · [HIPAA restriction is a process-global latch](#hipaa-restriction-is-a-process-global-latch) · [Booting the real rootfs image under a generic VZ host](#booting-the-real-rootfs-image-under-a-generic-vz-host) · [Stopping a host-tier run stops the processes the agent started](#stopping-a-host-tier-run-stops-the-processes-the-agent-started)
@@ -1662,6 +1662,59 @@ nothing in context and changes no tool-selection outcome.
   is honest, and it is the part of the workflow the harness can verify.
 - **Keep skill persistence out of the scenario's claim.** State in the scenario name or `expect_denied`
   reasoning that persistence is unverified, so a later reader does not over-read the pass.
+
+---
+
+## Anthropic's built-in skills (`anthropic-skills`) are not staged
+
+**Real Cowork behaviour:** every local session also loads a plugin Desktop maintains per organization
+and account, named `anthropic-skills` ("Anthropic-managed skills for Claude Desktop"). How it reaches the
+agent depends on the lane:
+
+- **Host loop:** Desktop passes the folder as the first ordinary session plugin, so its skills are named
+  `anthropic-skills:<name>`. It also sets `CLAUDE_CODE_DESKTOP_SKILLS_PLUGIN_DIR` to the same path. That
+  variable loads nothing. For a Desktop entrypoint it marks the plugin as the account's skills, which
+  reserves the `anthropic-skills:` names for it.
+- **VM loop:** the folder is not passed as a plugin. Its `skills/` directory is mapped to the session's
+  `.claude/skills`, so the skills appear under their bare names.
+
+The model learns about these skills two ways. Desktop's system prompt lists them in `<available_skills>`,
+a section the harness does not render for any skill. The agent's own skill listing names them too.
+
+Despite the name, Desktop merges three sources into the plugin:
+
+- **Skills built into the app.** Some are archives shipped in `app.asar` (`docx`, `pdf`, `pdf-reading`,
+  `pptx`, `xlsx`, `frontend-design` at Desktop 3.1623.4). Others are generated from prompts in the app's
+  code and gated per account, such as `schedule`.
+- **The account's Skills list from claude.ai.** This covers the Anthropic skills the account has
+  switched on, such as `deep-research` and `skill-creator`, plus skills the user uploaded.
+- **Skills the user saved locally**, for example through `save_skill`.
+
+Each manifest entry carries `creatorType` (`anthropic` or `user`), and Desktop uses it everywhere the
+kinds differ. Only `user` skills can be edited, are held for a security scan, or are attributed. When an
+organization turns Skills off, Desktop serves a separate built-ins-only copy of the plugin.
+
+**Harness behaviour:** the plugin is not staged at any tier. The agent's skill listing names only the
+skills and plugins the scenario stages, and `CLAUDE_CODE_DESKTOP_SKILLS_PLUGIN_DIR` is never set.
+
+**What this means for a skill under test.** In real Cowork, a skill competes with around 20 Anthropic
+skills for the model's attention. A request about a PDF, a spreadsheet or a slide deck can be routed to
+Anthropic's `pdf` or `xlsx` skill instead of to your skill. A harness run cannot show
+that routing. A skill that passes here may still lose its trigger in production to a built-in one with
+an overlapping description. It also cannot rely on a built-in skill being present, for example by
+telling the model to "use the docx skill".
+
+**Why it is not staged:** the skills are Anthropic's files, so the public harness cannot ship them. The
+account part also contains the user's own skills, which can describe private business processes. A run
+must never pick those up by accident.
+
+### Workarounds
+
+- **Check trigger overlap by hand.** Compare your skill's `description` with the built-in skills listed
+  in Cowork's Settings → Skills. Pay particular attention if your skill handles documents, spreadsheets,
+  slides or PDFs.
+- **Stage a built-in skill explicitly** when a scenario depends on one. Do this only from a copy you are
+  entitled to use, such as a skill published in Anthropic's public skills repository.
 
 ---
 

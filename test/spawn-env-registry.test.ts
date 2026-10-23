@@ -89,6 +89,8 @@ const WINDOW_PINS_BEFORE = [
   "MCP_CONNECTION_NONBLOCKING",
   "MCP_TOOL_TIMEOUT",
   "PYTHONDONTWRITEBYTECODE",
+  // Desktop 3.1623.4: an unconditional "" in W2, pinned after the registry existed.
+  "CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS",
   "USE_LOCAL_OAUTH",
   "USE_STAGING_OAUTH",
 ];

@@ -1691,6 +1691,7 @@ function extractFromAsar(
     for (const f of checkVmAgentStagingFacts(bundleFiles)) flag(unknown, f);
     const subagentFps = readSubagentFingerprints();
     for (const f of checkSubagentPromptFacts(bundleFiles, subagentFps)) flag(unknown, f);
+    for (const f of checkScheduledSessionFacts(bundleFiles)) flag(unknown, f);
     const spawn = deriveSpawnEnv(bundle, gates, bundleFiles);
     const { deltas: spawnDeltas, notes } = partitionSpawnFlags(spawn.flags);
     for (const f of spawnDeltas) flag(unknown, f);
@@ -3237,6 +3238,35 @@ export const UNREACHABLE_FOLDER_PHRASE = "the shell cannot reach this folder";
 
 /** `(${<pred>?"<default>":<ns>.<id>})` — the unreachable-folder ternary (Desktop >=2.37337.1). */
 const UNREACHABLE_TERNARY = /\(\$\{([^?{}`"]+)\?"((?:[^"\\]|\\.)*)":([\w$]+(?:\.[\w$]+)?)\}\)/;
+/** Desktop >=3.1623.4 hoists the same ternary into a statement, as the else arm of the mounted-folder arm:
+ *  `` …?`shell: …`:<pred>?"<default>":<ns>.<id>; ``. Anchored on the mounted arm's closing backtick and the
+ *  outer `:`, with `:` excluded from the predicate, so a widened predicate (`Q()||<reader>()===void 0`) is
+ *  captured whole and refused by check 7a rather than trimmed down to the reader call. */
+const UNREACHABLE_TERNARY_STMT = /`:([^?:{}`"]+)\?"((?:[^"\\]|\\.)*)":([\w$]+(?:\.[\w$]+)?);/;
+/** Desktop >=3.1623.4: a folder in the admin read-only list renders `(${<list>.includes(<f>)?<ns>.<id>(<line>):<line>})`. */
+const READ_ONLY_RENDER = /\$\{([\w$]+)\.includes\(([\w$]+)\)\?[\w$]+(?:\.[\w$]+)?\(([\w$]+)\):\3\}/;
+
+/** Split the argument list of the call whose `(` is at `open` at depth-0 commas. Null if it never closes. */
+function callArgsAt(src: string, open: number): string[] | null {
+  const args: string[] = [];
+  let depth = 0;
+  let start = open + 1;
+  for (let i = open; i < src.length; i++) {
+    const c = src[i];
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth === 0) {
+        args.push(src.slice(start, i));
+        return args;
+      }
+    } else if (c === "," && depth === 1) {
+      args.push(src.slice(start, i));
+      start = i + 1;
+    }
+  }
+  return null;
+}
 
 export function extractSubagentComposition(files: Map<string, string>): {
   module: string;
@@ -3246,6 +3276,10 @@ export function extractSubagentComposition(files: Map<string, string>): {
   defaultArm?: string;
   /** The ternary's predicate source, as written; check 7a resolves its reader. */
   predicate?: string;
+  /** The manifest generator's own name and parameter list (check 7b/7c bind the call site to them). */
+  generator?: { name: string; params: string[] };
+  /** Whether the generator source renders anything read-only (check 7c then requires the 1p gate). */
+  readOnly?: { listParam: string } | "unrecognized";
 } | null {
   const module = [...files.values()].find((c) => c.includes("exist only in the sandbox"));
   if (!module) return null;
@@ -3272,7 +3306,7 @@ export function extractSubagentComposition(files: Map<string, string>): {
   let defaultArm: string | undefined;
   let predicate: string | undefined;
   const parts = [...bodies];
-  const tern = UNREACHABLE_TERNARY.exec(fnSrc);
+  const tern = UNREACHABLE_TERNARY.exec(fnSrc) ?? UNREACHABLE_TERNARY_STMT.exec(fnSrc);
   if (tern) {
     const ref = resolveNamespaceRef(tern[3]!, module, files);
     const alt = ref && ref.chunk.match(new RegExp(`(?<![\\w$.])${reEsc(ref.local)}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
@@ -3285,11 +3319,169 @@ export function extractSubagentComposition(files: Map<string, string>): {
   const manifest = parts.join("\u0000");
   // Suffix: read the composition site, then resolve the trailing interpolation's identifier against
   // this module's own `<ident>="…"` binding. Never matched by name.
-  const comp = module.match(/return`\\n\\n\$\{[\w$.]+\([\s\S]{0,200}?\}\$\{[\w$]+\?[\w$]+\([^)]*\):""\}\$\{([\w$]+)\}`/);
+  // The manifest call admits one level of nested parentheses: 3.1623.4 passes `<ns>.<id>(<folders>??[])` as a
+  // sixth argument.
+  const comp = module.match(/return`\\n\\n\$\{[\w$.]+\([\s\S]{0,200}?\}\$\{[\w$]+\?[\w$]+\((?:[^()]|\([^()]*\))*\):""\}\$\{([\w$]+)\}`/);
   if (!comp) return null;
   const decl = module.match(new RegExp(`(?<![\\w$])${reEsc(comp[1])}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
   if (!decl) return null;
-  return { module, manifest, suffix: decl[1]!, ...(defaultArm !== undefined ? { defaultArm, predicate } : {}) };
+  const sig = /^function ([\w$]+)\(([^)]*)\)/.exec(fnSrc);
+  const generator = sig ? { name: sig[1]!, params: sig[2]!.split(",").filter(Boolean) } : undefined;
+  // Anything read-only in the generator must be recognisable, so check 7c can prove a 1p sub-agent never gets it.
+  const ro = READ_ONLY_RENDER.exec(fnSrc);
+  const readOnly = ro ? { listParam: ro[1]! } : fnSrc.includes("read-only") ? ("unrecognized" as const) : undefined;
+  return {
+    module,
+    manifest,
+    suffix: decl[1]!,
+    ...(defaultArm !== undefined ? { defaultArm, predicate } : {}),
+    ...(generator ? { generator } : {}),
+    ...(readOnly ? { readOnly } : {}),
+  };
+}
+
+/** The code that makes a scheduled-task session differ from an ordinary one (Desktop >=2.42304.0). An observation
+ *  from a scheduled run cannot see what only an ordinary session gets, so each difference is pinned here by shape,
+ *  with its constants resolved to their values; a reshape is a loud flag, never a silent widening:
+ *   (1) a session started for a scheduled task is typed `"scheduled"`;
+ *   (2) `send_user_message` is offered only to an UNTYPED session, from the server config of gate 3045399524;
+ *   (3) a scheduled session loses AskUserQuestion and the onboarding role picker;
+ *   (4) its frame artifacts are cleared unless gate 1978029737 `scheduledRunFrameArtifacts` is on.
+ *  Every site is counted BUNDLE-WIDE, as S6g does: a refactor that adds a second site beside the pinned one must flag,
+ *  not hide behind the first match. The bundle already holds sites that are not extras, and each is pinned by shape:
+ *  the prompt builders that RECEIVE `hasSendUserMessage` (a destructuring read) and forward it, and the Code tab's own
+ *  scheduled-task removal (`=["AskUserQuestion"]` in `buildStartSdkOptions`). A forward is accepted when the same
+ *  chunk destructures `hasSendUserMessage` into that name, so a minified name reused in another function of the same
+ *  chunk is the residual (S6g's comment names the same class).
+ *  The scheduled-run spawn env key has its own guard (S6g). SCHEDULED_SESSION_WITHHELD_TOOLS (types.ts) lists the tools
+ *  (2) and (3) withhold that a Desktop server of its own declares. */
+export function checkScheduledSessionFacts(files: Map<string, string>): string[] {
+  const flags: string[] = [];
+  const miss = (what: string, why: string) => flags.push(`scheduled-session: ${what} anchor missing — ${why}`);
+  const literal = (ref: string, module: string): string | null => {
+    if (ref.startsWith('"')) return ref.slice(1, -1);
+    const r = resolveNamespaceRef(ref, module, files);
+    const m = r && r.chunk.match(new RegExp(`(?<![\\w$.])${reEsc(r.local)}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
+    return m ? m[1]! : null;
+  };
+  const all = (re: RegExp) => [...files.values()].flatMap((module) => [...module.matchAll(re)].map((m) => ({ m, module })));
+
+  // (1) Every `<s>.scheduledTaskId&&(<s>.sessionType=` must be the pinned shape and resolve to "scheduled".
+  const typedSites = all(/([\w$]+)\.scheduledTaskId&&\(([\w$]+)\.sessionType=(?!=)/g);
+  const typed = all(/!([\w$]+)\.sessionType&&\1\.scheduledTaskId&&\(\1\.sessionType=([\w$]+(?:\.[\w$]+)?|"[^"]*")\)/g);
+  if (typed.length === 0) miss("scheduled session type", "a session with a scheduledTaskId is no longer given a session type at start");
+  else if (typedSites.length !== typed.length)
+    miss(
+      "scheduled session type",
+      `a scheduled-task session is typed at ${typedSites.length} sites, only ${typed.length} in the pinned \`!s.sessionType&&s.scheduledTaskId&&(s.sessionType=…)\` shape`,
+    );
+  if (typed.some((t) => literal(t.m[2]!, t.module) !== "scheduled"))
+    miss("scheduled session type", `the type given to a scheduled-task session no longer resolves to "scheduled"`);
+
+  // (2) Exactly one predicate over exactly one read of gate 3045399524, and every `hasSendUserMessage:` value is either
+  // that predicate (in its chunk) or a name the same chunk received by destructuring `hasSendUserMessage`.
+  const sums = all(
+    /\.safeParse\([\w$.]+\("3045399524",void 0\)\)\.data\?\?\{enabled:!1\},([\w$]+)=![\w$]+\.sessionType&&\(([\w$]+)\.enabled===!0\|\|Array\.isArray\(\2\.enabled\)&&!!([\w$]+)&&\2\.enabled\.includes\(\3\)\)/g,
+  );
+  const gateReads = all(/"3045399524"/g).length;
+  const sum = sums[0];
+  if (!sum)
+    miss(
+      "send_user_message predicate",
+      "the offer is no longer `!sessionType && (config.enabled === true || config.enabled includes the model)` over gate 3045399524 — what an ordinary session gets can no longer be read from a scheduled observation",
+    );
+  else {
+    if (sums.length !== 1 || gateReads !== 1)
+      miss(
+        "send_user_message predicate",
+        `gate 3045399524 is read at ${gateReads} sites and the pinned predicate appears ${sums.length} times — expected exactly one of each`,
+      );
+    const feeds = all(/hasSendUserMessage:([^,}]*)/g).map(({ m, module }) => ({
+      v: m[1]!,
+      module,
+      read: isDestructuringRead(module, m.index!),
+    }));
+    const received = (module: string, v: string) => feeds.some((f) => f.read && f.module === module && f.v === v);
+    if (!feeds.some((f) => !f.read && f.module === sum.module && f.v === sum.m[1]))
+      miss("send_user_message predicate", "the predicate no longer feeds `hasSendUserMessage` in the same module");
+    const strays = feeds.filter(
+      (f) => !f.read && !(f.module === sum.module && f.v === sum.m[1]) && !(/^[\w$]+$/.test(f.v) && received(f.module, f.v)),
+    );
+    if (strays.length)
+      miss(
+        "send_user_message predicate",
+        `\`hasSendUserMessage\` is also fed from ${strays.map((f) => `\`${f.v}\``).join(", ")} — neither the pinned predicate nor a value the chunk received`,
+      );
+  }
+
+  // (3) Every `<s>.scheduledTaskId&&(<o>.disallowedTools=` is the Cowork removal (resolving to the role picker) or the
+  // Code tab's `=["AskUserQuestion"]` in `buildStartSdkOptions`; anything else is a list sync has not read.
+  const removalSites = all(/([\w$]+)\.scheduledTaskId&&\(([\w$]+)\.disallowedTools=/g);
+  const asks = all(
+    /([\w$]+)\.scheduledTaskId&&\(([\w$]+)\.disallowedTools=\[\.\.\.\2\.disallowedTools\?\?\[\],"AskUserQuestion",([\w$]+(?:\.[\w$]+)?)\]\)/g,
+  );
+  const codeTab = all(/([\w$]+)\.scheduledTaskId&&\(([\w$]+)\.disallowedTools=\["AskUserQuestion"\]\)/g).filter(({ module }) =>
+    module.includes("buildStartSdkOptions("),
+  );
+  if (asks.length === 0) miss("scheduled tool removals", "a scheduled session no longer loses exactly AskUserQuestion and one other tool");
+  else if (asks.some((a) => literal(a.m[3]!, a.module) !== "mcp__cowork-onboarding__show_onboarding_role_picker"))
+    miss("scheduled tool removals", "the second tool a scheduled session loses is no longer the onboarding role picker");
+  if (removalSites.length !== asks.length + codeTab.length)
+    miss(
+      "scheduled tool removals",
+      `${removalSites.length - asks.length - codeTab.length} scheduled-task disallowedTools site(s) match neither the Cowork removal nor the Code tab's \`["AskUserQuestion"]\` — read what they withhold`,
+    );
+
+  // (4) Every frame-artifacts assignment is the gated clear.
+  const faSites = all(/\.frameArtifactsEnabled=(?![=>])/g);
+  const fas = all(/([\w$]+)\.scheduledTaskId&&!([\w$]+)\(\)&&\(\1\.frameArtifactsEnabled=void 0\)/g);
+  if (fas.length === 0) miss("scheduled frame artifacts", "a scheduled session's frame artifacts are no longer cleared behind a gate");
+  else if (faSites.length !== fas.length)
+    miss(
+      "scheduled frame artifacts",
+      `frameArtifactsEnabled is assigned at ${faSites.length} sites, only ${fas.length} the gated scheduled clear`,
+    );
+  for (const fa of fas)
+    if (
+      !new RegExp(
+        `function ${reEsc(fa.m[2]!)}\\(\\)\\{return [\\w$.]+\\(\\)&&[\\w$.]+\\("1978029737","scheduledRunFrameArtifacts",!0,`,
+      ).test(fa.module)
+    )
+      miss("scheduled frame artifacts", `the gate ${fa.m[2]} is no longer scheduledRunFrameArtifacts (1978029737, default on)`);
+  return flags;
+}
+
+/** Whether the object literal holding `text[at]` is a destructuring pattern (`let{…}=`, a `({…})=>` or `function f(a,{…},b){`
+ *  parameter) rather than a value being built: find the enclosing `{`, its matching `}`, and read what precedes and follows. */
+function isDestructuringRead(text: string, at: number): boolean {
+  let depth = 0;
+  let open = -1;
+  for (let i = at - 1; i >= 0 && at - i < 20000; i--) {
+    const c = text[i];
+    if (c === "}" || c === "]" || c === ")") depth++;
+    else if (c === "{" || c === "[" || c === "(") {
+      if (depth === 0) {
+        if (c === "{") open = i;
+        break;
+      }
+      depth--;
+    }
+  }
+  if (open < 0) return false;
+  depth = 0;
+  for (let i = open; i < text.length && i - open < 20000; i++) {
+    const c = text[i];
+    if (c === "{" || c === "[" || c === "(") depth++;
+    else if (c === "}" || c === "]" || c === ")") {
+      depth--;
+      if (depth === 0)
+        return (
+          /(?:\bfunction\s*[\w$]*\s*\([^()]*|\b(?:let|const|var)\s*)$/.test(text.slice(Math.max(0, open - 200), open)) ||
+          /^(?:=(?![=>])|(?:,[\w$,]*)?\)(?:\{|=>))/.test(text.slice(i + 1, i + 200))
+        );
+    }
+  }
+  return false;
 }
 
 /** sha16 of a branch text after minifier-identifier normalization: every ${...} interpolation is
@@ -3530,6 +3722,45 @@ export function checkSubagentPromptFacts(
           "manifest call bindings",
           `the substitution map's vmCwd is ${subst[1]} but its hostCwd fallback is ${subst[3]} — the fallback must be the same vm root`,
         );
+      // The call these bindings were read from must be the call to the generator that was fingerprinted;
+      // otherwise every binding above, and 7c below, describes some other function.
+      if (comp.generator && manifestCall[2] !== comp.generator.name)
+        miss(
+          "manifest call bindings",
+          `the hl-gated call names ${manifestCall[2]} but the fingerprinted manifest generator is ${comp.generator.name}`,
+        );
+    }
+    // (7c) Desktop 3.1623.4 renders folders in an admin read-only list with a "read-only" marker, plus a closing
+    //      paragraph. The list comes from a reader that returns [] on any non-3p deployment, which is the only reason a
+    //      1p sub-agent's manifest is unchanged. Triggered by the RENDERING, not by the call's argument count, so a
+    //      build that reads the list inside the generator still has to prove the same gate.
+    if (comp.readOnly !== undefined) {
+      const roMiss = (why: string) => miss("read-only folder gate", why);
+      const ro = comp.readOnly;
+      const at = manifestCall ? manifestCall.index + manifestCall[0].indexOf("(") : -1;
+      const args = at >= 0 ? callArgsAt(comp.module, at) : null;
+      const idx = ro === "unrecognized" || !comp.generator ? -1 : comp.generator.params.indexOf(ro.listParam);
+      const feed = args && idx >= 0 ? /^([\w$]+(?:\.[\w$]+)?)\(([\w$]+)\?\?\[\]\)$/.exec(args[idx] ?? "") : null;
+      const ref = feed ? resolveNamespaceRef(feed[1]!, comp.module, files) : null;
+      if (ro === "unrecognized")
+        roMiss(
+          "the manifest generator renders something read-only in a shape this check does not recognise — a 1p sub-agent may now get it",
+        );
+      else if (idx < 0)
+        roMiss(`the read-only list ${ro.listParam} is not a parameter of the manifest generator — its source cannot be proved 3p-only`);
+      else if (!feed)
+        roMiss(
+          `the manifest call's read-only argument is not \`<reader>(<folders>??[])\` (got ${JSON.stringify((args?.[idx] ?? "").slice(0, 60))})`,
+        );
+      else if (feed[2] !== args![2])
+        roMiss(`the read-only reader filters ${feed[2]} but the manifest renders ${args![2]} — it no longer filters the rendered folders`);
+      else if (!ref) roMiss(`the read-only reader ${feed[1]} could not be resolved — classify it before admitting the rendering`);
+      else if (
+        !new RegExp(
+          `function ${reEsc(ref.local)}\\([\\w$]+\\)\\{let ([\\w$]+)=[\\w$.]+\\(\\);if\\(!\\1\\?\\.length\\|\\|[\\w$.]+\\(\\)\\.type!=="3p"\\)return\\[\\];`,
+        ).test(ref.chunk)
+      )
+        roMiss(`the reader ${feed[1]} no longer returns [] first on a non-3p deployment — a 1p sub-agent may now get read-only markers`);
     }
     const manifestFp = subagentBranchFingerprint(comp.manifest);
     const suffixFp = subagentBranchFingerprint(comp.suffix);

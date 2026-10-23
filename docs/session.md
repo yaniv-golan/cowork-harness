@@ -182,7 +182,7 @@ an operator-exported `CLAUDE_CODE_SUBAGENT_MODEL`, `ENABLE_TOOL_SEARCH`, or
 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` silently affects only the two env-inheriting tiers — the exact
 same session behaves differently depending on which fidelity tier you run it at. `agent_env` is the
 authored, uniform replacement: it applies across **all four execution tiers**
-(`protocol`/`container`/`microvm`/`hostloop`; `fidelity: cowork` resolves to one of them), and **twelve**
+(`protocol`/`container`/`microvm`/`hostloop`; `fidelity: cowork` resolves to one of them), and **fourteen**
 keys are **scrubbed from the operator layer** on `hostloop`/`protocol` (the only tiers that inherit one)
 before any baseline/knob overlay — so a stray shell value can never leak through on some tiers and not
 others. Three of them are the keys above. Three more set effort and thinking, and the session's `effort` and
@@ -196,10 +196,12 @@ sub-agent's frontmatter and a per-dispatch `model:`, and
 `CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL`, which discards the dispatch `model:` when
 `CLAUDE_CODE_COORDINATOR_MODE` is also set. Real Cowork sets neither, so exporting one in your shell would
 change sub-agent model resolution on two tiers only. If you need either, set it inside the run rather than
-in the environment the harness inherits. The last three mirror Desktop, which lets no value of them from your settings
+in the environment the harness inherits. Five mirror Desktop, which lets no value of them from your settings
 reach an agent it spawns: `CLAUDE_CODE_SIMPLE` (set to `1` it puts the agent in its bare mode, without plugins, hooks,
-auto-memory or `CLAUDE.md`), `CLAUDE_AGENT_SDK_MCP_NO_PREFIX`, and `CLAUDE_CODE_PROCESS_WRAPPER`. Desktop sets the
-first two to `0` itself, and so does the baseline on every tier that applies it. The twelfth, `COWORK_ARTIFACTS_ROOT`, is
+auto-memory or `CLAUDE.md`), `CLAUDE_AGENT_SDK_MCP_NO_PREFIX`, `CLAUDE_CODE_PROCESS_WRAPPER`,
+`CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS` and `CLAUDE_CODE_DESKTOP_SKILLS_PLUGIN_DIR`. Desktop sets the first two to `0` and
+`CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS` to an empty string itself, and so does the baseline on every tier that applies
+it. The fourteenth, `COWORK_ARTIFACTS_ROOT`, is
 the key `agent_env.artifacts_root` below sets; Cowork never sets it, so an export of it would move where a skill writes
 its run status on two tiers only.
 

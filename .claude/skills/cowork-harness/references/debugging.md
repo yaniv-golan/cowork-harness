@@ -1,6 +1,6 @@
 # Debugging a run
 
-Tracks `cowork-harness 4.10.0` (baseline `desktop-2.42304.0`). Read it when a run misbehaved or a green looks wrong: triage, the observability output, and `chat`.
+Tracks `cowork-harness 4.10.0` (baseline `desktop-3.1623.4`). Read it when a run misbehaved or a green looks wrong: triage, the observability output, and `chat`.
 
 ## Part III — Debug
 

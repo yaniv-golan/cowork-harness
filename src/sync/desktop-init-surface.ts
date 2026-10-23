@@ -9,7 +9,9 @@
 // PRIVACY is the design constraint. A real init frame lists every MCP server the operator has — ~70 on a
 // working machine, connector UUIDs and private server names among them — and the same tree holds
 // `local_<id>.json` files carrying the account email, cwd and system prompt. So:
-//   - only files named exactly `audit.jsonl` are opened (no fallback to a sibling);
+//   - only files named exactly `audit.jsonl` are opened for frames (no fallback to a sibling); the one other file
+//     read is the session's own `local_<id>.json` record, for two fields only (`sessionType`, `scheduledTaskId`),
+//     and only the resulting kind COUNT leaves this module;
 //   - a server is kept only if its name is `===` one of DESKTOP_OWN_SERVERS; nothing else leaves the parse loop;
 //   - no message this module emits carries a file path, an `Error.message` from a file operation, or any
 //     server/tool name outside the allowlist — failures are COUNTED, never described.
@@ -18,8 +20,8 @@
 // tests in test/desktop-init-surface.test.ts.
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
-import { DESKTOP_OWN_SERVERS, type DesktopInitSurface } from "../types.js";
+import { basename, dirname, join } from "node:path";
+import { DESKTOP_OWN_SERVERS, type DesktopInitSurface, type SessionKinds } from "../types.js";
 
 /** Fixed display form of the sessions dir — messages use this, never the resolved (username-bearing) path. */
 export const DESKTOP_SESSIONS_DISPLAY = "~/Library/Application Support/Claude/local-agent-mode-sessions";
@@ -64,6 +66,37 @@ export interface InitSurfaceReading {
 }
 
 const isDesktopOwn = (name: string) => (DESKTOP_OWN_SERVERS as readonly string[]).includes(name);
+
+/** The kind of the session that wrote `auditFile`, from its record beside the session directory: `local_<id>.json`
+ *  next to an `<id prefix>/audit.jsonl` directory, or (the layout before 2026-09-15, still seen since) the same name
+ *  next to a `local_<id>/audit.jsonl` directory. A typed `"scheduled"` record must also carry its task id; an untyped
+ *  record is an ordinary task. Anything unreadable, missing or ambiguous is `unknown`, never guessed. */
+export function sessionKindOf(auditFile: string): keyof SessionKinds {
+  const sessionDir = dirname(auditFile);
+  const parent = dirname(sessionDir);
+  const dir = basename(sessionDir);
+  const matches = dir.startsWith("local_")
+    ? (n: string) => n === `${dir}.json`
+    : (n: string) => n.startsWith(`local_${dir}-`) && n.endsWith(".json");
+  let records: string[];
+  try {
+    records = readdirSync(parent).filter(matches);
+  } catch {
+    return "unknown";
+  }
+  if (records.length !== 1) return "unknown";
+  let rec: unknown;
+  try {
+    rec = JSON.parse(readFileSync(join(parent, records[0]!), "utf8"));
+  } catch {
+    return "unknown";
+  }
+  if (rec === null || typeof rec !== "object") return "unknown";
+  const { sessionType, scheduledTaskId } = rec as { sessionType?: unknown; scheduledTaskId?: unknown };
+  if (sessionType === undefined) return "interactive";
+  if (sessionType === "scheduled") return typeof scheduledTaskId === "string" && scheduledTaskId.length > 0 ? "scheduled" : "unknown";
+  return typeof sessionType === "string" ? "other" : "unknown";
+}
 
 /** Every `audit.jsonl` under `dir`, without following symlinks. Unreadable directories are counted. */
 function findAuditLogs(dir: string, counts: { unreadable: number }): string[] {
@@ -111,6 +144,7 @@ export function readDesktopInitSurface(input: InitSurfaceInput): InitSurfaceRead
   const perServer = new Map<string, { frames: number; tools: Map<string, number> }>();
   let framesSelected = 0;
   let excludedServers = 0;
+  const sessionKinds: SessionKinds = { interactive: 0, scheduled: 0, other: 0, unknown: 0 };
 
   if (input.installedAtMs !== null) {
     for (const file of logs) {
@@ -121,6 +155,7 @@ export function readDesktopInitSurface(input: InitSurfaceInput): InitSurfaceRead
         counts.unreadable++;
         continue;
       }
+      let fileSelected = false;
       for (const line of text.split("\n")) {
         if (!line.includes('"init"')) continue;
         let frame: Record<string, unknown>;
@@ -139,6 +174,7 @@ export function readDesktopInitSurface(input: InitSurfaceInput): InitSurfaceRead
         if (!(ts >= input.installedAtMs)) continue;
 
         framesSelected++;
+        fileSelected = true;
         const connected = new Set<string>();
         for (const s of Array.isArray(frame.mcp_servers) ? frame.mcp_servers : []) {
           const name = (s as Record<string, unknown> | null)?.name;
@@ -169,6 +205,7 @@ export function readDesktopInitSurface(input: InitSurfaceInput): InitSurfaceRead
           }
         }
       }
+      if (fileSelected) sessionKinds[sessionKindOf(file)]++;
     }
   }
 
@@ -221,7 +258,7 @@ export function readDesktopInitSurface(input: InitSurfaceInput): InitSurfaceRead
   }
 
   const r = reading(
-    { agentVersion: input.agentVersion, appVersion: input.appVersion, observed: true, servers },
+    { agentVersion: input.agentVersion, appVersion: input.appVersion, observed: true, sessionKinds, servers },
     framesSelected,
     excludedServers,
   );
