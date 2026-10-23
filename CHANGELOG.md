@@ -34,9 +34,10 @@ All notable changes to this project are documented here. The format is based on
   no background task. Before, a protocol run could start a background shell that outlived its `result`, woke the
   agent after the harness had closed its input (its permission requests then failed "Stream closed"), and kept the
   run open until the shell ended. Task's `run_in_background` is now stripped on every tier, so the harness's
-  PreToolUse block on it no longer fires anywhere; it stays installed. On `protocol` and `hostloop`, an export of the
-  key in your shell no longer reaches the agent; on a baseline that pins no value (`desktop-1.11847.5`) no tier sets
-  it.
+  PreToolUse block on it cannot fire on a call the agent's schema rejects; it stays installed. On `protocol`, an
+  export of the key in your shell no longer reaches the agent. On `hostloop` the baseline's `spawn.env` already
+  replaced it on every baseline that pins the key; what changed there is the one baseline that pins none
+  (`desktop-1.11847.5`), where your export is now dropped too, so no tier sets the key on it.
 - **`tool_called` `count: {max: 0}` with no `min` sets the floor to 0**, as `hook_event_blocked` reads
   `{event, max: 0}`; it and `{min: 0, max: 0}` are the same negative check. Any other lone `max` still requires at least one call. The row is a negative check everywhere
   `tool_not_called` is: its evidence direction (a redacted field is evidence-unavailable, never a pass), the tier

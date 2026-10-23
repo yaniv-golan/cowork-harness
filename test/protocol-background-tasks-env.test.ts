@@ -21,20 +21,23 @@ describe("protocol applies the background-tasks switch from the baseline", () =>
     expect(buildProtocolEnv(protoPlan(), loadBaseline("latest"))[KEY]).toBe("1");
   });
 
-  // Literal counts, not "equals the baseline's value" (which the helper reads, so it could not fail): a new baseline
-  // that pins another value, or stops pinning it, turns this red.
-  it(`every committed baseline: 47 pin "1", and only ${KEYLESS} pins none`, () => {
+  // A literal keyless list and a fixed value, not "equals the baseline's value" (which the helper reads, so it could not
+  // fail): a new baseline that pins another value, or stops pinning it, turns this red. The pinned count is derived, so
+  // a new baseline that pins "1" needs no edit.
+  it(`every committed baseline pins "1", except only ${KEYLESS}, which pins none`, () => {
     const dir = join(import.meta.dirname, "..", "baselines");
     let pinned = 0;
     const absent: string[] = [];
-    for (const f of readdirSync(dir).filter((n) => /^desktop-.*\.json$/.test(n))) {
+    const names = readdirSync(dir).filter((n) => /^desktop-.*\.json$/.test(n));
+    for (const f of names) {
       const b = JSON.parse(readFileSync(join(dir, f), "utf8")) as PlatformBaseline;
       const v = buildProtocolEnv(protoPlan({}), b)[KEY];
       if (v === "1") pinned++;
       else if (v === undefined) absent.push(f.replace(/\.json$/, ""));
       else throw new Error(`${f}: unexpected value ${v}`);
     }
-    expect({ pinned, absent }).toEqual({ pinned: 47, absent: [KEYLESS] });
+    expect(names.length).toBeGreaterThan(40); // the directory read is not vacuous
+    expect({ pinned, absent }).toEqual({ pinned: names.length - 1, absent: [KEYLESS] });
   });
 
   it("a baseline with no spawn block does not throw and yields no key", () => {

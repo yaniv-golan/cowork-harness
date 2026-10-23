@@ -256,7 +256,8 @@ their sub-agent spend) do not run.
 - **Same rule everywhere it applies.** `lane: remote` gets the same rule; the evidence for it is local-lane, and the
   cloud lane's memory behaviour is unmeasured. A custom baseline with no `provenance` counts as off. There is no
   knob to turn memory on: `agent_env` cannot carry the key, so a Spaces- or agent-session memory setup cannot be
-  reproduced. `chat --raw` is not a fidelity tier and does not set the key.
+  reproduced. `chat --raw` is not a fidelity tier and does not set the key; it applies no baseline spawn env at all,
+  the background-tasks switch included.
 
 **Read the reachability claim precisely, because it is narrower than it looks.** "Unreachable" holds
 for the modeled session shape only. It does **not** hold for a Spaces or agent-type session, where the
@@ -286,7 +287,8 @@ Before 4.11.0, `protocol` did not set it. A protocol run then exposed Bash `run_
 outlived the run's `result`, woke the agent with a task notification after the harness had closed its input (any
 permission request in that turn failed with "Stream closed"), and kept the run open until the shell ended. A scenario
 that relied on a background shell passed at `protocol` only; it now fails there as it would in Cowork. The harness's
-PreToolUse block on Task `run_in_background` stays installed, though no tier now offers the parameter.
+PreToolUse block on Task `run_in_background` stays installed, but it cannot fire on a call the agent's schema rejects,
+and no tier now offers the parameter.
 
 ## Mid-session skill/plugin re-sync
 
