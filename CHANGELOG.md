@@ -17,6 +17,10 @@ All notable changes to this project are documented here. The format is based on
   `record <file>`, `eval`, `hillclimb run`, `verify-run` and `regrade`; a broken file on `record <dir/>`, exit 1;
   a `lint` ERROR). It could never pass, and spent a judge call first.
 - `schema/scenario.schema.json`'s validation rules are unchanged; description text is updated.
+- **Cassettes: re-stamp or re-record one recorded through `baseline: latest`.** `latest` moves to `desktop-3.1623.4`
+  (agent 2.1.308; see Changed), so such a cassette reports `[stale] baseline moved 2.42304.0 → 3.1623.4 since record
+  — re-record`. Re-stamping `fingerprint.baseline` clears it. A re-stamped `container`, `microvm` or `hostloop`
+  cassette keeps an `agent-version:` note until it is re-recorded on 2.1.308. The bundled cassettes are re-stamped.
 
 ### Changed
 
@@ -30,6 +34,22 @@ All notable changes to this project are documented here. The format is based on
   An older cassette carrying one, or a `tool_called` `count.min` above `count.max`, replays with a warning instead of
   being refused: the `tool_called` row grades FAIL, and the `semantic_matches` row stays skipped on replay (live-only)
   as before.
+- **`latest` moves to `desktop-3.1623.4`** (agent **2.1.308**, was 2.1.299). The Cowork system prompt, the egress
+  allowlist and the tool lists a session receives are unchanged from `desktop-2.42304.0`. The CI recipe's agent pin
+  (`V=`) moves to 2.1.308.
+  - **Spawn env:** Desktop now sets `CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS` to an empty string on every spawn, and the
+    harness does the same. `CLAUDE_CODE_DESKTOP_SKILLS_PLUGIN_DIR` is recorded as a Desktop key the harness does not
+    model. A value for either key in a session's own `env` is dropped, as for the other Desktop-only keys.
+  - **Observed from a scheduled task.** The only local Cowork session available on this Desktop was a scheduled
+    task, which never gets `send_user_message`, `AskUserQuestion` or the onboarding role picker, and always carries
+    `CLAUDE_CODE_HOST_SCHEDULED_RUN`. Those differences come from the kind of session, not from Desktop; `sync`
+    now checks the Desktop code that produces them (see Added).
+  - **Cassettes:** see the Upgrade note.
+- **`sync` reads Desktop 3.1623.4's sub-agent folder list.** The list gained an argument for folders an
+  administrator marks read-only. `sync` now refuses the write unless that list provably stays empty outside
+  third-party deployments, so a first-party sub-agent's prompt is unchanged.
+- **The runbook asks for a local scheduled task before `sync`** when an interactive local task is not offered, and
+  `npm run preflight` passes such a baseline while naming the tools only the static check covers.
 
 ### Added
 
@@ -37,6 +57,15 @@ All notable changes to this project are documented here. The format is based on
   `tool_called` `count.min` above `count.max` and a `min_pass` above the rubric, also on a direct `scenario.py lint`;
   the second points a `count: {max: 0}` row at `tool_not_called`. `tool-not-called-tier-vacuous` and
   `tool-input-regex-redactable` also cover the `count: {max: 0}` spelling.
+- **Baselines record which kind of local session was observed.** `provenance.desktopInitSurface` and
+  `provenance.observedSpawnEnv` gain an optional `sessionKinds` count (`interactive`, `scheduled`, `other`,
+  `unknown`). `sync --diff` prints it, and when every session read was a scheduled task it reports the tools and
+  env key such a session lacks or adds as "not observed" instead of as a change.
+- **`sync` checks what a scheduled observation cannot show.** It refuses the write when Desktop no longer types a
+  scheduled task's session at start, offers `send_user_message` to typed sessions, stops removing `AskUserQuestion`
+  and the role picker from scheduled sessions, or changes the gate that keeps their frame artifacts.
+- **`docs/fidelity-gaps.md`: Anthropic's built-in skills plugin is not staged.** Real Cowork also loads a
+  per-account `anthropic-skills` plugin; the entry says what its absence hides from a skill under test.
 
 ## [4.10.0] — 2026-10-16
 
