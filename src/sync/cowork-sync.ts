@@ -3347,56 +3347,141 @@ export function extractSubagentComposition(files: Map<string, string>): {
  *   (2) `send_user_message` is offered only to an UNTYPED session, from the server config of gate 3045399524;
  *   (3) a scheduled session loses AskUserQuestion and the onboarding role picker;
  *   (4) its frame artifacts are cleared unless gate 1978029737 `scheduledRunFrameArtifacts` is on.
+ *  Every site is counted BUNDLE-WIDE, as S6g does: a refactor that adds a second site beside the pinned one must flag,
+ *  not hide behind the first match. The bundle already holds sites that are not extras, and each is pinned by shape:
+ *  the prompt builders that RECEIVE `hasSendUserMessage` (a destructuring read) and forward it, and the Code tab's own
+ *  scheduled-task removal (`=["AskUserQuestion"]` in `buildStartSdkOptions`). A forward is accepted when the same
+ *  chunk destructures `hasSendUserMessage` into that name, so a minified name reused in another function of the same
+ *  chunk is the residual (S6g's comment names the same class).
  *  The scheduled-run spawn env key has its own guard (S6g). SCHEDULED_SESSION_WITHHELD_TOOLS (types.ts) lists the tools
  *  (2) and (3) withhold that a Desktop server of its own declares. */
 export function checkScheduledSessionFacts(files: Map<string, string>): string[] {
   const flags: string[] = [];
   const miss = (what: string, why: string) => flags.push(`scheduled-session: ${what} anchor missing — ${why}`);
   const literal = (ref: string, module: string): string | null => {
+    if (ref.startsWith('"')) return ref.slice(1, -1);
     const r = resolveNamespaceRef(ref, module, files);
     const m = r && r.chunk.match(new RegExp(`(?<![\\w$.])${reEsc(r.local)}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
     return m ? m[1]! : null;
   };
-  const find = (re: RegExp) => {
-    for (const module of files.values()) {
-      const m = re.exec(module);
-      if (m) return { m, module };
-    }
-    return null;
-  };
+  const all = (re: RegExp) => [...files.values()].flatMap((module) => [...module.matchAll(re)].map((m) => ({ m, module })));
 
-  const typed = find(/!([\w$]+)\.sessionType&&\1\.scheduledTaskId&&\(\1\.sessionType=([\w$]+(?:\.[\w$]+)?)\)/);
-  if (!typed) miss("scheduled session type", "a session with a scheduledTaskId is no longer given a session type at start");
-  else if (literal(typed.m[2]!, typed.module) !== "scheduled")
+  // (1) Every `<s>.scheduledTaskId&&(<s>.sessionType=` must be the pinned shape and resolve to "scheduled".
+  const typedSites = all(/([\w$]+)\.scheduledTaskId&&\(([\w$]+)\.sessionType=(?!=)/g);
+  const typed = all(/!([\w$]+)\.sessionType&&\1\.scheduledTaskId&&\(\1\.sessionType=([\w$]+(?:\.[\w$]+)?|"[^"]*")\)/g);
+  if (typed.length === 0) miss("scheduled session type", "a session with a scheduledTaskId is no longer given a session type at start");
+  else if (typedSites.length !== typed.length)
+    miss(
+      "scheduled session type",
+      `a scheduled-task session is typed at ${typedSites.length} sites, only ${typed.length} in the pinned \`!s.sessionType&&s.scheduledTaskId&&(s.sessionType=…)\` shape`,
+    );
+  if (typed.some((t) => literal(t.m[2]!, t.module) !== "scheduled"))
     miss("scheduled session type", `the type given to a scheduled-task session no longer resolves to "scheduled"`);
 
-  const sum = find(
-    /\.safeParse\([\w$.]+\("3045399524",void 0\)\)\.data\?\?\{enabled:!1\},([\w$]+)=![\w$]+\.sessionType&&\(([\w$]+)\.enabled===!0\|\|Array\.isArray\(\2\.enabled\)&&!!([\w$]+)&&\2\.enabled\.includes\(\3\)\)/,
+  // (2) Exactly one predicate over exactly one read of gate 3045399524, and every `hasSendUserMessage:` value is either
+  // that predicate (in its chunk) or a name the same chunk received by destructuring `hasSendUserMessage`.
+  const sums = all(
+    /\.safeParse\([\w$.]+\("3045399524",void 0\)\)\.data\?\?\{enabled:!1\},([\w$]+)=![\w$]+\.sessionType&&\(([\w$]+)\.enabled===!0\|\|Array\.isArray\(\2\.enabled\)&&!!([\w$]+)&&\2\.enabled\.includes\(\3\)\)/g,
   );
+  const gateReads = all(/"3045399524"/g).length;
+  const sum = sums[0];
   if (!sum)
     miss(
       "send_user_message predicate",
       "the offer is no longer `!sessionType && (config.enabled === true || config.enabled includes the model)` over gate 3045399524 — what an ordinary session gets can no longer be read from a scheduled observation",
     );
-  else if (!new RegExp(`hasSendUserMessage:${reEsc(sum.m[1]!)}[,}]`).test(sum.module))
-    miss("send_user_message predicate", "the predicate no longer feeds `hasSendUserMessage` in the same module");
+  else {
+    if (sums.length !== 1 || gateReads !== 1)
+      miss(
+        "send_user_message predicate",
+        `gate 3045399524 is read at ${gateReads} sites and the pinned predicate appears ${sums.length} times — expected exactly one of each`,
+      );
+    const feeds = all(/hasSendUserMessage:([^,}]*)/g).map(({ m, module }) => ({
+      v: m[1]!,
+      module,
+      read: isDestructuringRead(module, m.index!),
+    }));
+    const received = (module: string, v: string) => feeds.some((f) => f.read && f.module === module && f.v === v);
+    if (!feeds.some((f) => !f.read && f.module === sum.module && f.v === sum.m[1]))
+      miss("send_user_message predicate", "the predicate no longer feeds `hasSendUserMessage` in the same module");
+    const strays = feeds.filter(
+      (f) => !f.read && !(f.module === sum.module && f.v === sum.m[1]) && !(/^[\w$]+$/.test(f.v) && received(f.module, f.v)),
+    );
+    if (strays.length)
+      miss(
+        "send_user_message predicate",
+        `\`hasSendUserMessage\` is also fed from ${strays.map((f) => `\`${f.v}\``).join(", ")} — neither the pinned predicate nor a value the chunk received`,
+      );
+  }
 
-  const ask = find(
-    /([\w$]+)\.scheduledTaskId&&\(([\w$]+)\.disallowedTools=\[\.\.\.\2\.disallowedTools\?\?\[\],"AskUserQuestion",([\w$]+(?:\.[\w$]+)?)\]\)/,
+  // (3) Every `<s>.scheduledTaskId&&(<o>.disallowedTools=` is the Cowork removal (resolving to the role picker) or the
+  // Code tab's `=["AskUserQuestion"]` in `buildStartSdkOptions`; anything else is a list sync has not read.
+  const removalSites = all(/([\w$]+)\.scheduledTaskId&&\(([\w$]+)\.disallowedTools=/g);
+  const asks = all(
+    /([\w$]+)\.scheduledTaskId&&\(([\w$]+)\.disallowedTools=\[\.\.\.\2\.disallowedTools\?\?\[\],"AskUserQuestion",([\w$]+(?:\.[\w$]+)?)\]\)/g,
   );
-  if (!ask) miss("scheduled tool removals", "a scheduled session no longer loses exactly AskUserQuestion and one other tool");
-  else if (literal(ask.m[3]!, ask.module) !== "mcp__cowork-onboarding__show_onboarding_role_picker")
+  const codeTab = all(/([\w$]+)\.scheduledTaskId&&\(([\w$]+)\.disallowedTools=\["AskUserQuestion"\]\)/g).filter(({ module }) =>
+    module.includes("buildStartSdkOptions("),
+  );
+  if (asks.length === 0) miss("scheduled tool removals", "a scheduled session no longer loses exactly AskUserQuestion and one other tool");
+  else if (asks.some((a) => literal(a.m[3]!, a.module) !== "mcp__cowork-onboarding__show_onboarding_role_picker"))
     miss("scheduled tool removals", "the second tool a scheduled session loses is no longer the onboarding role picker");
+  if (removalSites.length !== asks.length + codeTab.length)
+    miss(
+      "scheduled tool removals",
+      `${removalSites.length - asks.length - codeTab.length} scheduled-task disallowedTools site(s) match neither the Cowork removal nor the Code tab's \`["AskUserQuestion"]\` — read what they withhold`,
+    );
 
-  const fa = find(/([\w$]+)\.scheduledTaskId&&!([\w$]+)\(\)&&\(\1\.frameArtifactsEnabled=void 0\)/);
-  if (!fa) miss("scheduled frame artifacts", "a scheduled session's frame artifacts are no longer cleared behind a gate");
-  else if (
-    !new RegExp(`function ${reEsc(fa.m[2]!)}\\(\\)\\{return [\\w$.]+\\(\\)&&[\\w$.]+\\("1978029737","scheduledRunFrameArtifacts",!0,`).test(
-      fa.module,
+  // (4) Every frame-artifacts assignment is the gated clear.
+  const faSites = all(/\.frameArtifactsEnabled=(?![=>])/g);
+  const fas = all(/([\w$]+)\.scheduledTaskId&&!([\w$]+)\(\)&&\(\1\.frameArtifactsEnabled=void 0\)/g);
+  if (fas.length === 0) miss("scheduled frame artifacts", "a scheduled session's frame artifacts are no longer cleared behind a gate");
+  else if (faSites.length !== fas.length)
+    miss(
+      "scheduled frame artifacts",
+      `frameArtifactsEnabled is assigned at ${faSites.length} sites, only ${fas.length} the gated scheduled clear`,
+    );
+  for (const fa of fas)
+    if (
+      !new RegExp(
+        `function ${reEsc(fa.m[2]!)}\\(\\)\\{return [\\w$.]+\\(\\)&&[\\w$.]+\\("1978029737","scheduledRunFrameArtifacts",!0,`,
+      ).test(fa.module)
     )
-  )
-    miss("scheduled frame artifacts", `the gate ${fa.m[2]} is no longer scheduledRunFrameArtifacts (1978029737, default on)`);
+      miss("scheduled frame artifacts", `the gate ${fa.m[2]} is no longer scheduledRunFrameArtifacts (1978029737, default on)`);
   return flags;
+}
+
+/** Whether the object literal holding `text[at]` is a destructuring pattern (`let{…}=`, a `({…})=>` or `function f(a,{…},b){`
+ *  parameter) rather than a value being built: find the enclosing `{`, its matching `}`, and read what precedes and follows. */
+function isDestructuringRead(text: string, at: number): boolean {
+  let depth = 0;
+  let open = -1;
+  for (let i = at - 1; i >= 0 && at - i < 20000; i--) {
+    const c = text[i];
+    if (c === "}" || c === "]" || c === ")") depth++;
+    else if (c === "{" || c === "[" || c === "(") {
+      if (depth === 0) {
+        if (c === "{") open = i;
+        break;
+      }
+      depth--;
+    }
+  }
+  if (open < 0) return false;
+  depth = 0;
+  for (let i = open; i < text.length && i - open < 20000; i++) {
+    const c = text[i];
+    if (c === "{" || c === "[" || c === "(") depth++;
+    else if (c === "}" || c === "]" || c === ")") {
+      depth--;
+      if (depth === 0)
+        return (
+          /(?:\bfunction\s*[\w$]*\s*\([^()]*|\b(?:let|const|var)\s*)$/.test(text.slice(Math.max(0, open - 200), open)) ||
+          /^(?:=(?![=>])|(?:,[\w$,]*)?\)(?:\{|=>))/.test(text.slice(i + 1, i + 200))
+        );
+    }
+  }
+  return false;
 }
 
 /** sha16 of a branch text after minifier-identifier normalization: every ${...} interpolation is
