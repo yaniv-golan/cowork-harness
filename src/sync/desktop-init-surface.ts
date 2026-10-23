@@ -67,16 +67,20 @@ export interface InitSurfaceReading {
 
 const isDesktopOwn = (name: string) => (DESKTOP_OWN_SERVERS as readonly string[]).includes(name);
 
-/** The kind of the session that wrote `auditFile`, from its record: `<sessions>/…/local_<id>.json` beside the
- *  `<id prefix>/audit.jsonl` directory. A typed `"scheduled"` record must also carry its task id; an untyped record is
- *  an ordinary task. Anything unreadable, missing or ambiguous is `unknown`, never guessed. */
+/** The kind of the session that wrote `auditFile`, from its record beside the session directory: `local_<id>.json`
+ *  next to an `<id prefix>/audit.jsonl` directory, or (the layout before 2026-09-15, still seen since) the same name
+ *  next to a `local_<id>/audit.jsonl` directory. A typed `"scheduled"` record must also carry its task id; an untyped
+ *  record is an ordinary task. Anything unreadable, missing or ambiguous is `unknown`, never guessed. */
 export function sessionKindOf(auditFile: string): keyof SessionKinds {
   const sessionDir = dirname(auditFile);
   const parent = dirname(sessionDir);
-  const prefix = `local_${basename(sessionDir)}-`;
+  const dir = basename(sessionDir);
+  const matches = dir.startsWith("local_")
+    ? (n: string) => n === `${dir}.json`
+    : (n: string) => n.startsWith(`local_${dir}-`) && n.endsWith(".json");
   let records: string[];
   try {
-    records = readdirSync(parent).filter((n) => n.startsWith(prefix) && n.endsWith(".json"));
+    records = readdirSync(parent).filter(matches);
   } catch {
     return "unknown";
   }

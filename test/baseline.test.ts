@@ -63,7 +63,7 @@ import { hostLoopCwds } from "../src/runtime/hostloop.js";
 import { fidelityOmitted } from "../src/run/execute.js";
 import { buildJudgedDocument } from "../src/assert.js";
 import { renderPrompts } from "../src/prompt.js";
-import { checkPathHookFacts, checkVmAgentStagingFacts } from "../src/sync/cowork-sync.js";
+import { checkPathHookFacts, checkScheduledSessionFacts, checkVmAgentStagingFacts } from "../src/sync/cowork-sync.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../src/prompt.js";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -4851,5 +4851,14 @@ describe("checkVmAgentStagingFacts — startVM still stages the agent", () => {
   ];
   it.each(MUT)("mutation %s fails loud (%#)", (_label, mutate) => {
     expect(checkVmAgentStagingFacts(vmChunk(mutate)).join("\n")).toContain("vm agent staging");
+  });
+});
+
+// test/scheduled-session-facts.test.ts uses READABLE names; only the real bundle shows the minifier's.
+describe("checkScheduledSessionFacts — scheduled-session sentinel", () => {
+  it("structural regression: the REAL asar is clean", () => {
+    const files = readRealBundleFilesOrSkip();
+    if (!files) return;
+    expect(checkScheduledSessionFacts(files)).toEqual([]);
   });
 });

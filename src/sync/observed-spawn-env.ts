@@ -388,7 +388,7 @@ export function readObservedSpawnEnv(input: ObservedSpawnEnvInput): ObservedSpaw
 
   notes.push(
     `WARNING: observedSpawnEnv UNOBSERVED — no local host-loop task has run under Desktop ${input.appVersion}` +
-      ". Recorded observed:false; a release cannot ship it. Start one Cowork task with 'Only on this computer' on, then re-run sync.",
+      ". Recorded observed:false; a release cannot ship it. Run one local Cowork task (a scheduled task where an interactive local task is not offered), then re-run sync.",
   );
   return { block: noSession, deltas, notes };
 }

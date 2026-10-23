@@ -39,7 +39,8 @@ All notable changes to this project are documented here. The format is based on
   (`V=`) moves to 2.1.308.
   - **Spawn env:** Desktop now sets `CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS` to an empty string on every spawn, and the
     harness does the same. `CLAUDE_CODE_DESKTOP_SKILLS_PLUGIN_DIR` is recorded as a Desktop key the harness does not
-    model. A value for either key in a session's own `env` is dropped, as for the other Desktop-only keys.
+    model. A value for either key in your shell environment is dropped before the agent starts (on `hostloop` and
+    `protocol`, the tiers that inherit it), as for the other Desktop-only keys.
   - **Observed from a scheduled task.** The only local Cowork session available on this Desktop was a scheduled
     task, which never gets `send_user_message`, `AskUserQuestion` or the onboarding role picker, and always carries
     `CLAUDE_CODE_HOST_SCHEDULED_RUN`. Those differences come from the kind of session, not from Desktop; `sync`
@@ -59,8 +60,8 @@ All notable changes to this project are documented here. The format is based on
   `tool-input-regex-redactable` also cover the `count: {max: 0}` spelling.
 - **Baselines record which kind of local session was observed.** `provenance.desktopInitSurface` and
   `provenance.observedSpawnEnv` gain an optional `sessionKinds` count (`interactive`, `scheduled`, `other`,
-  `unknown`). `sync --diff` prints it, and when every session read was a scheduled task it reports the tools and
-  env key such a session lacks or adds as "not observed" instead of as a change.
+  `unknown`). `sync --diff` prints it, and when the diff shows the read becoming scheduled-only it reports the tools
+  and env key such a session lacks or adds as "not observed" instead of as a change.
 - **`sync` checks what a scheduled observation cannot show.** It refuses the write when Desktop no longer types a
   scheduled task's session at start, offers `send_user_message` to typed sessions, stops removing `AskUserQuestion`
   and the role picker from scheduled sessions, or changes the gate that keeps their frame artifacts.

@@ -434,6 +434,17 @@ describe("sessionKindOf — the kind of the session that wrote an audit log", ()
     session("aaaa0006", ["{not json"]);
     session("aaaa0007", []);
     session("aaaa0008", [{ sessionType: 7 }]);
+    // The layout before 2026-09-15: the session directory is `local_<uuid>` and its record is `local_<uuid>.json`.
+    const old = (uuid: string, record?: Record<string, unknown>) => {
+      mkdirSync(join(dir, `local_${uuid}`), { recursive: true });
+      writeFileSync(
+        join(dir, `local_${uuid}`, "audit.jsonl"),
+        frame({ servers: [own("cowork")], tools: ["mcp__cowork__present_files"] }) + "\n",
+      );
+      if (record) writeFileSync(join(dir, `local_${uuid}.json`), JSON.stringify(record));
+    };
+    old("00000000-0000-4000-8000-000000000081", { sessionType: "scheduled", scheduledTaskId: "fixture-task" });
+    old("00000000-0000-4000-8000-000000000082");
   });
   afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -442,12 +453,16 @@ describe("sessionKindOf — the kind of the session that wrote an audit log", ()
     expect(sessionKindOf(audit("aaaa0002"))).toBe("interactive");
     expect(sessionKindOf(audit("aaaa0003"))).toBe("other");
   });
+  it("reads the older local_<uuid>/ layout from its exactly-named record, and never guesses without one", () => {
+    expect(sessionKindOf(join(dir, "local_00000000-0000-4000-8000-000000000081", "audit.jsonl"))).toBe("scheduled");
+    expect(sessionKindOf(join(dir, "local_00000000-0000-4000-8000-000000000082", "audit.jsonl"))).toBe("unknown");
+  });
   it("never guesses: a scheduled record without its task id, two records, bad JSON, no record, a non-string type", () => {
     for (const p of ["aaaa0004", "aaaa0005", "aaaa0006", "aaaa0007", "aaaa0008"]) expect(sessionKindOf(audit(p)), p).toBe("unknown");
   });
   it("counts kinds in the recorded block and lets nothing else from the record out", () => {
     const r = readDesktopInitSurface({ ...input(), dir });
-    expect(r.surface.sessionKinds).toEqual({ interactive: 1, scheduled: 1, other: 1, unknown: 5 });
+    expect(r.surface.sessionKinds).toEqual({ interactive: 1, scheduled: 2, other: 1, unknown: 6 });
     expect(everythingEmitted(r)).not.toContain(BAIT.email);
     expect(everythingEmitted(r)).not.toContain("fixture-task");
     expect(DesktopInitSurface.safeParse(r.surface).success).toBe(true);

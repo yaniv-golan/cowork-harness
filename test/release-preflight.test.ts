@@ -191,6 +191,21 @@ describe("checkInitSurfaceObserved (check 7)", () => {
     expect(checkInitSurfaceObserved({ name: "desktop-9.json", json: mixed }, false).detail).toBe("desktop-9.json: observed");
   });
 
+  it("does not call a read scheduled-only when some sessions' kind is unknown or typed otherwise, but still names the static check", () => {
+    for (const kinds of [
+      { interactive: 0, scheduled: 1, other: 0, unknown: 3 },
+      { interactive: 0, scheduled: 0, other: 0, unknown: 2 },
+      { interactive: 0, scheduled: 0, other: 2, unknown: 0 },
+    ]) {
+      const json = { provenance: { desktopInitSurface: { observed: true, sessionKinds: kinds } } };
+      const r = checkInitSurfaceObserved({ name: "desktop-9.json", json }, false);
+      expect(r.status, JSON.stringify(kinds)).toBe("PASS");
+      expect(r.alwaysShowDetail, JSON.stringify(kinds)).toBe(true);
+      expect(r.detail, JSON.stringify(kinds)).not.toMatch(/scheduled-task sessions only/);
+      expect(r.detail, JSON.stringify(kinds)).toMatch(/no ordinary session was confirmed .*static check, not observed/);
+    }
+  });
+
   it("FAILS an unobserved one, and names the dedicated override (never --allow-empty)", () => {
     const r = checkInitSurfaceObserved({ name: "desktop-9.json", json: block(false) }, false);
     expect(r.status).toBe("FAIL");
