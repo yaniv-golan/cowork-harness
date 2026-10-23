@@ -31,7 +31,7 @@ import { generateHostLoopShellSection } from "./hostloop-prompt.js";
 const HOSTLOOP_DYNAMIC_PROMPT_MIN_VERSION = MOUNT_BARE_NAME_MIN_VERSION;
 import { makeWorkspaceHandler, type McpHandler, type EgressEntry, type WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import type { WebFetchDedupCache } from "../hostloop/webfetch-dedup.js";
-import { baseAgentArgs, hostNativeSpawnEnv, dockerRunArgv, proxyEnvVars, pluginDirArgs } from "./argv.js";
+import { BACKGROUND_TASKS_ENV_KEY, baseAgentArgs, hostNativeSpawnEnv, dockerRunArgv, proxyEnvVars, pluginDirArgs } from "./argv.js";
 import { buildPluginPathRewrites, type PluginPathRewrite } from "../hostloop/plugin-path-rewrite.js";
 import { agentSpawnOptions, agentTreeAgent } from "./agent-tree.js";
 import { AUTO_MEMORY_ENV_KEY } from "../loop-decision.js";
@@ -99,6 +99,9 @@ export function buildHostLoopNativeEnv(
   const nativeEnv: NodeJS.ProcessEnv = { ...(opts.operatorEnv ?? process.env) };
   for (const k of SCRUBBED_AGENT_ENV_KEYS) delete nativeEnv[k];
   delete nativeEnv[AUTO_MEMORY_ENV_KEY]; // owned by hostNativeSpawnEnv's autoMemoryEnv overlay — see AUTO_MEMORY_ENV_KEY
+  // Owned by the baseline's spawn.env, which hostNativeSpawnEnv overlays: on a baseline that pins no value the
+  // operator's export must not reach the agent either, as on protocol (backgroundTasksEnv).
+  delete nativeEnv[BACKGROUND_TASKS_ENV_KEY];
   Object.assign(nativeEnv, hostNativeSpawnEnv(baseline, opts));
   delete nativeEnv.MAX_THINKING_TOKENS;
   Object.assign(nativeEnv, opts.agentEnv ?? {});

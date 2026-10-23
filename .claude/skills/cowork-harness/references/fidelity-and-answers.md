@@ -13,7 +13,7 @@ Self-contained reference. Tracks `cowork-harness 4.10.0` (baseline `desktop-3.16
 
 | Tier | What runs | Use it for |
 |---|---|---|
-| `protocol` | L0 — agent on the host, no sandbox, no egress enforcement | Fastest control-loop / answer-shape checks. **Rejected** if the scenario asserts egress / `expect_denied` (would false-pass). |
+| `protocol` | L0 — agent on the host, no sandbox, no egress enforcement | Fastest control-loop / answer-shape checks. **Rejected** if the scenario asserts egress / `expect_denied` (would false-pass). No background shells or tasks, as on every tier and in Cowork (since 4.11.0), except on a baseline that pins no switch (`desktop-1.11847.5`), where no tier sets it. |
 | `container` | L1 — agent in a Docker container with a per-run default-deny egress proxy | The everyday tier: real sandbox, real egress allowlist. |
 | `microvm` | L2 — agent in an Apple-VZ Lima microVM with a guest firewall | VM-grade escape **isolation** of untrusted code. macOS arm64 only; needs `cowork-harness vm init`. Network transport **equals `container`** (same allowlist proxy) — *not* better network fidelity. |
 | `hostloop` | Host-loop split-exec: the agent loop is a **native process on the host** (no container around the file tools — matching production); shell/web routed host-side via the workspace SDK-MCP server (`mcp__workspace__bash`) into a Docker VM sidecar | Reproduce Cowork's **production** split-execution model. |

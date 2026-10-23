@@ -66,7 +66,7 @@ describe("agent_env — the tier-uniform gated-env knob", () => {
     expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("claude-haiku-x");
   });
 
-  it("protocol scrubs a stray operator value with no baseline overlay (two-layer: knob > operator)", () => {
+  it("protocol scrubs a stray operator value with no baseline spawn.env overlay (two-layer: knob > operator)", () => {
     process.env.ENABLE_TOOL_SEARCH = "auto";
     try {
       const plan = { baseEnv: { ...process.env }, agentEnv: {} } as unknown as LaunchPlan;
@@ -77,7 +77,7 @@ describe("agent_env — the tier-uniform gated-env knob", () => {
     }
   });
 
-  it("protocol: the knob wins over a stray operator value (no baseline layer at all)", () => {
+  it("protocol: the knob wins over a stray operator value (no spawn.env layer; only its two baseline-derived switches)", () => {
     process.env.CLAUDE_CODE_SUBAGENT_MODEL = "stray-from-shell";
     try {
       const plan = { baseEnv: { ...process.env }, agentEnv: { CLAUDE_CODE_SUBAGENT_MODEL: "claude-haiku-x" } } as unknown as LaunchPlan;

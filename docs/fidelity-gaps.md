@@ -21,14 +21,14 @@ For how the harness *enforces* the limitations it does reproduce (sealed filesys
 
 ## On this page
 
-Every `##` below is one gap (or one scoping note). Grouped, since there are 40 of them.
+Every `##` below is one gap (or one scoping note). Grouped, since there are 41 of them.
 
 - **Read first** — [Which Cowork LANE this harness models](#which-cowork-lane-this-harness-models--read-first-it-scopes-everything-below) · [Fidelity tier differences](#fidelity-tier-differences)
 - **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [A workspace fixture starts with a fresh conversation](#a-workspace-fixture-starts-with-a-fresh-conversation) · [Deletes in `outputs/` follow the baseline's recorded mount mode](#deletes-in-outputs-follow-the-baselines-recorded-mount-mode) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
 - **Files & delivery** — [Artifacts](#artifacts--two-mechanisms-neither-modeled) · [File delivery](#file-delivery--present_files-here-senduserfile-on-remote-cowork) · [Browser↔webview↔human-interaction boundary (interactive artifacts)](#browserwebviewhuman-interaction-boundary-interactive-artifacts)
 - **Tools, skills & plugins** — [A plugin's declared MCP servers run here; production stubs them conditionally](#a-plugins-declared-mcp-servers-run-here-production-stubs-them-under-conditions-the-harness-cannot-see) · [Skill/plugin discovery SDK-MCP servers](#skillplugin-discovery-sdk-mcp-servers--modeled-on-containerhostloop-microvmprotocol-pending) · [Skill argument collection](#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here) · [Skill authoring](#skill-authoring--save_skill-and-propose_skills-are-not-modeled) · [Anthropic's built-in skills are not staged](#anthropics-built-in-skills-anthropic-skills-are-not-staged) · [Hooks](#hooks--the-harness-installs-one-of-productions-six) · [Browser tools are not served](#browser-tools-are-not-served--and-egress-assertions-say-nothing-about-that-path) · [VM tiers have no workspace tool aliases](#vm-tiers-have-no-workspace-tool-aliases) · [Hostloop: the substituted plugin path shares the VM path's suffix](#hostloop-the-substituted-plugin-path-shares-the-vm-paths-suffix-real-coworks-does-not)
 - **Prompt & model** — [System-prompt reconstruction](#system-prompt-reconstruction) · [Server-driven system-prompt patches (`coworkSyspromptMap`)](#server-driven-system-prompt-patches-coworksyspromptmap) · [Model selection](#model-selection--the-harness-inherits-the-local-cli-default) · [Thinking forced on for managed-config models](#thinking-forced-on-for-managed-config-models-thinkingalwaysonmodels) · [Protocol-tier sub-agents get no Cowork environment append](#protocol-tier-sub-agents-get-no-cowork-environment-append) · [The silent-turn reminder is served by capability, and it lands in the graded corpus](#the-silent-turn-reminder-is-served-by-capability-and-it-lands-in-the-graded-corpus)
-- **Identity & environment** — [Auto-memory: the off switch is modeled, the memory keys are not](#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn)
+- **Identity & environment** — [Auto-memory: the off switch is modeled, the memory keys are not](#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not) · [Background tasks are off on every tier](#background-tasks-are-off-on-every-tier) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn)
 - **Sandbox & egress** — [`--raw` mode bypasses the egress sandbox](#--raw-mode-bypasses-the-egress-sandbox) · [HIPAA restriction is a process-global latch](#hipaa-restriction-is-a-process-global-latch) · [Booting the real rootfs image under a generic VZ host](#booting-the-real-rootfs-image-under-a-generic-vz-host) · [Stopping a host-tier run stops the processes the agent started](#stopping-a-host-tier-run-stops-the-processes-the-agent-started)
 - **Permissions & limits** — [A frozen search corpus is not live search](#a-frozen-search-corpus-is-not-live-search) · [`answer_channel: none` has no Cowork counterpart](#answer_channel-none-has-no-cowork-counterpart) · [Auto-mode permission rubric is not modeled](#auto-mode-permission-rubric-is-not-modeled) · [Gate `1648655587` is the scheduled-task session limiter](#gate-1648655587-is-the-scheduled-task-session-limiter--distinct-from-the-agent-side-task-fan-out-cap)
 
@@ -189,7 +189,7 @@ a live bug report can be placed on the right lane before it is compared to a har
 | Plugin root | `/root/.claude/plugins/synced/<org-uuid>_<account-uuid>/<plugin>/` (`CLAUDE_CODE_SYNC_PLUGINS=1`) | `mnt/.local-plugins/…` (docs/plugin-root.md) |
 | Plugin MCP servers | agent-side **not started** (`CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1`, `_EXCEPT=documents`) — but Desktop bridges them from the Mac: `buildLocalMcpBridgeTools` runs host-side STDIO servers (`claude_desktop_config.json` and the Cowork plugin pool, exclusion default `["documents"]`) and announces their tools into the session as `<server>__<tool>` with `_meta anthropic/kind` = `local` \| `plugin`; calls route back over the remote-devices bridge behind Desktop's own approval prompt. URL-declared and `${user_config.*}` servers are dropped. Verified in asar 2.2553.1. The agent-facing name, `mcp__remote-devices__<server>__<tool>`, is from asar 2.19675.0 | conditionally stubbed to zero tools by Desktop, never stubbed here (see the plugin-MCP section under "Plugins" for the two conditions — the bridge is a third data point for that open decision) |
 | Plugin hooks | `Stop` fired (block → resend; no UI notice). `SessionStart` fired only on `source: "resume"`, never `startup` — inferred: plugins sync after the session starts. Cowork ships its **own** Stop hooks here (`stop-hook-reply-gate.py`, `stop-hook-git-check.sh` under `/home/claude/.claude/`) | hooks run at every tier (at `protocol` as native host processes; there, without a sealed managed config dir, a plugin installed on the host runs its hooks too); `hook_event_fired` / `hook_event_blocked` / `no_hook_event_blocked` grade them, `hook_decision` what they decided, and `hook_output_contains` / `hook_output_not_contains` what they printed |
-| Other env markers | `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE=cloud_default`, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, `CLAUDE_CODE_WEBFETCH_USE_CCR_PROXY=1`, `CLAUDE_EFFORT` (write-only — the effort that applies is the hook payload's `effort.level`) | none are in the pinned spawn env |
+| Other env markers | `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE=cloud_default`, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, `CLAUDE_CODE_WEBFETCH_USE_CCR_PROXY=1`, `CLAUDE_EFFORT` (write-only — the effort that applies is the hook payload's `effort.level`) | `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` is in the pinned spawn env and set on every tier ([Background tasks](#background-tasks-are-off-on-every-tier)); the others are not |
 
 **Placing a live bug report on a lane — do this before comparing it to any harness run**, using the checks in
 [Which lane a session actually ran on](#which-lane-a-session-actually-ran-on) (the paths in the report's
@@ -256,7 +256,8 @@ their sub-agent spend) do not run.
 - **Same rule everywhere it applies.** `lane: remote` gets the same rule; the evidence for it is local-lane, and the
   cloud lane's memory behaviour is unmeasured. A custom baseline with no `provenance` counts as off. There is no
   knob to turn memory on: `agent_env` cannot carry the key, so a Spaces- or agent-session memory setup cannot be
-  reproduced. `chat --raw` is not a fidelity tier and does not set the key.
+  reproduced. `chat --raw` is not a fidelity tier and does not set the key; it applies no baseline spawn env at all,
+  the background-tasks switch included.
 
 **Read the reachability claim precisely, because it is narrower than it looks.** "Unreachable" holds
 for the modeled session shape only. It does **not** hold for a Spaces or agent-type session, where the
@@ -271,6 +272,23 @@ environment rather than reproducing one. So the honest position has three parts:
 the gate pins. The pins make a production flip visible as a `provenance.gates` diff and as sync's WARNING note.
 
 ---
+
+## Background tasks are off on every tier
+
+**Real Cowork behaviour:** Desktop pins `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS:"1"` in every spawn env. The agent then
+removes `run_in_background` from the Bash and Task schemas and runs no background task.
+
+**Harness behaviour:** every tier sets the key from the baseline's `spawn.env`: `container`, `microvm` and `hostloop`
+through their `spawn.env` overlay, and `protocol`, which has no such overlay, through the same value applied on its own
+(4.11.0 and later). An operator export of the key is ignored on `protocol` and `hostloop`, the tiers that inherit your
+shell. A baseline that pins no value (`desktop-1.11847.5`) sets none on any tier.
+
+Before 4.11.0, `protocol` did not set it. A protocol run then exposed Bash `run_in_background`: a background shell
+outlived the run's `result`, woke the agent with a task notification after the harness had closed its input (any
+permission request in that turn failed with "Stream closed"), and kept the run open until the shell ended. A scenario
+that relied on a background shell passed at `protocol` only; it now fails there as it would in Cowork. The harness's
+PreToolUse block on Task `run_in_background` stays installed, but it cannot fire on a call the agent's schema rejects,
+and no tier now offers the parameter.
 
 ## Mid-session skill/plugin re-sync
 
@@ -842,7 +860,7 @@ vars (binary-verified against `app.asar` 1.18286.0 and the in-VM ELF): `CLAUDE_C
 
 **Harness behaviour:** The two that are derivable headlessly **are now emitted** at the spawn-env seam
 (`src/runtime/argv.ts`): `CLAUDE_CODE_HOST_PLATFORM` (= `process.platform`, on every tier that assembles
-the Cowork spawn env — container/microvm/hostloop; protocol (L0) spawns with the plain base env) and
+the Cowork spawn env — container/microvm/hostloop; protocol (L0) spawns with the plain base env plus the baseline's auto-memory and background-tasks switches) and
 `CLAUDE_CODE_WORKSPACE_HOST_PATHS` (the real host paths of connected folders, `"|"`-joined, **hostloop
 only**). The hostloop-only scoping is a **deliberate, documented divergence**: production stages folders
 into the VM as copies and still sets the var with real host paths, and the harness knows the mount-source

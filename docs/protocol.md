@@ -15,7 +15,9 @@ wire surface — the harness's *own* protocol, not Anthropic's.
 1. Spawn/handshake: the `initialize` `control_request` (`ControlRequestInitialize`).
 2. Inbound permission/question gates: `can_use_tool` `control_request`s, including AskUserQuestion's
    `input.questions[]` (`ControlRequestCanUseTool`, `AskUserQuestionInput`, `QSpec`, `QSpecOption`).
-3. Inbound `hook_callback` (PreToolUse hooks, e.g. the always-installed Task `run_in_background` block)
+3. Inbound `hook_callback` (PreToolUse hooks, e.g. hostloop's path-containment gate; the always-installed Task
+   `run_in_background` block rides the same channel, but with background tasks off on every tier the agent's schema
+   rejects that parameter, so it cannot fire on such a call)
    and `mcp_message` (host-loop MCP JSON-RPC) round-trips (`ControlRequestHookCallback`,
    `ControlRequestMcpMessage`).
 4. The **nested** `control_response` success envelope every reply shares — payload sits under an

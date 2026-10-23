@@ -94,6 +94,11 @@ git commit -m "parity: sync to Desktop <new>"
 cowork-harness run examples/scenarios/   # regression — drift shows as test diffs (this repo's scenarios live under examples/)
 ```
 
+Two tests read every committed baseline and go red on purpose when a new one changes a tally. Confirm the new row is
+right, then update the literal: `test/auto-memory-env.test.ts` counts the baselines whose auto-memory gate row is off
+and those with no row (bump the right one), and `test/protocol-background-tasks-env.test.ts` names the baselines that
+pin no background-tasks switch (it fails if a new baseline stops pinning it, or pins a value other than `"1"`).
+
 > **The live-asar tripwires are macOS-local ONLY — CI cannot run them, so a green CI is not evidence the
 > baseline still matches the installed Desktop.** Every oracle that reads the real bundle gates on
 > `process.platform !== "darwin"` (`test/baseline.test.ts`), and `ci.yml` has **no macOS runner** — all

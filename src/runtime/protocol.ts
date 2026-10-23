@@ -11,7 +11,7 @@ import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
 import { containedRealPath } from "../boundary-paths.js";
 import { BoundaryError } from "../errors.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
-import { pluginDirArgs } from "./argv.js";
+import { BACKGROUND_TASKS_ENV_KEY, backgroundTasksEnv, pluginDirArgs } from "./argv.js";
 import { agentSpawnOptions } from "./agent-tree.js";
 import { stageWorkspaceFixture } from "../fixture/workspace.js";
 import { carryLegFolders } from "./stage.js";
@@ -21,8 +21,9 @@ import { autoMemoryEnv, AUTO_MEMORY_ENV_KEY } from "../loop-decision.js";
  * Pure builder for L0's spawn env. Protocol spawns the host `claude` over the OPERATOR's full shell env
  * (`{...plan.baseEnv}`) — there is no baseline `spawn.env` overlay here (unlike hostloop/container/microvm),
  * so precedence is the two-layer `knob > operator env (scrubbed)`: scrub `SCRUBBED_AGENT_ENV_KEYS` from
- * the operator layer FIRST, then overlay the authored `agentEnv` knob so it always wins. The one
- * baseline-derived key is the auto-memory switch (`autoMemoryEnv`), which every tier sets. Extracted from
+ * the operator layer FIRST, then overlay the authored `agentEnv` knob so it always wins. Two keys come from the
+ * baseline, as on every tier: the auto-memory switch (`autoMemoryEnv`) and the background-tasks switch
+ * (`backgroundTasksEnv`). The operator's export of either is deleted first, and the knob cannot carry them. Extracted from
  * `spawnProtocol` so this env-construction step is unit-testable at the actual runtime call site.
  */
 export function buildProtocolEnv(plan: LaunchPlan, baseline: PlatformBaseline, outputsDir?: string): NodeJS.ProcessEnv {
@@ -36,6 +37,12 @@ export function buildProtocolEnv(plan: LaunchPlan, baseline: PlatformBaseline, o
   // key set, that dir's auto-memory no longer loads either.
   delete env[AUTO_MEMORY_ENV_KEY];
   Object.assign(env, autoMemoryEnv(baseline));
+  // Cowork's background-tasks switch, from the baseline's spawn.env as the other tiers apply it. Without it the agent
+  // offers Bash `run_in_background`, which Cowork strips: a background shell outlives the run's `result`, wakes the
+  // agent with a task notification after stdin is closed (its permission requests then fail "Stream closed"), and
+  // holds stdout open until the shell ends.
+  delete env[BACKGROUND_TASKS_ENV_KEY];
+  Object.assign(env, backgroundTasksEnv(baseline));
   return env;
 }
 

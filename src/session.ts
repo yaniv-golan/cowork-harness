@@ -251,7 +251,8 @@ export const SessionConfig = z.strictObject({
   // through. Precedence is TIER-QUALIFIED: hostloop/container/microvm layer a baseline `spawn.env`, so
   // it's knob > baseline spawn.env > operator env (scrubbed); protocol has no baseline `spawn.env` overlay
   // (it spawns from `{...plan.baseEnv}`), so it's the two-layer knob > operator env (scrubbed). Separately,
-  // every tier sets the baseline-derived auto-memory key (autoMemoryEnv), which this knob cannot carry.
+  // every tier sets two baseline-derived keys this knob cannot carry: the auto-memory switch (autoMemoryEnv) and
+  // the background-tasks switch (baseline spawn.env; backgroundTasksEnv at protocol).
   // `tool_search` unset (key absent) = binary mode `tst` — ToolSearch ON first-party; the binary's
   // "standard" mode name means DISABLED (a naming trap) — `tool_search: "off"` emits
   // `ENABLE_TOOL_SEARCH="off"`, the binary's actual disable spelling.
@@ -338,7 +339,7 @@ export const SCRUBBED_AGENT_ENV_KEYS = [
   // spawn forwards no user env at all, and the Code-tab spawn, which does forward the user's configured env vars,
   // strips these three (the process-wrapper key since before 2.19675.1; the other two since 2.26454.0). Desktop also
   // pins the two new ones to "0" in its base env, which the baseline spawn.env carries, so on hostloop the scrubbed
-  // operator value is replaced by the pinned "0"; protocol has no baseline overlay, so there they are simply not
+  // operator value is replaced by the pinned "0"; protocol has no baseline spawn.env overlay, so there they are simply not
   // inherited. CLAUDE_CODE_SIMPLE=1 would put the agent in its --bare mode (no plugins, hooks, auto-memory or
   // CLAUDE.md), so an export would silently remove surfaces the harness models. CLAUDE_CODE_PROCESS_WRAPPER makes the
   // agent wrap the processes it launches.

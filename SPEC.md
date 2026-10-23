@@ -411,6 +411,9 @@ states in `baseline.provenance.gates`). A skill that ignores these behaves diffe
   `CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"` unless the baseline's recorded gate row is on (no row → off), as Desktop
   does for an ordinary task with no auto-memory directory; `sync` anchors the resolver shape and warns when the gate
   reads on. See `docs/fidelity-gaps.md`.
+- **Background-tasks switch** — every tier sets `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` to the baseline's `spawn.env`
+  value (`"1"` on every baseline that pins it): container, microvm and hostloop through the `spawn.env` overlay,
+  protocol on its own. The operator's export of the key is ignored on protocol and hostloop.
 
 ## 11. Machine output (`--output-format json`)
 

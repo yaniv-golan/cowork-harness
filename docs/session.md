@@ -217,11 +217,13 @@ its run status on two tiers only.
 - `hostloop` / `container` / `microvm` (each layers a baseline `spawn.env`): **knob > baseline spawn.env
   > operator env (scrubbed)**.
 - `protocol` (no baseline `spawn.env` overlay — it spawns from `{...plan.baseEnv}`): the two-layer **knob >
-  operator env (scrubbed)**.
+  operator env (scrubbed)**, plus the two baseline-derived keys below.
 
-Every tier also sets one baseline-derived key, `CLAUDE_CODE_DISABLE_AUTO_MEMORY`, from the recorded auto-memory gate
-(see [fidelity-gaps](./fidelity-gaps.md#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not)). `agent_env`
-cannot set it, and on `hostloop`/`protocol` the operator's own export of it is ignored.
+Every tier also sets two baseline-derived keys: `CLAUDE_CODE_DISABLE_AUTO_MEMORY`, from the recorded auto-memory gate
+(see [fidelity-gaps](./fidelity-gaps.md#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not)), and
+`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`, from the baseline's `spawn.env` (see
+[fidelity-gaps](./fidelity-gaps.md#background-tasks-are-off-on-every-tier)). `agent_env` cannot set either, and on
+`hostloop`/`protocol` the operator's own export of either is ignored.
 
 An unset `agent_env` field emits no key at all (never an empty string) — the agent falls back to its own
 default for that key. Setting any `agent_env` field moves the session-**shape** fingerprint (the
