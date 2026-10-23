@@ -161,6 +161,7 @@ const ESCAPED_OR_CONSTANT_SPANS: Record<string, string> = {
   blkParam: "a regex source constant chosen by the S6c split-form flag",
   blkTail: "a regex source constant chosen by the S6c split-form flag",
   "arrayRe.source": "a regex literal's own source, interpolated as pattern on purpose",
+  "WIDENED_ARTIFACT_MATCHER.source": "a regex literal's own source (the widened Artifact matcher), interpolated as pattern on purpose",
   'forms.join("|")': "an alternation of regex source constants",
 };
 const ESCAPE_CALL = /^(?:reEsc|esc)\(/;

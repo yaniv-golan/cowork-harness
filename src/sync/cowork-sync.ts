@@ -2223,6 +2223,10 @@ const PATH_GATE_MAP_LITERAL = `\\{Read:"file_path",Write:"file_path",Edit:"file_
 
 const reEsc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** The Artifact PreToolUse matcher as Desktop 3.6556.1 widened it: the Artifact family OR any tool of one MCP server,
+ *  named through a namespace reference (captured). */
+const WIDENED_ARTIFACT_MATCHER = /RegExp\(`\^\(\?:Artifact\[A-Za-z\]\*\|mcp__\$\{([\w$.]+)\}__\.\+\)\$`\)/;
+
 /** Desktop 3.6556.1's per-call file capture for Artifact publishing, verified end to end. Returns `[what, why]` per
  *  defect. The Artifact PreToolUse path hook was widened to the `claude-artifacts` MCP server's tools; for its file
  *  publishing it records each file's identity in a closure-local Map keyed by `tool_use_id`, and the canUseTool block
@@ -2249,11 +2253,17 @@ function artifactCaptureDefects(
   const add = (what: string, why: string) => out.push([`canUseTool capture ${what}`, why]);
   const params = chunk.match(new RegExp(`(?<![\\w$])(?:async )?function ${reEsc(preFn)}\\(([^)]*)\\)`))?.[1].split(",") ?? [];
   const body = braceBodyOf(chunk, `async function ${preFn}(`) ?? braceBodyOf(chunk, `function ${preFn}(`) ?? "";
+  // The widened matcher dates the shape independently of the pre-pass: 0 hook chunks carry it before 3.6556.1, so
+  // dropping the 4th parameter, or moving the capture elsewhere, cannot switch these rules off while the hook still
+  // routes the claude-artifacts tools.
+  const widened = WIDENED_ARTIFACT_MATCHER.test(chunk);
   if (!prelude) {
-    if (params.length >= 4 || /artifact-file:/.test(body))
+    if (widened || params.length >= 4)
       add(
         "lookup",
-        `the pre-pass \`${preFn}\` takes a per-call file capture but the block no longer looks it up — every captured publish would be refused`,
+        widened
+          ? "the Artifact hook still covers an MCP server's tools, but the permission wrapper no longer looks up a per-call file capture — reclassify before admitting it"
+          : `the pre-pass \`${preFn}\` takes a per-call file capture but the block no longer looks it up — every captured publish would be refused`,
       );
     return out;
   }
@@ -2281,34 +2291,69 @@ function artifactCaptureDefects(
   // The SDK's camelCase field is the hook payload's tool_use_id; the store key is checked below.
   if (field !== "toolUseID") add("key", `the lookup reads \`${field}\`, not toolUseID — it can never find what the hook stored`);
 
-  const installAt = chunk.search(/(?:const|let|var) ([\w$]+)=([\w$]+)\.canUseTool;\1&&\(/);
+  const install = chunk.match(/(?:const|let|var) ([\w$]+)=([\w$]+)\.canUseTool;\1&&\(\2\.canUseTool=async\([^)]*\)=>\{/);
+  if (!install || install.index === undefined) return out;
+  const installAt = install.index;
+  const installEnd = matchBrace(chunk, installAt + install[0].length - 1);
   // A declaration (`let M=new Map` or `,M=new Map` in a declaration list), never a bare `M=new Map` reassignment —
-  // otherwise a reassignment would become the scope start and hide itself.
+  // otherwise a reassignment would become the scope start and hide itself. The NEAREST declaration is taken: a
+  // same-named Map declared later inside the hook makes the real writer fall outside, and that is flagged (under
+  // "matcher", since no hook head then precedes the writer) — loud, if not precisely labelled.
   const decl = [...chunk.slice(0, installAt).matchAll(new RegExp(`(?:(?:const|let|var) |,)${reEsc(map)}=new Map(?![\\w$])`, "g"))].at(-1);
-  if (!decl || decl.index === undefined) {
+  if (!decl || decl.index === undefined || installEnd < 0) {
     add("map", `the capture map \`${map}\` has no \`new Map\` declaration ahead of the canUseTool install`);
     return out;
   }
-  const scope = chunk.slice(decl.index + decl[0].length, installAt);
+  // The window is the Map's whole closure as far as it can be read: declaration → end of the install's block (the
+  // canUseTool callback closes over it too).
+  const scope = chunk.slice(decl.index + decl[0].length, installEnd + 1);
   const writers = [...scope.matchAll(new RegExp(`(?<![\\w$.])${reEsc(map)}\\.set\\(`, "g"))];
   if (writers.length !== 1)
-    add("map writer", `the capture map \`${map}\` has ${writers.length} writers in its scope (expected exactly one, the Artifact hook)`);
-  if (new RegExp(`(?<![\\w$.])${reEsc(map)}=(?!=)`).test(scope)) add("map", `the capture map \`${map}\` is reassigned in its scope`);
-  if (new RegExp(`(?<![=!<>])=${reEsc(map)}(?=[,;)}])`).test(scope)) add("map", `the capture map \`${map}\` is aliased in its scope`);
+    add("map writer", `the capture map \`${map}\` has ${writers.length} writers in its closure (expected exactly one, the Artifact hook)`);
+  // Two removals only: the hook's size trim, and the lookup's own delete. A third removes a capture before it is read.
+  const trim = scope.match(
+    new RegExp(
+      `for\\((?:let|const|var) ([\\w$]+) of ${reEsc(map)}\\.keys\\(\\)\\)\\{if\\(${reEsc(map)}\\.size<=([\\w$]+)\\)break;${reEsc(map)}\\.delete\\(\\1\\)\\}`,
+    ),
+  );
+  const deletes = (scope.match(new RegExp(`(?<![\\w$.])${reEsc(map)}\\.delete\\(`, "g")) ?? []).length;
+  const bound = trim
+    ? /^\d+$/.test(trim[2])
+      ? trim[2]
+      : chunk.match(new RegExp(`(?<![\\w$.])${reEsc(trim[2])}=(\\d+)(?![\\w$.])`))?.[1]
+    : undefined;
+  if (!trim || deletes !== 2 || new RegExp(`(?<![\\w$.])${reEsc(map)}\\.clear\\(`).test(scope))
+    add(
+      "map removal",
+      `the capture map \`${map}\` is emptied somewhere besides the hook's size trim and the lookup — a capture can vanish before it is read`,
+    );
+  else if (bound === undefined || Number(bound) < 1)
+    add("map removal", `the capture map's size bound resolves to ${bound ?? "nothing"} — every capture would be evicted on insert`);
+  if (new RegExp(`(?<![\\w$.])${reEsc(map)}=(?!=)`).test(scope)) add("map", `the capture map \`${map}\` is reassigned in its closure`);
+  // An alias, a returned closure, or the Map passed as an argument: each lets code outside the window write it. Read
+  // only when the writer count holds, so a writer replaced by a helper call is one flag, not two.
+  if (
+    writers.length === 1 &&
+    new RegExp(`(?<![=!<>])=${reEsc(map)}(?=[,;)}])|=>${reEsc(map)}(?![\\w$.])|[(,]${reEsc(map)}(?=[,)])`).test(scope)
+  )
+    add("map", `the capture map \`${map}\` escapes its closure (aliased, returned or passed as an argument)`);
   const writer = writers[0];
-  if (writers.length === 1 && writer.index !== undefined) {
-    const key = scope.slice(writer.index).match(new RegExp(`^${reEsc(map)}\\.set\\([\\w$]+\\.([\\w$]+),`))?.[1];
+  // The nearest declaration is taken as the scope start. If no hook head precedes the writer inside it, the Map was
+  // redeclared inside the hook (a same-named Map shadowing the real one): say so, rather than misreport the key and
+  // the matcher.
+  const head =
+    writer?.index === undefined ? undefined : [...scope.slice(0, writer.index).matchAll(/matcher:([\w$]+)\.source,hooks:/g)].at(-1)?.[1];
+  if (writers.length === 1 && head === undefined)
+    add("map", `the capture map \`${map}\` is redeclared inside the hook — which Map the lookup reads cannot be told`);
+  else if (writers.length === 1 && writer.index !== undefined) {
+    // The key is read off the hook callback's own payload parameter, not any object that has a tool_use_id.
+    const payload = [...scope.slice(0, writer.index).matchAll(/hooks:\[async ([\w$]+)=>\{/g)].at(-1)?.[1];
+    const keyM = scope.slice(writer.index).match(new RegExp(`^${reEsc(map)}\\.set\\(([\\w$]+)\\.([\\w$]+),`));
+    const key = keyM && keyM[1] === payload ? keyM[2] : keyM ? `${keyM[1]}.${keyM[2]}` : undefined;
     if (key !== "tool_use_id")
       add("key", `the hook stores the capture under \`${key ?? "?"}\`, not tool_use_id — the lookup can never find it`);
     // The matcher of the hook that writes it.
-    const head = [...scope.slice(0, writer.index).matchAll(/matcher:([\w$]+)\.source,hooks:/g)].at(-1)?.[1];
-    const tmpl = head
-      ? chunk.match(
-          new RegExp(
-            `(?<![\\w$.])${reEsc(head)}=RegExp\\(\`\\^\\(\\?:Artifact\\[A-Za-z\\]\\*\\|mcp__\\$\\{([\\w$.]+)\\}__\\.\\+\\)\\$\`\\)`,
-          ),
-        )
-      : null;
+    const tmpl = head === undefined ? null : chunk.match(new RegExp(`(?<![\\w$.])${reEsc(head)}=${WIDENED_ARTIFACT_MATCHER.source}`));
     const ref = tmpl ? resolveNamespaceRef(tmpl[1], chunk, files) : null;
     const ns = ref ? ref.chunk.match(new RegExp(`(?<![\\w$.])${reEsc(ref.local)}="([^"]*)"`))?.[1] : undefined;
     if (!tmpl)
@@ -3570,8 +3615,10 @@ export function checkScheduledSessionFacts(files: Map<string, string>): string[]
 
   // (5) Desktop 3.6556.1: the typed-artifact tools and the prompt's frame-tools section go only to an untyped session
   // with no scheduled task. They are served by a remote MCP server the init surface never reads, so this predicate is
-  // the only place the difference can be seen. Required once the bundle builds a frame-tools section.
-  if ([...files.values()].some((m) => m.includes("frameToolsSection:"))) {
+  // the only place the difference can be seen. Required once the bundle builds a frame-tools section OR names the
+  // claude-artifacts server: two independent dating signals (0 in every bundle before 3.6556.1), so renaming the
+  // prompt key alone cannot switch the check off.
+  if ([...files.values()].some((m) => m.includes("frameToolsSection:") || m.includes('"claude-artifacts"'))) {
     const frame = all(
       /([\w$]+)=[\w$]+&&([\w$]+)\.sessionType===void 0&&\(\2\.scheduledTaskId\?\?[\w$]+\.getActiveSession\([\w$]+\)\?\.scheduledTaskId\)===void 0,[\w$]+=\1\?/g,
     );

@@ -545,6 +545,27 @@ describe.skipIf(!ASAR_BACKUPS)("outputsMountMode oracle over saved Desktop asars
   });
 });
 
+// The path-gate sentinel over saved asars: the back-compat promise is that every pin admitted for 3.6556.x keeps the
+// older builds clean, and the oracle must be able to fail — 1.20186.0 predates the path-gate machinery it pins.
+describe.skipIf(!ASAR_BACKUPS)("checkPathHookFacts oracle over saved Desktop asars (COWORK_ASAR_BACKUP_DIR)", () => {
+  it.each([
+    ["1.20186.0", false],
+    ["1.32352.0", true],
+    ["2.42304.0", true],
+    ["3.1623.4", true],
+    ["3.6556.1", true],
+    ["3.6556.2", true],
+  ])("%s: clean = %s", (version, clean) => {
+    const asar = join(ASAR_BACKUPS!, version, "app.asar");
+    expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
+    const files = readAsarBuildFiles(asar);
+    expect(files.size).toBeGreaterThan(50); // the bundle was actually read (1.20186.0 has 98 build files)
+    const flags = checkPathHookFacts(files);
+    if (clean) expect(flags).toEqual([]);
+    else expect(flags.length).toBeGreaterThan(0);
+  });
+});
+
 // The auto-memory switch the harness models (autoMemoryEnv): Desktop's spawn ternary, the resolver delegation, the
 // resolver's ordinary-task arm gated on 123929380 with a null else, and the two places null becomes
 // CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1". Shape transcribed from app.asar 2.19675.0 (normalized).
@@ -2687,7 +2708,9 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     if (!gates) return;
     const { env, keys } = deriveSpawnEnv(bundle, gates, readRealBundleFilesOrSkip() ?? undefined);
     expect(env).not.toBeNull();
-    if (keys.includes("CLAUDE_CODE_ATTRIBUTION_PROJECT")) expect(env).not.toHaveProperty("CLAUDE_CODE_ATTRIBUTION_PROJECT");
+    // The asar CONSTRUCTS the key (3.6556.1 on), and the derived env still leaves it out.
+    expect(keys).toContain("CLAUDE_CODE_ATTRIBUTION_PROJECT");
+    expect(env).not.toHaveProperty("CLAUDE_CODE_ATTRIBUTION_PROJECT");
   });
 
   // Non-circular oracle for asarGateIds over the REAL asar: every key of the gate-defaults RULE TABLE
@@ -3728,7 +3751,8 @@ describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)",
   // a lookup that hands the capture to a 4-parameter pre-pass. A same-named Map in another scope is the decoy real
   // builds carry (minified names recur across a chunk).
   const captureInstall = () =>
-    'var eh=RegExp(`^(?:Artifact[A-Za-z]*|mcp__${t.EO}__.+)$`),Hn="claude-artifacts";export{Hn as EO};' +
+    // The server name resolves ACROSS chunks, through a `require` binding, as on the real asar.
+    'const q=require("./index.chunk-NS.js");var eh=RegExp(`^(?:Artifact[A-Za-z]*|mcp__${q.EO}__.+)$`);' +
     "function other(e){let Ue=new Map;Ue.set(e.tool_use_id,1);Ue.set(e.tool_use_id,2);return Ue}" +
     'async function Qm(c,f){return c.length===f.length?void 0:"files"}' +
     `async function ss(e,n,r,i){if(e!=="Artifact"&&!e.startsWith("mcp__claude-artifacts__"))return null;const s=async x=>x;` +
@@ -3744,13 +3768,17 @@ describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)",
     `if(a?.vmPathDeny)return a.vmPathDeny;` +
     `const o=xe(g,S)??await Xt(g,S,k.decisionReason,j,f)??Qt(g,S,k.decisionReason,n)??await Se(g,S,k);` +
     `return a===null?o:a.finish(o)});`;
-  const captureFiles = (mutate?: (s: string) => string) =>
-    pathHookFiles({
+  const NS_CHUNK = 'var HTr="claude-artifacts";Object.defineProperty(exports,"EO",{enumerable:!0,get:function(){return HTr}});';
+  const captureFiles = (mutate?: (s: string) => string, mutateNs?: (s: string) => string) => {
+    const files = pathHookFiles({
       consuming: (c) => {
         const swapped = c.replace(/const Se=e\.canUseTool;[\s\S]*$/, () => captureInstall());
         return mutate ? mutate(swapped) : swapped;
       },
     });
+    files.set("index.chunk-NS.js", mutateNs ? mutateNs(NS_CHUNK) : NS_CHUNK);
+    return files;
+  };
 
   it("3.6556.1 capture shape (widened hook, scoped Map, lookup, 4-parameter pre-pass) → no flags", () => {
     expect(checkPathHookFacts(captureFiles())).toEqual([]);
@@ -3779,8 +3807,40 @@ describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)",
       "Ue.get(k.toolUseId);Ue.delete(k.toolUseId)",
       /capture key/,
     ],
-    ["server namespace literal renamed", 'Hn="claude-artifacts"', 'Hn="claude-artifactz"', /capture matcher/],
-    ["matcher arm removed", "|mcp__${t.EO}__.+)$`)", ")$`)", /capture matcher/],
+    ["matcher arm removed", "|mcp__${q.EO}__.+)$`)", ")$`)", /capture matcher/],
+    // The Map's whole closure: a writer, a clear or an extra delete inside the callback or the hook, a zero bound.
+    [
+      "second writer inside the canUseTool callback",
+      "const a=await ss(g,S,d,i);",
+      "const a=await ss(g,S,d,i);Ue.set(k.toolUseID,[]);",
+      /capture map writer/,
+    ],
+    [
+      "Map cleared inside the canUseTool callback",
+      "const a=await ss(g,S,d,i);",
+      "const a=await ss(g,S,d,i);Ue.clear();",
+      /capture map removal/,
+    ],
+    [
+      "hook deletes the capture right after storing it",
+      "Ue.set(e.tool_use_id,c);",
+      "Ue.set(e.tool_use_id,c);Ue.delete(e.tool_use_id);",
+      /capture map removal/,
+    ],
+    ["size bound set to zero (every capture evicted)", "Ue.size<=16", "Ue.size<=0", /capture map removal/],
+    ["Map passed as an argument", "Ue.set(e.tool_use_id,c);", "Ue.set(e.tool_use_id,c);qq(Ue);", /capture map anchor/],
+    ["Map returned from a closure", "Ue.set(e.tool_use_id,c);", "Ue.set(e.tool_use_id,c);globalThis.m=()=>Ue;", /capture map anchor/],
+    ["hook stores under another object's tool_use_id", "Ue.set(e.tool_use_id,c)", "Ue.set(x.tool_use_id,c)", /capture key/],
+    [
+      "a same-named Map redeclared inside the hook",
+      "Ue.set(e.tool_use_id,c);",
+      "Ue.set(e.tool_use_id,c);(function(e){let Ue=new Map;Ue.set(e.tool_use_id,[])})();",
+      /capture map anchor.*redeclared/,
+    ],
+    // Shared rules, on the capture shape: the lookup without its delete no longer parses as a lookup; an un-awaited
+    // pre-pass makes the early deny and the post-pass inert.
+    [".delete dropped from the lookup", "Ue.delete(k.toolUseID);const a=", "const a=", /canUseTool wrapper anchor missing/],
+    ["pre-pass un-awaited", "const a=await ss(g,S,d,i)", "const a=ss(g,S,d,i)", /canUseTool wrapper await/],
     ["rewritten-input deny removed", "updatedInput differs from the request", "updatedInput differs", /capture rewritten-input deny/],
     ["no-identity deny removed", "no stable identity", "no identity", /capture no-identity deny/],
   ];
@@ -3793,6 +3853,57 @@ describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)",
       const f = checkPathHookFacts(files);
       expect(f).toHaveLength(1);
       expect(f[0]).toMatch(re);
+    });
+  }
+
+  it("capture MUTATION: server namespace literal renamed in the shared chunk → exactly 1 flag", () => {
+    const f = checkPathHookFacts(captureFiles(undefined, (s) => s.split('"claude-artifacts"').join('"claude-artifactz"')));
+    expect(f).toHaveLength(1);
+    expect(f[0]).toMatch(/capture matcher/);
+  });
+
+  // The widened matcher dates the shape on its own. Each of these keeps it while moving or removing the capture, so the
+  // pre-pass's arity cannot switch the rules off (each was 0 flags when the lookup was required by arity alone).
+  const NO_LOOKUP: ReadonlyArray<readonly [string, string]> = [
+    ["let i=Ue.get(k.toolUseID);Ue.delete(k.toolUseID);", ""],
+    ["await ss(g,S,d,i)", "await ss(g,S,d)"],
+  ];
+  const MULTI: ReadonlyArray<readonly [string, ReadonlyArray<readonly [string, string]>]> = [
+    [
+      "I: capture moved to a module-level Map read inside a 3-parameter pre-pass",
+      [
+        ...NO_LOOKUP,
+        ["async function ss(e,n,r,i){", "async function ss(e,n,r){let i=UeG.get(r.toolUseID);UeG.delete(r.toolUseID);"],
+        ["let Ue=new Map;e.hooks=", "e.hooks="],
+        ["Ue.set(e.tool_use_id,c)", "UeG.set(e.tool_use_id,c)"],
+      ],
+    ],
+    [
+      "K: capture removed, matcher still widened",
+      [...NO_LOOKUP, ["async function ss(e,n,r,i){", "async function ss(e,n,r){"], ["Qm(i??[]", "Qm([]"]],
+    ],
+    [
+      "K2: capture and the no-identity deny removed, matcher still widened",
+      [
+        ...NO_LOOKUP,
+        ["async function ss(e,n,r,i){", "async function ss(e,n,r){"],
+        ["Qm(i??[]", "Qm([]"],
+        ["no stable identity", "no identity"],
+      ],
+    ],
+  ];
+  for (const [name, edits] of MULTI) {
+    it(`capture MUTATION ${name} → exactly 1 flag (lookup)`, () => {
+      const f = checkPathHookFacts(
+        captureFiles((s) =>
+          edits.reduce((acc, [from, to]) => {
+            expect(acc.split(from).length - 1, from).toBe(1);
+            return acc.split(from).join(to);
+          }, s),
+        ),
+      );
+      expect(f).toHaveLength(1);
+      expect(f[0]).toMatch(/capture lookup/);
     });
   }
 
