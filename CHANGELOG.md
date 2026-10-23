@@ -34,8 +34,9 @@ All notable changes to this project are documented here. The format is based on
   An older cassette carrying one, or a `tool_called` `count.min` above `count.max`, replays with a warning instead of
   being refused: the `tool_called` row grades FAIL, and the `semantic_matches` row stays skipped on replay (live-only)
   as before.
-- **`latest` moves to `desktop-3.1623.4`** (agent **2.1.308**, was 2.1.299). The Cowork system prompt, the egress
-  allowlist and the tool lists a session receives are unchanged from `desktop-2.42304.0`. The CI recipe's agent pin
+- **`latest` moves to `desktop-3.1623.4`** (agent **2.1.308**, was 2.1.299). The Cowork system prompt and the egress
+  allowlist are unchanged from `desktop-2.42304.0`. The tool lists an ordinary session receives are unchanged by
+  inference: the scheduled-task read lacks exactly the tools Desktop withholds from a scheduled task (below). The CI recipe's agent pin
   (`V=`) moves to 2.1.308.
   - **Spawn env:** Desktop now sets `CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS` to an empty string on every spawn, and the
     harness does the same. `CLAUDE_CODE_DESKTOP_SKILLS_PLUGIN_DIR` is recorded as a Desktop key the harness does not
@@ -44,7 +45,7 @@ All notable changes to this project are documented here. The format is based on
   - **Observed from a scheduled task.** The only local Cowork session available on this Desktop was a scheduled
     task, which never gets `send_user_message`, `AskUserQuestion` or the onboarding role picker, and always carries
     `CLAUDE_CODE_HOST_SCHEDULED_RUN`. Those differences come from the kind of session, not from Desktop; `sync`
-    now checks the Desktop code that produces them (see Added).
+    now checks the Desktop code that produces them, at every site in the bundle (see Added).
   - **Cassettes:** see the Upgrade note.
 - **`sync` reads Desktop 3.1623.4's sub-agent folder list.** The list gained an argument for folders an
   administrator marks read-only. `sync` now refuses the write unless that list provably stays empty outside
@@ -61,10 +62,12 @@ All notable changes to this project are documented here. The format is based on
 - **Baselines record which kind of local session was observed.** `provenance.desktopInitSurface` and
   `provenance.observedSpawnEnv` gain an optional `sessionKinds` count (`interactive`, `scheduled`, `other`,
   `unknown`). `sync --diff` prints it, and when the diff shows the read becoming scheduled-only it reports the tools
-  and env key such a session lacks or adds as "not observed" instead of as a change.
+  and env key such a session lacks or adds as "not observed" instead of as a change. A missing `send_user_message`
+  is reported that way only while the new baseline records its gate as on.
 - **`sync` checks what a scheduled observation cannot show.** It refuses the write when Desktop no longer types a
   scheduled task's session at start, offers `send_user_message` to typed sessions, stops removing `AskUserQuestion`
-  and the role picker from scheduled sessions, or changes the gate that keeps their frame artifacts.
+  and the role picker from scheduled sessions, or changes the gate that keeps their frame artifacts. It also refuses
+  when a second site of any of these appears beside the one it checks.
 - **`docs/fidelity-gaps.md`: Anthropic's built-in skills plugin is not staged.** Real Cowork also loads a
   per-account `anthropic-skills` plugin; the entry says what its absence hides from a skill under test.
 

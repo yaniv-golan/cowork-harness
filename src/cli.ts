@@ -3735,7 +3735,7 @@ async function cmdSync(args: string[]) {
     log(`=== diff vs latest committed baseline (desktop-${(base as { appVersion?: string }).appVersion}) ===`);
     // Structured recursive diff, replacing the one-level diff() that printed a whole subtree on
     // any nested change (e.g. a single gate flip three levels deep used to dump all of `provenance`).
-    for (const line of formatDiffLines(diffBaselines(base, next))) log(`  ${line}`);
+    for (const line of formatDiffLines(diffBaselines(base, next), next)) log(`  ${line}`);
   }
   // Non-blocking informational hints (e.g. stale SPAWN_ENV_ALLOWLIST prune NOTEs): surfaced so they
   // get acted on, but they are NOT deltas and never block the write.
@@ -5593,9 +5593,9 @@ function cmdDiff(args: string[]) {
     const entries = diffBaselines(a, b);
     const identical = entries.length === 0;
     if (json) out(jsonPayloadEnvelope("diff", identical, { kind: "baseline", a: aName, b: bName, identical, entries }));
-    else if (changelog) out(renderChangelog(entries));
+    else if (changelog) out(renderChangelog(entries, b));
     else if (identical) out("No differences.");
-    else for (const line of formatDiffLines(entries)) out(line);
+    else for (const line of formatDiffLines(entries, b)) out(line);
     process.exit(identical ? 0 : 1);
   }
 

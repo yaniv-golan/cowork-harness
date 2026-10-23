@@ -397,9 +397,11 @@ committed baseline and say why in that baseline's `$comment`.
      task fewer tools than an ordinary one — no `send_user_message`, no `AskUserQuestion`, no onboarding role
      picker — so a scheduled-only read cannot show them. `sync` asserts the code that withholds them instead (a
      scheduled-task session is typed `scheduled`; `send_user_message` is offered only to an untyped session; the
-     two removed tools; the frame-artifacts gate), and blocks the write if that code changes shape. When the diff
-     shows the read became scheduled-only, a missing `send_user_message` is reported as not observable rather than
-     removed, and the preflight names the tools that rest on the static check.
+     two removed tools; the frame-artifacts gate), and blocks the write if that code changes shape or a second site
+     appears beside it. The check proves the code path, not the gate: when the diff shows the read became
+     scheduled-only AND the new baseline's `sendUserMessageConfig` gate is on, a missing `send_user_message` is
+     reported as not observable rather than removed; otherwise it stays DISAPPEARED. The preflight names the tools
+     that rest on the static check, and any whose gate is off.
    - **Reading the diff.** A tool or server appearing or disappearing is the signal. A tool moving between
      `toolsAll` and `toolsSome` depends on which kinds of session happened to be read (at 2.7032.0 some
      sessions lack the four artifact tools), so treat that as a prompt to look, not as evidence.

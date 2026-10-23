@@ -173,18 +173,24 @@ describe("unreportedRequiredContexts", () => {
 describe("checkInitSurfaceObserved (check 7)", () => {
   const block = (observed: boolean) => ({ provenance: { desktopInitSurface: { observed } } });
 
-  it("passes an observed newest baseline", () => {
-    expect(checkInitSurfaceObserved({ name: "desktop-9.json", json: block(true) }, false).status).toBe("PASS");
+  const GATE_ON = { "sendUserMessageConfig:3045399524": { on: true, source: "force" } };
+  const SCHED = { interactive: 0, scheduled: 1, other: 0, unknown: 0 };
+
+  it("passes an observed newest baseline, and says when it records no session kinds", () => {
+    const r = checkInitSurfaceObserved({ name: "desktop-9.json", json: block(true) }, false);
+    expect(r.status).toBe("PASS");
+    expect(r.alwaysShowDetail).toBe(true);
+    expect(r.detail).toBe("desktop-9.json: observed (no session kinds recorded)");
   });
 
   it("passes a scheduled-only observation but says, every run, which tools rest on the static check", () => {
-    const json = {
-      provenance: { desktopInitSurface: { observed: true, sessionKinds: { interactive: 0, scheduled: 1, other: 0, unknown: 0 } } },
-    };
+    const json = { provenance: { gates: GATE_ON, desktopInitSurface: { observed: true, sessionKinds: SCHED } } };
     const r = checkInitSurfaceObserved({ name: "desktop-9.json", json }, false);
     expect(r.status).toBe("PASS");
     expect(r.alwaysShowDetail).toBe(true);
-    expect(r.detail).toMatch(/scheduled-task sessions only — cowork\.send_user_message .*static check, not observed/);
+    expect(r.detail).toMatch(
+      /scheduled-task sessions only — cowork\.send_user_message, .*static check asserts the code path, not observed$/,
+    );
     const mixed = {
       provenance: { desktopInitSurface: { observed: true, sessionKinds: { interactive: 1, scheduled: 1, other: 0, unknown: 0 } } },
     };
@@ -202,8 +208,38 @@ describe("checkInitSurfaceObserved (check 7)", () => {
       expect(r.status, JSON.stringify(kinds)).toBe("PASS");
       expect(r.alwaysShowDetail, JSON.stringify(kinds)).toBe(true);
       expect(r.detail, JSON.stringify(kinds)).not.toMatch(/scheduled-task sessions only/);
-      expect(r.detail, JSON.stringify(kinds)).toMatch(/no ordinary session was confirmed .*static check, not observed/);
+      expect(r.detail, JSON.stringify(kinds)).toMatch(
+        /no ordinary session was confirmed .*static check asserts the code path, not observed/,
+      );
     }
+  });
+
+  it("does not lean on the static check for a tool whose gate is off or unrecorded", () => {
+    for (const gates of [{ "sendUserMessageConfig:3045399524": { on: false, source: "fcache" } }, {}, undefined]) {
+      const json = { provenance: { ...(gates ? { gates } : {}), desktopInitSurface: { observed: true, sessionKinds: SCHED } } };
+      const r = checkInitSurfaceObserved({ name: "desktop-9.json", json }, false);
+      expect(r.status, JSON.stringify(gates)).toBe("PASS");
+      expect(r.detail, JSON.stringify(gates)).not.toMatch(/send_user_message, .*static check/);
+      expect(r.detail, JSON.stringify(gates)).toMatch(
+        /cowork\.send_user_message \(gate sendUserMessageConfig:3045399524 off or unrecorded\): nothing says an ordinary session gets it/,
+      );
+    }
+  });
+
+  it("WARNS when the init-surface and spawn-env readers disagree on whether a scheduled task was read", () => {
+    const at = (initKinds: object, spawnScheduled: number) => ({
+      provenance: {
+        gates: GATE_ON,
+        desktopInitSurface: { observed: true, sessionKinds: initKinds },
+        observedSpawnEnv: { sessionKinds: { interactive: 0, scheduled: spawnScheduled, other: 0, unknown: 1 - spawnScheduled } },
+      },
+    });
+    expect(checkInitSurfaceObserved({ name: "d.json", json: at(SCHED, 1) }, false).status).toBe("PASS");
+    const r = checkInitSurfaceObserved({ name: "d.json", json: at(SCHED, 0) }, false);
+    expect(r.status).toBe("WARN");
+    expect(r.detail).toMatch(/spawn-env observation did not read a scheduled run — the two session-kind readers disagree/);
+    const other = checkInitSurfaceObserved({ name: "d.json", json: at({ interactive: 0, scheduled: 0, other: 0, unknown: 1 }, 1) }, false);
+    expect(other.status).toBe("WARN");
   });
 
   it("FAILS an unobserved one, and names the dedicated override (never --allow-empty)", () => {

@@ -41,7 +41,13 @@ import { parse as parseYaml } from "yaml";
 import { checkVersions } from "./check-versions.js";
 import { checkSurfaceSinceLastTag } from "./check-surface.js";
 import { compareBaselineVersions } from "../src/baseline.js";
-import { ObservedSpawnEnv, SCHEDULED_SESSION_WITHHELD_TOOLS, SearchAnchors } from "../src/types.js";
+import {
+  ObservedSpawnEnv,
+  SCHEDULED_SESSION_WITHHELD_TOOL_GATES,
+  SCHEDULED_SESSION_WITHHELD_TOOLS,
+  SearchAnchors,
+  withheldToolGateOn,
+} from "../src/types.js";
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const r = (p: string) => readFileSync(join(REPO_ROOT, p), "utf8");
@@ -194,19 +200,38 @@ export function checkInitSurfaceObserved(newest: { name: string; json: unknown }
     // A scheduled-task read is a valid observation, but it cannot show what Desktop gives an ordinary session only;
     // say which tools rest on sync's static check instead, every run.
     const k = block.sessionKinds;
+    // A baseline from before session kinds were recorded passes as before, but says so: a block that drops the
+    // field must not read as a confirmed ordinary session.
+    if (k === undefined)
+      return { name, status: "PASS", alwaysShowDetail: true, detail: `${newest.name}: observed (no session kinds recorded)` };
     // Only an untyped (ordinary) session can show these tools; without one, say what rests on the static check.
-    if (k === undefined || (k.interactive ?? 0) > 0) return { name, status: "PASS", detail: `${newest.name}: observed` };
+    if ((k.interactive ?? 0) > 0) return { name, status: "PASS", detail: `${newest.name}: observed` };
     const scheduledOnly = (k.scheduled ?? 0) > 0 && !k.other && !k.unknown;
     const read = scheduledOnly
       ? "observed from scheduled-task sessions only"
       : "observed, but no ordinary session was confirmed among those read";
-    const staticOnly = Object.entries(SCHEDULED_SESSION_WITHHELD_TOOLS).flatMap(([srv, ts]) => ts.map((t) => `${srv}.${t}`));
-    return {
-      name,
-      status: "PASS",
-      alwaysShowDetail: true,
-      detail: `${newest.name}: ${read} — ${staticOnly.join(", ")} (and AskUserQuestion and the onboarding role picker) are asserted by sync's static check, not observed`,
-    };
+    // The static check proves the code path that offers a tool to an untyped session; whether its gate is on is the
+    // baseline's own gates row, so name the tools whose gate is off or unrecorded separately.
+    const withheld = Object.entries(SCHEDULED_SESSION_WITHHELD_TOOLS).flatMap(([srv, ts]) => ts.map((t) => ({ srv, t })));
+    const gated = withheld.filter(({ srv, t }) => withheldToolGateOn(newest.json, srv, t)).map(({ srv, t }) => `${srv}.${t}`);
+    const gateOff = withheld
+      .filter(({ srv, t }) => !withheldToolGateOn(newest.json, srv, t))
+      .map(({ srv, t }) => `${srv}.${t} (gate ${SCHEDULED_SESSION_WITHHELD_TOOL_GATES[`${srv}.${t}`]} off or unrecorded)`);
+    const parts = [
+      `${[...gated, "AskUserQuestion and the onboarding role picker"].join(", ")}: sync's static check asserts the code path, not observed`,
+      ...(gateOff.length ? [`${gateOff.join(", ")}: nothing says an ordinary session gets it`] : []),
+    ];
+    // The two observations classify sessions independently (the session record vs the scheduled-run spawn key); if
+    // they disagree on whether a scheduled task was read, one reader has drifted.
+    const spawnScheduled = (newest.json as { provenance?: { observedSpawnEnv?: { sessionKinds?: { scheduled?: number } } } } | null)
+      ?.provenance?.observedSpawnEnv?.sessionKinds?.scheduled;
+    if (spawnScheduled !== undefined && spawnScheduled > 0 !== (k.scheduled ?? 0) > 0)
+      return {
+        name,
+        status: "WARN",
+        detail: `${newest.name}: ${read}, but the spawn-env observation ${spawnScheduled > 0 ? "did" : "did not"} read a scheduled run — the two session-kind readers disagree; ${parts.join("; ")}`,
+      };
+    return { name, status: "PASS", alwaysShowDetail: true, detail: `${newest.name}: ${read} — ${parts.join("; ")}` };
   }
   const why =
     block === undefined

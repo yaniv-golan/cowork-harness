@@ -319,6 +319,22 @@ export const SCHEDULED_SESSION_WITHHELD_TOOLS: Readonly<Record<string, readonly 
   cowork: ["send_user_message"],
 };
 
+/** The gate a withheld tool ALSO needs before an ordinary session gets it, keyed `<server>.<tool>`, as its
+ *  `provenance.gates` row. The static check proves only the code path (`!sessionType && <gate config>`); whether the
+ *  gate is on is that row, so a scheduled read's missing tool reads as the session kind only while the row is on. */
+export const SCHEDULED_SESSION_WITHHELD_TOOL_GATES: Readonly<Record<string, string>> = {
+  "cowork.send_user_message": "sendUserMessageConfig:3045399524",
+};
+
+/** Whether an ordinary session on `baseline` would be offered a withheld tool, as far as gates say: true when the tool
+ *  needs no gate, else only when its `provenance.gates` row is `on: true`. A missing row is false. */
+export function withheldToolGateOn(baseline: unknown, server: string, tool: string): boolean {
+  const gate = SCHEDULED_SESSION_WITHHELD_TOOL_GATES[`${server}.${tool}`];
+  if (gate === undefined) return true;
+  const row = (baseline as { provenance?: { gates?: Record<string, { on?: unknown } | undefined> } } | null)?.provenance?.gates?.[gate];
+  return row?.on === true;
+}
+
 /** `provenance.desktopInitSurface` — the tool surface Desktop's own servers declared in real Cowork
  *  sessions of the synced release. STRICT at every level, so any key beyond these (a `cwd`, a raw server
  *  list, a frame count) fails validation. Enforced before sync writes it and over every committed baseline

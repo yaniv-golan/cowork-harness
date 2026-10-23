@@ -2,7 +2,7 @@
 // (stringify-compares each top key, printing whole subtrees on any nested change). Used by both the
 // standalone `diff <baseline-a> <baseline-b>` command and the refactored `sync --diff`.
 
-import { SCHEDULED_SESSION_WITHHELD_TOOLS } from "../types.js";
+import { SCHEDULED_SESSION_WITHHELD_TOOLS, withheldToolGateOn } from "../types.js";
 
 export type BaselineDiffEntry =
   | { path: string; kind: "scalar"; from: unknown; to: unknown; annotation: boolean }
@@ -95,7 +95,7 @@ function sessionKindsChange(mine: BaselineDiffEntry[], block: string): { line?: 
   return { line: `session kinds read changed (${describeKinds(from)} → ${describeKinds(to)}, other counts unchanged)`, handled: leaves };
 }
 const SCHEDULED_ONLY_NOTE =
-  "every session read was a scheduled task, which Desktop never offers it to, so this is not evidence of a removal; sync asserts the offer to an ordinary session statically";
+  "every session read was a scheduled task, which Desktop never offers it to, so this is not evidence of a removal; sync asserts the code path that offers it to an untyped session, and its gate is on in the new baseline's `provenance.gates`";
 
 type InitServer = { presence?: string; toolsAll?: string[]; toolsSome?: string[] };
 type InitBlock = { agentVersion?: string; appVersion?: string; observed?: boolean; servers?: Record<string, InitServer> };
@@ -121,8 +121,9 @@ function describeInitBlock(b: InitBlock): string {
  *  moved between `toolsAll` and `toolsSome` arrives as two array entries that only mean something together.
  *  Also handles first introduction, where the differ emits ONE whole-object `added` and never recurses.
  *  Entries under the block that none of this recognizes are returned in `rest`, so they still render
- *  generically — never silently dropped. */
-export function renderInitSurfaceEntries(entries: BaselineDiffEntry[]): { lines: string[]; rest: BaselineDiffEntry[] } {
+ *  generically — never silently dropped. `next` is the NEW baseline: a withheld tool's absence reads as the session
+ *  kind only while the gate it also needs is on there; without `next`, or with the gate off, it stays DISAPPEARED. */
+export function renderInitSurfaceEntries(entries: BaselineDiffEntry[], next?: unknown): { lines: string[]; rest: BaselineDiffEntry[] } {
   const mine = entries.filter((e) => e.path === INIT || e.path.startsWith(`${INIT}.`));
   const rest = entries.filter((e) => !mine.includes(e));
   const lines: string[] = [];
@@ -200,7 +201,9 @@ export function renderInitSurfaceEntries(entries: BaselineDiffEntry[]): { lines:
     const toSome = moved(m.rmAll, m.addSome);
     const appeared = [...m.addAll, ...m.addSome].filter((t) => !toAll.includes(t) && !toSome.includes(t));
     const gone = [...m.rmAll, ...m.rmSome].filter((t) => !toAll.includes(t) && !toSome.includes(t));
-    const withheld = withheldByKind ? gone.filter((t) => (SCHEDULED_SESSION_WITHHELD_TOOLS[server] ?? []).includes(t)) : [];
+    const withheld = withheldByKind
+      ? gone.filter((t) => (SCHEDULED_SESSION_WITHHELD_TOOLS[server] ?? []).includes(t) && withheldToolGateOn(next, server, t))
+      : [];
     const disappeared = gone.filter((t) => !withheld.includes(t));
     if (appeared.length) lines.push(`- Desktop server \`${server}\`: tool(s) APPEARED: ${code(appeared.sort())}`);
     if (disappeared.length) lines.push(`- Desktop server \`${server}\`: tool(s) DISAPPEARED: ${code(disappeared.sort())}`);
@@ -281,7 +284,9 @@ export function renderObservedSpawnEnvEntries(entries: BaselineDiffEntry[]): { l
   const appeared = [...all.added, ...some.added].filter((k) => !moved.has(k) && !fromKind.includes(k)).sort();
   const disappeared = [...all.removed, ...some.removed].filter((k) => !moved.has(k)).sort();
   if (fromKind.length)
-    lines.push(`- Desktop host-loop spawn env: ${code(fromKind)} now in every session because every session read was a scheduled task`);
+    lines.push(
+      `- Desktop host-loop spawn env: ${code(fromKind)} now in every session because every session read was a scheduled task (a dump counts as scheduled by carrying this key, so the line is circular here; sync's S6g check is what pins the key to scheduled runs)`,
+    );
   if (appeared.length) lines.push(`- Desktop host-loop spawn env: key(s) APPEARED: ${code(appeared)}`);
   if (disappeared.length) lines.push(`- Desktop host-loop spawn env: key(s) DISAPPEARED: ${code(disappeared)}`);
   const mix = "(sensitive to the mix of session kinds read — a prompt to look, not evidence)";
@@ -359,8 +364,8 @@ export function renderCloudEntries(entries: BaselineDiffEntry[]): { lines: strin
   return { lines, rest: [...rest, ...unhandled] };
 }
 
-export function renderChangelog(allEntries: BaselineDiffEntry[]): string {
-  const { lines: initOnly, rest: afterInit } = renderInitSurfaceEntries(allEntries);
+export function renderChangelog(allEntries: BaselineDiffEntry[], next?: unknown): string {
+  const { lines: initOnly, rest: afterInit } = renderInitSurfaceEntries(allEntries, next);
   const { lines: obsLines, rest: afterObs } = renderObservedSpawnEnvEntries(afterInit);
   const { lines: cloudLines, rest: entries } = renderCloudEntries(afterObs);
   const initLines = [...initOnly, ...obsLines, ...cloudLines];
@@ -468,10 +473,10 @@ export function renderChangelog(allEntries: BaselineDiffEntry[]): string {
  *  entry at its exact leaf path, replacing the old one-level `diff()` which printed the WHOLE subtree
  *  under any top-level key that changed (so a single gate flip three levels deep used to dump all of
  *  `provenance`). No annotation/known-field prose here — that's `renderChangelog`'s job. */
-export function formatDiffLines(allEntries: BaselineDiffEntry[]): string[] {
+export function formatDiffLines(allEntries: BaselineDiffEntry[], next?: unknown): string[] {
   // The init-surface block needs block-level context (see renderInitSurfaceEntries) — without it an
   // unobserved re-sync prints as three bare server removals here too.
-  const { lines: initOnly, rest: afterInit } = renderInitSurfaceEntries(allEntries);
+  const { lines: initOnly, rest: afterInit } = renderInitSurfaceEntries(allEntries, next);
   const { lines: obsLines, rest: afterObs } = renderObservedSpawnEnvEntries(afterInit);
   const { lines: cloudLines, rest: entries } = renderCloudEntries(afterObs);
   const initLines = [...initOnly, ...obsLines, ...cloudLines];
