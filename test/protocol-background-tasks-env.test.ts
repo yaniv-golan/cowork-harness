@@ -23,7 +23,7 @@ describe("protocol applies the background-tasks switch from the baseline", () =>
 
   // Literal counts, not "equals the baseline's value" (which the helper reads, so it could not fail): a new baseline
   // that pins another value, or stops pinning it, turns this red.
-  it(`every committed baseline: 46 pin "1", and only ${KEYLESS} pins none`, () => {
+  it(`every committed baseline: 47 pin "1", and only ${KEYLESS} pins none`, () => {
     const dir = join(import.meta.dirname, "..", "baselines");
     let pinned = 0;
     const absent: string[] = [];
@@ -34,7 +34,7 @@ describe("protocol applies the background-tasks switch from the baseline", () =>
       else if (v === undefined) absent.push(f.replace(/\.json$/, ""));
       else throw new Error(`${f}: unexpected value ${v}`);
     }
-    expect({ pinned, absent }).toEqual({ pinned: 46, absent: [KEYLESS] });
+    expect({ pinned, absent }).toEqual({ pinned: 47, absent: [KEYLESS] });
   });
 
   it("a baseline with no spawn block does not throw and yields no key", () => {
