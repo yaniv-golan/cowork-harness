@@ -6,17 +6,19 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.11.0] - 2026-10-23
+
 ### Upgrade notes
 
 - **`tool_called` with `count: {max: 0}` (or `{min: 0, max: 0}`) now means never called.** Search your scenarios AND committed cassettes for
-  `max: 0` under `tool_called`, and confirm "never called" is what each one meant. Such a row used to require at least
-  one call and so could never pass. It is now a negative check, graded exactly as `tool_not_called` with the same fields:
-  that key's tier refusal (a literal `Bash` at `hostloop` is refused at load) and its redaction rules apply, and a
-  committed cassette's verdict for it can change from FAIL to PASS on replay.
+  `max: 0` under `tool_called`, and confirm "never called" is what each one meant. Both spellings are now a negative
+  check, graded exactly as `tool_not_called` with the same fields: that key's tier refusal (a literal `Bash` at
+  `hostloop` is refused at load) and its redaction rules apply. A lone `{max: 0}` used to require at least one call and
+  so could never pass; a committed cassette's verdict for it can change from FAIL to PASS on replay. `{min: 0, max: 0}`
+  already passed on zero calls; what is new for it is the load-time tier refusal.
 - **`semantic_matches` with a `min_pass` above the number of rubric claims now fails to load** (exit 2 on `run`,
   `record <file>`, `eval`, `hillclimb run`, `verify-run` and `regrade`; a broken file on `record <dir/>`, exit 1;
   a `lint` ERROR). It could never pass, and spent a judge call first.
-- `schema/scenario.schema.json`'s validation rules are unchanged; description text is updated.
 - **Cassettes: re-stamp or re-record one recorded through `baseline: latest`.** `latest` moves to `desktop-3.1623.4`
   (agent 2.1.308; see Changed), so such a cassette reports `[stale] baseline moved 2.42304.0 → 3.1623.4 since record
   — re-record`. Re-stamping `fingerprint.baseline` clears it. A re-stamped `container`, `microvm` or `hostloop`
@@ -24,8 +26,7 @@ All notable changes to this project are documented here. The format is based on
 - **A `protocol` scenario that relies on a background shell (Bash `run_in_background`) now fails, as it would in
   Cowork.** `protocol` now sets Cowork's background-tasks switch (see Changed), so the agent offers no
   `run_in_background` and runs no background task. Run the work in the foreground. Cassettes: no re-record needed.
-  A cassette's fingerprint does not cover the spawn env, so the bundled `protocol` cassette does not go stale; it was
-  recorded before this change, and its frozen tool inventory does not show the parameter either way.
+  A cassette's fingerprint does not cover the spawn env, so the bundled `protocol` cassette does not go stale.
 
 ### Changed
 
@@ -47,13 +48,14 @@ All notable changes to this project are documented here. The format is based on
   judge pre-pass refuses it too, so a copy re-run from a cassette (`--rerecord-stale --from-embedded`) calls no judge.
   An older cassette carrying one, or a `tool_called` `count.min` above `count.max`, replays with a warning instead of
   being refused: the `tool_called` row grades FAIL, and the `semantic_matches` row stays skipped on replay (live-only)
-  as before.
+  as before. `schema/scenario.schema.json`'s validation rules are unchanged (description text only), so an editor
+  validating against the schema alone does not flag a `min_pass` above the rubric; the loader and `lint` do.
 - **`latest` moves to `desktop-3.1623.4`** (agent **2.1.308**, was 2.1.299). The Cowork system prompt and the egress
   allowlist are unchanged from `desktop-2.42304.0`. The tool lists an ordinary session receives are unchanged by
   inference: the scheduled-task read lacks exactly the tools Desktop withholds from a scheduled task (below). The CI recipe's agent pin
   (`V=`) moves to 2.1.308.
   - **Spawn env:** Desktop now sets `CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS` to an empty string on every spawn, and the
-    harness does the same. `CLAUDE_CODE_DESKTOP_SKILLS_PLUGIN_DIR` is recorded as a Desktop key the harness does not
+    harness does the same on `container`, `microvm` and `hostloop` (through the baseline's `spawn.env`). `CLAUDE_CODE_DESKTOP_SKILLS_PLUGIN_DIR` is recorded as a Desktop key the harness does not
     model. A value for either key in your shell environment is dropped before the agent starts (on `hostloop` and
     `protocol`, the tiers that inherit it), as for the other Desktop-only keys.
   - **Observed from a scheduled task.** The only local Cowork session available on this Desktop was a scheduled
@@ -65,7 +67,10 @@ All notable changes to this project are documented here. The format is based on
   administrator marks read-only. `sync` now refuses the write unless that list provably stays empty outside
   third-party deployments, so a first-party sub-agent's prompt is unchanged.
 - **The runbook asks for a local scheduled task before `sync`** when an interactive local task is not offered, and
-  `npm run preflight` passes such a baseline while naming the tools only the static check covers.
+  `sync`'s and preflight's no-session messages say the same. `npm run preflight` passes such a baseline while naming
+  the tools only the static check covers, says when a baseline records no session kinds, and warns when the
+  init-surface and spawn-env observations disagree on whether a scheduled task was read. When every session read was
+  a scheduled task, `sync` no longer notes `CLAUDE_CODE_HOST_SCHEDULED_RUN` as a key every session carries.
 
 ### Added
 
@@ -75,7 +80,7 @@ All notable changes to this project are documented here. The format is based on
   `tool-input-regex-redactable` also cover the `count: {max: 0}` spelling.
 - **Baselines record which kind of local session was observed.** `provenance.desktopInitSurface` and
   `provenance.observedSpawnEnv` gain an optional `sessionKinds` count (`interactive`, `scheduled`, `other`,
-  `unknown`). `sync --diff` prints it, and when the diff shows the read becoming scheduled-only it reports the tools
+  `unknown`). `sync --diff` and `cowork-harness diff <a> <b>` print it, and when the diff shows the read becoming scheduled-only it reports the tools
   and env key such a session lacks or adds as "not observed" instead of as a change. A missing `send_user_message`
   is reported that way only while the new baseline records its gate as on.
 - **`sync` checks what a scheduled observation cannot show.** It refuses the write when Desktop no longer types a
