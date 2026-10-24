@@ -601,6 +601,26 @@ agree. Modelling one arm would be faithful for the sessions that trip it and sil
 so what a session should be able to *declare* about its own Desktop state — rather than which half to
 hard-code — is the decision to make first.
 
+### MCP tools that need a person — not modeled
+
+**Real Cowork behaviour (read in asar 3.6556.2):** an MCP tool can mark itself as needing a person
+(`_meta["anthropic/requiresUserInteraction"]: true`). For such a tool, on a server that is not one of Desktop's own,
+Desktop's permission check shows the approval card without the "always allow" choices; that part predates
+Desktop 3.6556.1. From 3.6556.1, when the turn is unattended (a scheduled task that no person has continued), the
+call is refused at once, with no card, and the agent is told that nobody is present to approve it, that retries in
+this run will fail, and that it can be retried in a session a person is attending.
+
+**What the harness does:** its permission check does not read the mark (its own `remote-devices` stub sets the mark
+on one tool but never reads it). Such a tool is handled like any other: a
+scripted permission answer decides it, and an unscripted call falls to the permission-parity default (allowed with an
+`allow-unscripted` finding under `cowork` parity, denied under `strict`). See
+[scenario.md](scenario.md#tool-permissions).
+
+**What this means for a scenario.** An unscripted call to such a tool records a permissive auto-allow, which fails
+the verdict by default, so the gap shows only when a scenario scripts an allow for the tool or asserts
+`allow_permissive_auto_allow: true`. Either way the tool runs here where Cowork, in a scheduled task, would refuse it.
+To test the refusal path, script a deny for the tool.
+
 ---
 
 ## HIPAA restriction is a process-global latch
