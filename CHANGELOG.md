@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.12.0] - 2026-10-25
+
 ### Upgrade notes
 
 - **Cassettes: re-stamp or re-record one recorded through `baseline: latest`.** `latest` moves to `desktop-3.6556.2`
