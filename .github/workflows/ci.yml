@@ -580,7 +580,9 @@ jobs:
   # `--experimental-permission` (22.0–22.12) by feature detection: each branch must be exercised where it applies.
   metric-runtimes:
     name: command-metric runtimes (python 3.9, node 22.12)
-    runs-on: ubuntu-latest
+    # Pinned: setup-python has no Python 3.9 build for Ubuntu 26.04 (today's ubuntu-latest), and this job exists to
+    # keep the declared 3.9 floor tested.
+    runs-on: ubuntu-24.04
     needs: build
     timeout-minutes: 15
     permissions:
