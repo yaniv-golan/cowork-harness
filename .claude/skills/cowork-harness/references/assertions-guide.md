@@ -1,6 +1,6 @@
 # Assertions guide
 
-Tracks `cowork-harness 4.11.0` (baseline `desktop-3.6556.2`). Read it when choosing assertion keys: the two orthogonal axes and the goal → key map. The full catalog starts at `assertion-catalog.md`, which indexes the per-family files that hold every key's row.
+Tracks `cowork-harness 4.12.0` (baseline `desktop-3.6556.2`). Read it when choosing assertion keys: the two orthogonal axes and the goal → key map. The full catalog starts at `assertion-catalog.md`, which indexes the per-family files that hold every key's row.
 
 ### Assertions: two orthogonal axes
 
