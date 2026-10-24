@@ -103,4 +103,42 @@ describe("checkScheduledSessionFacts — a second site beside the pinned one", (
   it("a second frame-artifacts assignment flags", () => {
     expect(add(OTHER, "e.frameArtifactsEnabled=!0;")).toMatch(/assigned at 2 sites, only 1 the gated scheduled clear/);
   });
+
+  // Desktop 3.6556.1: typed-artifact tools (a remote server the init surface never reads) go only to an untyped,
+  // unscheduled session. Required once the bundle builds a frame-tools section; absent before that release.
+  const FRAME =
+    "let ce=f&&a.sessionType===void 0&&(a.scheduledTaskId??r.getActiveSession(i)?.scheduledTaskId)===void 0,le=ce?NS.qo():[],ue=ce&&1;" +
+    "build({frameToolsSection:le.length>0?Df(le):void 0,hasFrameTools:ue});" +
+    'var HTr="claude-artifacts";';
+  const ARM = "&&(a.scheduledTaskId??r.getActiveSession(i)?.scheduledTaskId)===void 0";
+  it("3.6556.1: the frame-tools predicate in its pinned shape has no flags", () => {
+    expect(checkScheduledSessionFacts(files((s) => s + FRAME))).toEqual([]);
+  });
+  it("3.6556.1: the predicate losing its scheduledTaskId arm flags (scheduled sessions would get the tools)", () => {
+    const f = checkScheduledSessionFacts(files((s) => s + FRAME.replace(ARM, "")));
+    expect(f).toHaveLength(1);
+    expect(f[0]).toMatch(/scheduled frame tools anchor missing/);
+  });
+  it("3.6556.1: a second copy of the predicate flags", () => {
+    const f = checkScheduledSessionFacts(files((s) => s + FRAME + FRAME));
+    expect(f).toHaveLength(1);
+    expect(f[0]).toMatch(/scheduled frame tools anchor missing/);
+  });
+  // Two dating signals, so a rename of the prompt key cannot switch the check off.
+  it("3.6556.1: the prompt key renamed, predicate intact → no flags (the server literal keeps the check on)", () => {
+    expect(checkScheduledSessionFacts(files((s) => s + FRAME.replace("frameToolsSection:", "frameToolSection:")))).toEqual([]);
+  });
+  it("3.6556.1: the prompt key renamed AND the scheduledTaskId arm dropped → 1 flag", () => {
+    const f = checkScheduledSessionFacts(files((s) => s + FRAME.replace("frameToolsSection:", "frameToolSection:").replace(ARM, "")));
+    expect(f).toHaveLength(1);
+    expect(f[0]).toMatch(/scheduled frame tools anchor missing/);
+  });
+  it("3.6556.1: the server literal alone (no prompt key) still requires the predicate", () => {
+    const noKey = FRAME.replace("frameToolsSection:", "frameToolSection:");
+    expect(checkScheduledSessionFacts(files((s) => s + noKey.replace(ARM, "")))).toHaveLength(1);
+    expect(checkScheduledSessionFacts(files((s) => s + noKey.replace('var HTr="claude-artifacts";', "").replace(ARM, "")))).toEqual([]);
+  });
+  it("before 3.6556.1 (no frame-tools section) the predicate is not required", () => {
+    expect(checkScheduledSessionFacts(files())).toEqual([]);
+  });
 });

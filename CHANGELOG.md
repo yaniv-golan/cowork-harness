@@ -6,6 +6,36 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **Cassettes: re-stamp or re-record one recorded through `baseline: latest`.** `latest` moves to `desktop-3.6556.2`
+  (see Changed), so such a cassette reports `[stale] baseline moved 3.1623.4 → 3.6556.2 since record — re-record`.
+  Re-stamping `fingerprint.baseline` clears it. The agent is unchanged (2.1.308): a cassette recorded on it gets no
+  `agent-version:` note from the re-stamp, and one recorded on an earlier agent keeps the note it already had. The
+  bundled cassettes are re-stamped; they were recorded on 2.1.299 and keep that note.
+
+### Changed
+
+- **`latest` moves to `desktop-3.6556.2`** (agent **2.1.308**, unchanged). The Cowork system prompt and the egress
+  allowlist are unchanged from `desktop-3.1623.4`. Observed, as before, from a local scheduled task. Desktop 3.6556.1
+  was not synced separately: no Cowork-related difference between it and 3.6556.2 was found.
+  - **Spawn env:** Desktop now sets `CLAUDE_CODE_ATTRIBUTION_PROJECT` when exactly one claude.ai Project is selected
+    on a first-party deployment. The session the harness models selects none, so the harness does not set it.
+  - **Artifact permission checks (not modelled):** Desktop's Artifact path hook now also covers the tools of the
+    `claude-artifacts` MCP server. For that server's file publishing, Desktop records each file's identity before
+    the approval card and re-checks it after, including its content hash, and refuses files whose drive cannot
+    identify them. `sync` checks how the recorded identity reaches the permission check, the widened matcher, and
+    that refusal, and refuses a build whose permission wrapper loses the capture while the hook still covers that
+    server's tools; it does not check the re-check itself (the hash, how the file is reopened). In a build with the
+    capture, it also requires the existing refusal of an approval whose arguments differ from the request.
+  - **Cassettes:** see the Upgrade note.
+- **`sync` requires the permission check's approval-window refusal in every build that has the check.** The
+  refusal of a file that changed between the approval card and the answer has been in every such build since Desktop
+  1.32352.0, but `sync` did not check for it until now; a build without it is refused.
+- **`sync` checks that the typed-artifact tools stay out of scheduled tasks.** They come from a server the
+  init-surface read never records, so the Desktop code that withholds them from a scheduled task is the only place
+  that difference can be checked.
+
 ## [4.11.0] - 2026-10-23
 
 ### Upgrade notes
