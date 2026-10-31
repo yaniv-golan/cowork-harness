@@ -4098,6 +4098,13 @@ describe("checkPathHookFacts — the delegate hook body and the 4.4212.0 launche
       /not in the canUseTool install's function/,
     ],
     [
+      "a second launcher call before the install",
+      {
+        consuming: (c) => c.replace("let ke=Oe.viaLauncher;", "let ke=Oe.viaLauncher;let Pe=await L.a({binaryPath:h,env:{}});"),
+      },
+      /host CLI launcher is called 2 times before the canUseTool install/,
+    ],
+    [
       "the inner await dropped",
       { consuming: (c) => c.replace("(ke?void 0:await Xt(", "(ke?void 0:Xt(") },
       /link `Xt` is an async function but is not awaited/,
@@ -4118,6 +4125,21 @@ describe("checkPathHookFacts — the delegate hook body and the 4.4212.0 launche
       /no longer takes a 5th parameter defaulting to true/,
     ],
     ["the launcher holder given a writer", { launcher: (c) => c + "function w(x){r=x}" }, /path holder `r` is written 1 time/],
+    [
+      "the launcher holder written by array destructuring",
+      { launcher: (c) => c + "function w(x){[r]=x}" },
+      /path holder `r` is written 1 time/,
+    ],
+    [
+      "the launcher holder written by object destructuring",
+      { launcher: (c) => c + "function w(x){({path:r}=x)}" },
+      /path holder `r` is written 1 time/,
+    ],
+    [
+      "the launcher holder written by shorthand object destructuring, beside another name",
+      { launcher: (c) => c + "function w(x){({q,r}=x)}" },
+      /path holder `r` is written 1 time/,
+    ],
     [
       "the init chunk exporting initSimulatorToolchainHost",
       {
@@ -4209,6 +4231,36 @@ describe("checkPathHookFacts — the delegate hook body and the 4.4212.0 launche
       consuming: (c) => c.replace("(ke?void 0:await Xt(g,S,k.decisionReason,j,f))", "await Xt(g,S,k.decisionReason,j,f)"),
     });
     expect(checkPathHookFacts(f)).toEqual([expect.stringMatching(/takes 5 arguments but no chain link is conditional/)]);
+  });
+  // A regex literal holding a quote at the top of the delegate desyncs the literal-aware walks. Whatever the scan then
+  // reads, it must flag (fail closed), never pass.
+  it("a regex literal with a quote at the top of the delegate fails closed", () => {
+    const f = launcherHookFiles({ consuming: (c) => c.replace("async function Ye(g){", "async function Ye(g){const zr=/[\"']/;") });
+    expect(f.get("index.chunk-CS-g0Skn.js")).toContain("const zr=/");
+    const flags = checkPathHookFacts(f);
+    expect(flags.length, "a desynced scan passed").toBeGreaterThan(0);
+  });
+  it("the delegate defined in another chunk → the hook body is unreadable, and flags", () => {
+    const f = launcherHookFiles();
+    const cs = f.get("index.chunk-CS-g0Skn.js")!;
+    const at = cs.indexOf("async function Ye(g){");
+    expect(at).toBeGreaterThan(0);
+    f.set("index.chunk-CS-g0Skn.js", cs.slice(0, at));
+    f.set("index.chunk-delegate.js", cs.slice(at));
+    const flags = checkPathHookFacts(f);
+    expect(flags.join("\n")).toMatch(/hook body/);
+  });
+  it("the launcher call resolving to a REAL exported function of another chunk → no launcher call, and flags", () => {
+    const f = launcherHookFiles({
+      consuming: (c) => c.replace('var L=require("./index.chunk-launch.js");', 'var L=require("./index.chunk-decoy.js");'),
+    });
+    f.set(
+      "index.chunk-decoy.js",
+      'async function l(e){return{...e,viaLauncher:!1}}Object.defineProperty(exports,"a",{enumerable:!0,get:function(){return l}});',
+    );
+    const flags = checkPathHookFacts(f);
+    expect(flags, flags.join("\n")).toHaveLength(1);
+    expect(flags[0]).toMatch(/no call to the host CLI launcher precedes the canUseTool install/);
   });
   it("unwrapConditionalLink unwraps only the exact shape", () => {
     expect(unwrapConditionalLink("(ke?void 0:await Ch(e,n))")).toEqual({ guard: "ke", call: "await Ch(e,n)" });

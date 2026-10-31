@@ -1599,9 +1599,16 @@ export function hostCliLauncherInertDefects(files: Map<string, string>): string[
     );
   else {
     const writes = [...L.chunk.matchAll(new RegExp(`(?<![\\w$.])${reEsc(holder)}(?:=(?!=)|\\?\\?=|\\|\\|=|&&=)`, "g"))];
-    if (writes.length !== 1 || !L.chunk.startsWith(`${holder}=null`, writes[0]!.index!))
+    // A destructuring assignment writes the holder too: `[…,<h>,…]=x` or `({…,k:<h>,…}=x)` / `({<h>}=x)`. The element
+    // lists exclude brackets, `=` and `;`, so a nested pattern or a default value is not read here (it fails closed only
+    // if it also matches below).
+    const destructured = [
+      ...L.chunk.matchAll(new RegExp(`\\[(?:[^\\[\\]=;]*,)?\\s*(?:\\.\\.\\.)?${reEsc(holder)}\\s*(?:,[^\\[\\]=;]*)?\\]=(?!=)`, "g")),
+      ...L.chunk.matchAll(new RegExp(`\\{(?:[^{}=;]*,)?\\s*(?:[\\w$]+:)?(?:\\.\\.\\.)?${reEsc(holder)}\\s*(?:,[^{}=;]*)?\\}=(?!=)`, "g")),
+    ].length;
+    if (writes.length !== 1 || destructured || !L.chunk.startsWith(`${holder}=null`, writes[0]!.index!))
       out.push(
-        `the launcher's path holder \`${holder}\` is written ${writes.length - 1} time(s) beyond its \`=null\` declaration — the launcher may now be live, so a link skipped under it may not run`,
+        `the launcher's path holder \`${holder}\` is written ${writes.length - 1 + destructured} time(s) beyond its \`=null\` declaration — the launcher may now be live, so a link skipped under it may not run`,
       );
   }
   const init = L.chunk.match(/require\("\.\/([^"]+)"\)\)\)?\.then\(\(?([\w$]+)\)?=>\2\.initSimulatorToolchainHost/);
@@ -2823,9 +2830,12 @@ function launcherGuardDefect(chunk: string, files: Map<string, string>, g: strin
     const r = resolveNamespaceRef(m[2]!, chunk, files);
     return !!r && r.chunk === L.chunk && r.local === L.local;
   });
-  const call = calls[calls.length - 1];
-  if (installAt < 0 || !call)
+  if (installAt < 0 || calls.length === 0)
     return `a chain link is skipped under \`${g}\`, but no call to the host CLI launcher precedes the canUseTool install`;
+  // Exactly one: with two, which one the flag reads is a question this walk would answer by position alone.
+  if (calls.length !== 1)
+    return `the host CLI launcher is called ${calls.length} times before the canUseTool install (expected exactly once) — read which result the flag comes from`;
+  const call = calls[0]!;
   // One function: the brace depth (literal-aware) never drops below where the launcher call sits.
   let depth = 0;
   for (let i = call.index!; i < installAt;) {
