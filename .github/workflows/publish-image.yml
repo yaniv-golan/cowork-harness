@@ -47,6 +47,9 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-24.04-arm # linux/arm64 native build, matching Cowork's guest architecture
+    # The CI-success poll waits up to ~30 min by design; the image builds take a few more. A hung step fails
+    # the job here instead of holding the runner for GitHub's 6-hour default.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

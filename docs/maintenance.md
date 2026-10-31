@@ -632,6 +632,7 @@ The sync extractor currently targets macOS paths (`~/Library/Application Support
 > **Scope:** this section is a short pointer, not the runbook. The full release procedure (version
 > locations, the branch → PR → tag → publish flow, the checklist) lives in [RELEASING.md](../RELEASING.md).
 > The notes here only cover how a *parity sync* relates to versioning.
+> If a release run hits its timeout after the npm upload, see "A release run that timed out" in RELEASING.md.
 
 Versioning follows [SemVer](https://semver.org/); as of 1.0.0 a backwards-incompatible change to a
 covered surface (baseline-schema or CLI-contract changes count) is a major bump. A parity-baseline *content* update (a new

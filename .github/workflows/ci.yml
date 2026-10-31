@@ -213,6 +213,7 @@ jobs:
   action-self-test:
     name: "Action self-test (uses: ./)"
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: build
     permissions:
       contents: read
@@ -324,6 +325,7 @@ jobs:
   python:
     name: pytest helper lane (-m 'not cowork')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: build
     permissions:
       contents: read
@@ -526,6 +528,7 @@ jobs:
   parity-drift:
     name: parity drift vs upstream Desktop
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: build
     permissions:
       contents: read
@@ -655,6 +658,7 @@ jobs:
   ci-green:
     name: typecheck · test · build
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     needs: [build, test, floor, image-recipe, metric-runtimes]
     if: ${{ always() }}
     permissions:
