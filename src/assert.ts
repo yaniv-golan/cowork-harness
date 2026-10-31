@@ -1762,7 +1762,13 @@ export const HOOK_DECISION_RULES: ReadonlyArray<{ rule: string; anchor: string }
   },
   {
     rule: "an eligible hook's failure (non-blocking error) or timeout (cancelled, not user-aborted) becomes a block",
-    anchor: 'aborted!==!0?"timed out":',
+    anchor: '?"timed out":e.outcome==="non_blocking_error"?"failed":void 0',
+  },
+  // 2.1.309: an aborted hook that was stopped after its own timeout also counts as timed out. The harness already reads
+  // every `cancelled` frame as a possible block (`isFailedFrame`), so this narrows the agent's exemption, not the reader.
+  {
+    rule: "a cancelled hook stopped after its own timeout counts as timed out even when the turn was aborted",
+    anchor: 'stoppedAfterItsTimeout===!0)?"timed out":',
   },
   {
     rule: "the block's stderr wording, for a failure and a timeout",
