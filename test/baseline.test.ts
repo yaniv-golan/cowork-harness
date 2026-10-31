@@ -65,7 +65,12 @@ import { hostLoopCwds } from "../src/runtime/hostloop.js";
 import { fidelityOmitted } from "../src/run/execute.js";
 import { buildJudgedDocument } from "../src/assert.js";
 import { renderPrompts } from "../src/prompt.js";
-import { checkPathHookFacts, checkScheduledSessionFacts, checkVmAgentStagingFacts } from "../src/sync/cowork-sync.js";
+import {
+  checkPathHookFacts,
+  checkScheduledSessionFacts,
+  checkVmAgentStagingFacts,
+  unwrapConditionalLink,
+} from "../src/sync/cowork-sync.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../src/prompt.js";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -557,6 +562,8 @@ describe.skipIf(!ASAR_BACKUPS)("checkPathHookFacts oracle over saved Desktop asa
     ["3.1623.4", true],
     ["3.6556.1", true],
     ["3.6556.2", true],
+    ["4.29.0", true],
+    ["4.4212.0", true],
   ])("%s: clean = %s", (version, clean) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
     expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
@@ -3864,6 +3871,215 @@ function pathHookFiles(mut: Partial<Record<"defining" | "consuming", (s: string)
   ]);
 }
 
+// Desktop 3.6556.1 capture-lookup install (see the capture tests below), hoisted so the 4.4212.0 fixture builds on it.
+const captureInstall = () =>
+  // The server name resolves ACROSS chunks, through a `require` binding, as on the real asar.
+  'const q=require("./index.chunk-NS.js");var eh=RegExp(`^(?:Artifact[A-Za-z]*|mcp__${q.EO}__.+)$`);' +
+  "function other(e){let Ue=new Map;Ue.set(e.tool_use_id,1);Ue.set(e.tool_use_id,2);return Ue}" +
+  'async function Qm(c,f){return c.length===f.length?void 0:"files"}' +
+  `async function ss(e,n,r,i){if(e!=="Artifact"&&!e.startsWith("mcp__claude-artifacts__"))return null;const s=async x=>x;` +
+  `const u=async x=>x&&x.updatedInput&&x.updatedInput!==n?{behavior:"deny",message:"updatedInput differs from the request"}:x;` +
+  `if(String(n.file_path).startsWith("/sessions"))return{vmPathDeny:{behavior:"deny",message:"is a VM path. In this session the Artifact tool publishes from the host filesystem"},finish:s};` +
+  `if(n.dev===0)return{vmPathDeny:{behavior:"deny",message:"is on a drive that gives files no stable identity"},finish:s};` +
+  `if(n.files)return{finish:async x=>(await Qm(i??[],n.files))?{behavior:"deny",message:"source changed or unverifiable across the approval window"}:u(x)};` +
+  `const f=await stat(n.file_path);return{finish:async x=>x&&f?u(x):{behavior:"deny",message:"changed across the approval window"}}}` +
+  "let Ue=new Map;e.hooks={...e.hooks,PreToolUse:[{matcher:eh.source,hooks:[async e=>{const c=[];" +
+  "Ue.set(e.tool_use_id,c);for(let k of Ue.keys()){if(Ue.size<=16)break;Ue.delete(k)}return{}}]}]};" +
+  `const Se=e.canUseTool;Se&&(e.canUseTool=async(g,S,k)=>{let i=Ue.get(k.toolUseID);Ue.delete(k.toolUseID);` +
+  `const a=await ss(g,S,d,i);` +
+  `if(a?.vmPathDeny)return a.vmPathDeny;` +
+  `const o=xe(g,S)??await Xt(g,S,k.decisionReason,j,f)??Qt(g,S,k.decisionReason,n)??await Se(g,S,k);` +
+  `return a===null?o:a.finish(o)});`;
+const NS_CHUNK = 'var HTr="claude-artifacts";Object.defineProperty(exports,"EO",{enumerable:!0,get:function(){return HTr}});';
+/** The inline hook body of pathHookFiles, moved into a delegate the way real builds emit it since 1.32352.0:
+ *  `hooks:[async g=>{try{return await Ye(g)}catch(n){…}}]` and `async function Ye(g){…}` elsewhere in the chunk. */
+function toDelegateHook(consuming: string): string {
+  const open = "hooks:[async g=>{";
+  const close = '"}]}],';
+  const at = consuming.indexOf(open);
+  const end = consuming.indexOf(close, at);
+  const body = consuming.slice(at + open.length, end + 1);
+  return (
+    consuming.slice(0, at) +
+    'hooks:[async g=>{try{return await Ye(g)}catch(n){return{decision:"block",reason:"This path could not be checked"}}}]}],' +
+    consuming.slice(end + close.length) +
+    `async function Ye(g){${body}}`
+  );
+}
+
+/** Desktop 4.4212.0: the launcher-conditional link `(ke?void 0:await Xt(…))`, its pre-pass pairing (`ss(…,!ke)`, 5th
+ *  param defaulting to `!0`), the launcher binding (`let ke=Oe.viaLauncher` from the launcher call), the inert launcher
+ *  chunk, and its lazy init chunk with no exports. */
+const LAUNCHER_CHUNK =
+  'const e=require("./index.chunk-rt.js"),t=require("./index.chunk-util.js");var n=e.r({HOST_CLI_LAUNCHER_NOTE_ENV:()=>s,spawnThroughHostCliLauncher:()=>l}),r=null,i;' +
+  "function a(){return r!==null&&r.stillWanted()?r.path:null}" +
+  'function o(){return i??=t.LK(()=>Promise.resolve().then(()=>require("./index.chunk-init.js"))).then(e=>e.initSimulatorToolchainHost?.()).catch(()=>{i=void 0}),i}' +
+  'var s="CLAUDE_HOST_CLI_LAUNCHER_NOTE";async function l(e){await o();let t=a();return t===null?{...e,viaLauncher:!1}:{binaryPath:t,env:e.env,viaLauncher:!0}}' +
+  'Object.defineProperty(exports,"a",{enumerable:!0,get:function(){return l}}),Object.defineProperty(exports,"i",{enumerable:!0,get:function(){return n}});';
+const INIT_CHUNK = '"use strict";try{(function(){})()}catch{}';
+function launcherHookFiles(
+  mut: Partial<Record<"consuming" | "launcher" | "init", (s: string) => string>> = {},
+  delegate = true,
+): Map<string, string> {
+  const base = pathHookFiles({
+    consuming: (c) => {
+      let x = c.replace(/const Se=e\.canUseTool;[\s\S]*$/, () => captureInstall());
+      if (delegate) x = toDelegateHook(x);
+      x = x
+        .replace("async function ss(e,n,r,i){", "async function ss(e,n,r,i,a=!0){")
+        .replace("const a=await ss(g,S,d,i);", "const a=await ss(g,S,d,i,!ke);")
+        .replace("??await Xt(g,S,k.decisionReason,j,f)??", "??(ke?void 0:await Xt(g,S,k.decisionReason,j,f))??")
+        .replace(
+          "const Se=e.canUseTool;",
+          'var L=require("./index.chunk-launch.js");let Oe=await L.a({binaryPath:h,env:e.env??{}});let ke=Oe.viaLauncher;const Se=e.canUseTool;',
+        );
+      return mut.consuming ? mut.consuming(x) : x;
+    },
+  });
+  base.set("index.chunk-NS.js", NS_CHUNK);
+  base.set("index.chunk-launch.js", mut.launcher ? mut.launcher(LAUNCHER_CHUNK) : LAUNCHER_CHUNK);
+  base.set("index.chunk-init.js", mut.init ? mut.init(INIT_CHUNK) : INIT_CHUNK);
+  return base;
+}
+
+describe("checkPathHookFacts — the delegate hook body and the 4.4212.0 launcher-conditional link", () => {
+  const consumingOf = (f: Map<string, string>) => f.get("index.chunk-CS-g0Skn.js")!;
+  it("fixtures apply: the delegate and every launcher edit are present", () => {
+    const c = consumingOf(launcherHookFiles());
+    for (const t of [
+      "return await Ye(g)",
+      "async function Ye(g){",
+      "ss(e,n,r,i,a=!0)",
+      "ss(g,S,d,i,!ke)",
+      "(ke?void 0:await Xt(",
+      "let ke=Oe.viaLauncher",
+    ])
+      expect(c).toContain(t);
+  });
+  it("the delegate form (no launcher) → no flags", () => {
+    expect(checkPathHookFacts(pathHookFiles({ consuming: toDelegateHook }))).toEqual([]);
+  });
+  it("the 4.4212.0 shape (delegate + launcher-conditional link + inert launcher) → no flags", () => {
+    expect(checkPathHookFacts(launcherHookFiles())).toEqual([]);
+  });
+  it("the 4.4212.0 shape with an inline hook body → no flags", () => {
+    expect(checkPathHookFacts(launcherHookFiles({}, false))).toEqual([]);
+  });
+  it("a `}` inside a string in the delegate before the category guard does not mis-bound it → no flags", () => {
+    expect(
+      checkPathHookFacts(launcherHookFiles({ consuming: (c) => c.replace("async function Ye(g){", 'async function Ye(g){const zb="}";') })),
+    ).toEqual([]);
+  });
+  it("a containment call after a long delegate is still found (no fixed window)", () => {
+    const pad = `const pad=${JSON.stringify("x".repeat(7000))};`;
+    expect(
+      checkPathHookFacts(launcherHookFiles({ consuming: (c) => c.replace("async function Ye(g){", "async function Ye(g){" + pad) })),
+    ).toEqual([]);
+  });
+
+  const M: [string, Parameters<typeof launcherHookFiles>[0], RegExp][] = [
+    [
+      "the guard bound to something other than viaLauncher",
+      { consuming: (c) => c.replace("let ke=Oe.viaLauncher", "let ke=Oe.other") },
+      /launcher guard anchor missing — `ke` is not bound/,
+    ],
+    [
+      "the launcher result bound to a non-launcher value",
+      { consuming: (c) => c.replace("let Oe=await L.a({binaryPath:h,env:e.env??{}})", "let Oe={viaLauncher:!0}") },
+      /no call to the host CLI launcher precedes/,
+    ],
+    [
+      "the guard rebound between the binding and the install",
+      { consuming: (c) => c.replace("let ke=Oe.viaLauncher;", "let ke=Oe.viaLauncher;ke=!1;") },
+      /`ke` is bound 2 times/,
+    ],
+    [
+      "a same-named decoy as the nearest binding",
+      { consuming: (c) => c.replace("let ke=Oe.viaLauncher;", "let kq=Oe.viaLauncher;let ke=t.dF(u);") },
+      /`ke` is not bound/,
+    ],
+    [
+      "the launcher call in another function",
+      {
+        consuming: (c) =>
+          c.replace(
+            "let Oe=await L.a({binaryPath:h,env:e.env??{}});let ke=Oe.viaLauncher;",
+            "async function zz(){let Oe=await L.a({binaryPath:h,env:e.env??{}});let ke=Oe.viaLauncher;}",
+          ),
+      },
+      /not in the canUseTool install's function/,
+    ],
+    [
+      "the inner await dropped",
+      { consuming: (c) => c.replace("(ke?void 0:await Xt(", "(ke?void 0:Xt(") },
+      /link `Xt` is an async function but is not awaited/,
+    ],
+    [
+      "the conditional link with a 4-argument pre-pass",
+      { consuming: (c) => c.replace("ss(g,S,d,i,!ke)", "ss(g,S,d,i)") },
+      /not passed `!ke` as its 5th argument/,
+    ],
+    [
+      "the 5th pre-pass argument not `!<g>`",
+      { consuming: (c) => c.replace("ss(g,S,d,i,!ke)", "ss(g,S,d,i,ke)") },
+      /not passed `!ke` as its 5th argument/,
+    ],
+    [
+      "the pre-pass 5th parameter without its default",
+      { consuming: (c) => c.replace("ss(e,n,r,i,a=!0)", "ss(e,n,r,i,a)") },
+      /no longer takes a 5th parameter defaulting to true/,
+    ],
+    ["the launcher holder given a writer", { launcher: (c) => c + "function w(x){r=x}" }, /path holder `r` is written 1 time/],
+    [
+      "the init chunk exporting initSimulatorToolchainHost",
+      {
+        init: (c) =>
+          c + 'Object.defineProperty(exports,"initSimulatorToolchainHost",{enumerable:!0,get:function(){return f}});function f(){}',
+      },
+      /now exports initSimulatorToolchainHost/,
+    ],
+    [
+      "the launcher no longer loading its init chunk",
+      { launcher: (c) => c.replace(".then(e=>e.initSimulatorToolchainHost?.())", "") },
+      /no longer lazily loads a chunk/,
+    ],
+    [
+      "the containment call moved out of the delegate",
+      { consuming: (c) => c.replace("if(!t.Po(cand,lt))return ct?", "if(!1)return ct?") + "function zc(){t.Po(cand,lt)}" },
+      /containment helper anchor missing/,
+    ],
+  ];
+  it.each(M)("%s → exactly 1 flag", (_l, mut, re) => {
+    const f = launcherHookFiles(mut);
+    expect([...f.values()].join("")).not.toBe([...launcherHookFiles().values()].join(""));
+    const flags = checkPathHookFacts(f);
+    expect(flags, flags.join("\n")).toHaveLength(1);
+    expect(flags[0]).toMatch(re);
+  });
+  it("arms swapped → the link is no longer a plain call, and the unpaired pre-pass argument flags too", () => {
+    const flags = checkPathHookFacts(
+      launcherHookFiles({
+        consuming: (c) => c.replace("(ke?void 0:await Xt(g,S,k.decisionReason,j,f))", "(ke?await Xt(g,S,k.decisionReason,j,f):void 0)"),
+      }),
+    ).join("\n");
+    expect(flags).toMatch(/a chain link is not a plain call/);
+    expect(flags).toMatch(/takes 5 arguments but no chain link is conditional/);
+  });
+  it("a 5th pre-pass argument with no conditional link → 1 flag", () => {
+    const f = launcherHookFiles({
+      consuming: (c) => c.replace("(ke?void 0:await Xt(g,S,k.decisionReason,j,f))", "await Xt(g,S,k.decisionReason,j,f)"),
+    });
+    expect(checkPathHookFacts(f)).toEqual([expect.stringMatching(/takes 5 arguments but no chain link is conditional/)]);
+  });
+  it("unwrapConditionalLink unwraps only the exact shape", () => {
+    expect(unwrapConditionalLink("(ke?void 0:await Ch(e,n))")).toEqual({ guard: "ke", call: "await Ch(e,n)" });
+    expect(unwrapConditionalLink("(ke?void 0:await Ch(e,n))??x").guard).toBeNull();
+    expect(unwrapConditionalLink("(ke?await Ch(e,n):void 0)").guard).toBeNull();
+    expect(unwrapConditionalLink('(ke?void 0:{behavior:"allow"})').guard).toBeNull();
+    expect(unwrapConditionalLink("await Ch(e,n)")).toEqual({ guard: null, call: "await Ch(e,n)" });
+  });
+});
+
 describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)", () => {
   it("clean bundle → no flags", () => {
     expect(checkPathHookFacts(pathHookFiles())).toEqual([]);
@@ -3905,25 +4121,6 @@ describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)",
   // publishing, records each file's identity per tool_use_id in a closure-local Map. The canUseTool block opens with
   // a lookup that hands the capture to a 4-parameter pre-pass. A same-named Map in another scope is the decoy real
   // builds carry (minified names recur across a chunk).
-  const captureInstall = () =>
-    // The server name resolves ACROSS chunks, through a `require` binding, as on the real asar.
-    'const q=require("./index.chunk-NS.js");var eh=RegExp(`^(?:Artifact[A-Za-z]*|mcp__${q.EO}__.+)$`);' +
-    "function other(e){let Ue=new Map;Ue.set(e.tool_use_id,1);Ue.set(e.tool_use_id,2);return Ue}" +
-    'async function Qm(c,f){return c.length===f.length?void 0:"files"}' +
-    `async function ss(e,n,r,i){if(e!=="Artifact"&&!e.startsWith("mcp__claude-artifacts__"))return null;const s=async x=>x;` +
-    `const u=async x=>x&&x.updatedInput&&x.updatedInput!==n?{behavior:"deny",message:"updatedInput differs from the request"}:x;` +
-    `if(String(n.file_path).startsWith("/sessions"))return{vmPathDeny:{behavior:"deny",message:"is a VM path. In this session the Artifact tool publishes from the host filesystem"},finish:s};` +
-    `if(n.dev===0)return{vmPathDeny:{behavior:"deny",message:"is on a drive that gives files no stable identity"},finish:s};` +
-    `if(n.files)return{finish:async x=>(await Qm(i??[],n.files))?{behavior:"deny",message:"source changed or unverifiable across the approval window"}:u(x)};` +
-    `const f=await stat(n.file_path);return{finish:async x=>x&&f?u(x):{behavior:"deny",message:"changed across the approval window"}}}` +
-    "let Ue=new Map;e.hooks={...e.hooks,PreToolUse:[{matcher:eh.source,hooks:[async e=>{const c=[];" +
-    "Ue.set(e.tool_use_id,c);for(let k of Ue.keys()){if(Ue.size<=16)break;Ue.delete(k)}return{}}]}]};" +
-    `const Se=e.canUseTool;Se&&(e.canUseTool=async(g,S,k)=>{let i=Ue.get(k.toolUseID);Ue.delete(k.toolUseID);` +
-    `const a=await ss(g,S,d,i);` +
-    `if(a?.vmPathDeny)return a.vmPathDeny;` +
-    `const o=xe(g,S)??await Xt(g,S,k.decisionReason,j,f)??Qt(g,S,k.decisionReason,n)??await Se(g,S,k);` +
-    `return a===null?o:a.finish(o)});`;
-  const NS_CHUNK = 'var HTr="claude-artifacts";Object.defineProperty(exports,"EO",{enumerable:!0,get:function(){return HTr}});';
   const captureFiles = (mutate?: (s: string) => string, mutateNs?: (s: string) => string) => {
     const files = pathHookFiles({
       consuming: (c) => {

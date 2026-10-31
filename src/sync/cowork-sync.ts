@@ -1536,6 +1536,81 @@ function matchBrace(text: string, open: number): number {
   return -1;
 }
 
+/** Index of the `)` closing the `(` at `open` (literal-aware, any bracket kind nests), or -1 if unbalanced. */
+function matchParen(text: string, open: number): number {
+  let depth = 0;
+  let i = open;
+  while (i < text.length) {
+    const lit = skipLiteralAt(text, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
+    const c = text[i];
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth === 0) return c === ")" ? i : -1;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/** A canUseTool chain link, with Desktop 4.4212.0's launcher-conditional form unwrapped: `(<g>?void 0:await <F>(…))`
+ *  is `{ guard: g, call: "await <F>(…)" }`; any other operand is `{ guard: null, call: op }`. Only that exact shape is
+ *  unwrapped — arms swapped, another alternative, or a non-call inner keeps the raw operand, which the plain-call rule
+ *  then flags. */
+export function unwrapConditionalLink(op: string): { guard: string | null; call: string } {
+  const m = op.match(/^\(([\w$]+)\?void 0:/);
+  if (!m || matchParen(op, 0) !== op.length - 1) return { guard: null, call: op };
+  const call = op.slice(m[0].length, -1);
+  return /^(?:await\s+)?[\w$]+\(/.test(call) ? { guard: m[1]!, call } : { guard: null, call: op };
+}
+
+/** The chunk exporting `spawnThroughHostCliLauncher` and the local it names, or null. */
+function hostCliLauncherExport(files: Map<string, string>): { chunk: string; local: string } | null {
+  // Only the export map's arrow form (`spawnThroughHostCliLauncher:()=>l`): a destructuring read of the same name
+  // (`let{spawnThroughHostCliLauncher:r}=await …`) in a consumer chunk is not the definition.
+  const hits = [...files.values()].flatMap((c) => {
+    const m = c.match(/(?<![\w$])spawnThroughHostCliLauncher:\(\)=>([A-Za-z_$][\w$]*)/);
+    return m ? [{ chunk: c, local: m[1]! }] : [];
+  });
+  return hits.length === 1 ? hits[0]! : null;
+}
+
+/** Desktop's host CLI launcher is wired (2.9939.2 on) but inert: the holder its path accessor reads has no writer
+ *  beyond its `=null` declaration, and the chunk it lazily loads for `initSimulatorToolchainHost` exports no such name.
+ *  While both hold, `viaLauncher` is always false, so a chain link skipped under the launcher always runs. Presence-
+ *  conditional on the name; once present, every missing anchor is a defect. */
+export function hostCliLauncherInertDefects(files: Map<string, string>): string[] {
+  if (![...files.values()].some((c) => c.includes("spawnThroughHostCliLauncher"))) return [];
+  const out: string[] = [];
+  const L = hostCliLauncherExport(files);
+  if (!L) return ["no single chunk exports spawnThroughHostCliLauncher — the launcher can no longer be shown inert"];
+  const holder = L.chunk.match(/function [\w$]+\(\)\{return ([\w$]+)!==null&&\1\.stillWanted\(\)\?\1\.path:null\}/)?.[1];
+  if (!holder)
+    out.push(
+      "the launcher's path accessor (`return <h>!==null&&<h>.stillWanted()?<h>.path:null`) is gone — read where its path comes from",
+    );
+  else {
+    const writes = [...L.chunk.matchAll(new RegExp(`(?<![\\w$.])${reEsc(holder)}(?:=(?!=)|\\?\\?=|\\|\\|=|&&=)`, "g"))];
+    if (writes.length !== 1 || !L.chunk.startsWith(`${holder}=null`, writes[0]!.index!))
+      out.push(
+        `the launcher's path holder \`${holder}\` is written ${writes.length - 1} time(s) beyond its \`=null\` declaration — the launcher may now be live, so a link skipped under it may not run`,
+      );
+  }
+  const init = L.chunk.match(/require\("\.\/([^"]+)"\)\)\)?\.then\(\(?([\w$]+)\)?=>\2\.initSimulatorToolchainHost/);
+  if (!init) out.push("the launcher no longer lazily loads a chunk for initSimulatorToolchainHost — read what starts it now");
+  else {
+    const target = files.get(init[1]!.slice(init[1]!.lastIndexOf("/") + 1));
+    if (target === undefined) out.push(`the launcher's lazy init chunk (${init[1]}) is not in the bundle`);
+    else if (exportLocalOf(target, "initSimulatorToolchainHost") !== null)
+      out.push("the launcher's lazy init chunk now exports initSimulatorToolchainHost — the launcher may now be live");
+  }
+  return out;
+}
+
 /** The top-level, comma-separated arguments of the call whose `(` is at `open`, or null when it does not close. */
 function topLevelArgs(text: string, open: number): string[] | null {
   const args: string[] = [];
@@ -2702,6 +2777,60 @@ function bindsPathKeys(chunk: string, local: string): GateBinding {
   return m && m[1] === pathGateMapId(chunk) ? { form: "derived", map: m[1] } : null;
 }
 
+/** The body of the path-gate PreToolUse hook whose matcher starts at `installAt`: the delegate's
+ *  (`hooks:[async e=>{try{return await <D>(e)}…` → the single `async function <D>(…){…}`) or the inline arrow's.
+ *  Literal-aware, so a brace inside a message does not end it. null when neither form resolves. */
+function pathHookBody(chunk: string, installAt: number): string | null {
+  const head = chunk.slice(installAt, installAt + 600);
+  const pre = /^\[\.\.\.[\w$]+(?:\.[\w$]+)?,"MultiEdit"\]\.join\("\|"\),hooks:\[async \(?([\w$]+)\)?=>\{/;
+  const del = head.match(new RegExp(pre.source + String.raw`try\{return await ([\w$]+)\(\1\)`));
+  if (del) {
+    const header = `async function ${del[2]}(`;
+    const at = chunk.indexOf(header);
+    if (at < 0 || chunk.indexOf(header, at + 1) >= 0) return null;
+    const close = matchParen(chunk, at + header.length - 1);
+    return close < 0 ? null : literalAwareBodyAt(chunk, close + 1);
+  }
+  const inline = head.match(pre);
+  return inline ? literalAwareBodyAt(chunk, installAt + inline[0].length - 1) : null;
+}
+
+/** Why the launcher guard `<g>` of a conditional canUseTool link is not `<o>.viaLauncher` read from the launcher call
+ *  in the install's own function, or null. See checkPathHookFacts (6). */
+function launcherGuardDefect(chunk: string, files: Map<string, string>, g: string): string | null {
+  const L = hostCliLauncherExport(files);
+  if (!L) return `a chain link is skipped under \`${g}\`, but no single chunk exports spawnThroughHostCliLauncher`;
+  const installAt = chunk.search(/(?:const|let|var) ([\w$]+)=([\w$]+)\.canUseTool;\1&&\(\2\.canUseTool=async\(/);
+  const calls = [...chunk.slice(0, Math.max(0, installAt)).matchAll(/(?<![\w$.])([\w$]+)=await ([\w$]+\.[\w$]+)\(/g)].filter((m) => {
+    const r = resolveNamespaceRef(m[2]!, chunk, files);
+    return !!r && r.chunk === L.chunk && r.local === L.local;
+  });
+  const call = calls[calls.length - 1];
+  if (installAt < 0 || !call)
+    return `a chain link is skipped under \`${g}\`, but no call to the host CLI launcher precedes the canUseTool install`;
+  // One function: the brace depth (literal-aware) never drops below where the launcher call sits.
+  let depth = 0;
+  for (let i = call.index!; i < installAt;) {
+    const lit = skipLiteralAt(chunk, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
+    if (chunk[i] === "{") depth++;
+    else if (chunk[i] === "}" && --depth < 0)
+      return `the host CLI launcher call (\`${call[1]}\`) is not in the canUseTool install's function`;
+    i++;
+  }
+  const window = chunk.slice(call.index!, installAt);
+  const binds = [...window.matchAll(new RegExp(`(?<![\\w$.])${reEsc(g)}(?:=(?!=)|\\?\\?=|\\|\\|=|&&=)`, "g"))];
+  if (binds.length !== 1)
+    return `\`${g}\` is bound ${binds.length} times between the host CLI launcher call and the canUseTool install (expected exactly once)`;
+  const rhs = window.slice(binds[0]!.index! + binds[0]![0].length);
+  if (!new RegExp(`^${reEsc(call[1]!)}\\.viaLauncher(?![\\w$])`).test(rhs))
+    return `\`${g}\` is not bound to the host CLI launcher result's \`viaLauncher\` (\`${call[1]}.viaLauncher\`)`;
+  return null;
+}
+
 export function checkPathHookFacts(files: Map<string, string>): string[] {
   const flags: string[] = [];
   const miss = (what: string, why: string) => flags.push(`path-hook: ${what} anchor missing — ${why}`);
@@ -2953,6 +3082,11 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   } else {
     const { orig, operands, block } = chain;
     const calleeOf = (op: string) => op.match(/^(?:await\s+)?([\w$]+)\(/)?.[1];
+    // Desktop 4.4212.0: a link may be skipped when the agent runs through the host CLI launcher,
+    // `(<g>?void 0:await <F>(…))`. Every rule below reads the inner call; the guard itself is pinned in (6).
+    const links = operands.map(unwrapConditionalLink);
+    const guards = [...new Set(links.map((l) => l.guard).filter((g): g is string => g !== null))];
+    const guard = guards.length === 1 ? guards[0]! : null;
     const bodyOf = (fn: string) => braceBodyOf(consuming, `async function ${fn}(`) ?? braceBodyOf(consuming, `function ${fn}(`);
 
     // (1) TERMINAL: exactly one of two admitted forms — a bare call to the saved original, or the judged-
@@ -2980,7 +3114,7 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
       // older asar (bare terminal, deny form) still syncs. A flip back to deny, to an allow, or the branch
       // vanishing is a permission-semantics change that must be classified, not absorbed.
       if (operands.length >= 2) {
-        const defect3 = managedAskDefect(operands[operands.length - 2], consuming, files, defining);
+        const defect3 = managedAskDefect(links[links.length - 2]!.call, consuming, files, defining);
         if (defect3) miss("canUseTool managed-ask", defect3);
       }
     }
@@ -2991,6 +3125,11 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     //     new decision points unmodelled — the exact way B16/B18 failed open.
     // An expression-form install has no pre-pass, so no capture lookup either: with the matcher widened to an MCP
     // server (3.6556.1 on), that is a permission wrapper with none of the capture's checks.
+    if (block === null && guard !== null)
+      miss(
+        "canUseTool launcher pairing",
+        "a chain link is skipped under the host CLI launcher, but the install has no pre-pass to pair it with",
+      );
     if (block === null && WIDENED_ARTIFACT_MATCHER.test(consuming))
       miss(
         "canUseTool capture lookup",
@@ -3020,6 +3159,25 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
           miss("canUseTool wrapper", "the block body does not open with a pre-pass binding — classify the new shape before admitting it");
       } else {
         const [, resultId, awaited, preFn] = pre;
+        // B.2: the launcher-conditional link and the pre-pass's 5th argument come together. The pre-pass is told the
+        // agent runs on this host (`!<g>`); a 5th argument with no conditional link, or the reverse, is unread.
+        if (guard === null && preArgs.length > 4)
+          miss(
+            "canUseTool launcher pairing",
+            `the pre-pass \`${preFn}\` takes ${preArgs.length} arguments but no chain link is conditional on the host CLI launcher — classify the new argument`,
+          );
+        if (guard !== null) {
+          const hdrAt = consuming.indexOf(`async function ${preFn}(`);
+          const pOpen = hdrAt < 0 ? -1 : hdrAt + `async function ${preFn}`.length;
+          const params = pOpen < 0 ? null : topLevelArgs(consuming, pOpen);
+          if (preArgs.length !== 5 || preArgs[4]!.trim() !== `!${guard}`)
+            miss(
+              "canUseTool launcher pairing",
+              `a chain link is skipped under the host CLI launcher (\`${guard}\`), but the pre-pass is not passed \`!${guard}\` as its 5th argument`,
+            );
+          else if (!params || params.length !== 5 || !/^[\w$]+=!0$/.test(params[4]!.trim()))
+            miss("canUseTool launcher pairing", `the pre-pass \`${preFn}\` no longer takes a 5th parameter defaulting to true`);
+        }
         for (const [what, why] of artifactCaptureDefects(consuming, files, block, prelude, preArgs, preFn)) miss(what, why);
         // The await rule again, for the pre-pass: an un-awaited async call yields a Promise, so the early
         // deny never fires and `finish` is not a function. Both new decision points go inert in silence.
@@ -3067,7 +3225,7 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     //     never nullish, so an un-awaited link short-circuits `??` and silently disables EVERY later link
     //     INCLUDING the original callback. Executed: `Ke()??Xe()??qe()??K()` with Xe async resolves to
     //     undefined instead of qe's deny. Dropping one `await` is therefore a full permission bypass.
-    for (const op of operands) {
+    for (const { call: op } of links) {
       const fn = calleeOf(op);
       if (!fn) continue;
       if (new RegExp(`async function ${reEsc(fn)}\\(`).test(consuming) && !/^await\s/.test(op))
@@ -3081,7 +3239,7 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     //     put the auto-memory ALLOW ahead of the outside-roots deny deliberately; moving it ahead of the
     //     VM-path deny instead would let a VM path through. Nothing else here would notice a reorder.
     const idxOf = (pred: (b: string) => boolean) =>
-      operands.findIndex((op) => {
+      links.findIndex(({ call: op }) => {
         const fn = calleeOf(op);
         const b = fn ? bodyOf(fn) : null;
         return !!b && pred(b);
@@ -3101,13 +3259,30 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
 
     // (5) Every non-terminal callee must RESOLVE to a definition in this chunk. A link swapped for an
     //     unresolvable one keeps the count and the terminal intact, so without this D5 passes.
-    for (const op of operands.slice(0, -1)) {
+    for (const { call: op } of links.slice(0, -1)) {
       const fn = calleeOf(op);
       if (!fn)
         miss("canUseTool chain operand", `a chain link is not a plain call (\`${op.slice(0, 40)}\`) — classify it before admitting it`);
       else if (!bodyOf(fn)) miss("canUseTool chain operand", `chain link \`${fn}\` has no resolvable definition in the hook chunk`);
     }
+    if (links[links.length - 1]!.guard !== null)
+      miss("canUseTool chain terminal", "the call to the saved original is skipped under the host CLI launcher");
+
+    // (6) THE LAUNCHER GUARD. Every conditional link reads one flag `<g>`. Walking FORWARD from the single call that
+    //     resolves to the launcher's spawnThroughHostCliLauncher export (`let <o>=await <ns>.<m>(…)`) to the canUseTool
+    //     install, staying in one function, `<g>` is bound exactly once, to `<o>.viaLauncher`. A same-named binding
+    //     elsewhere in the chunk (4.4212.0 has `let ke=…` in another function) is never consulted.
+    if (guards.length > 1)
+      miss(
+        "canUseTool launcher guard",
+        `chain links are skipped under ${guards.length} different flags (${guards.join(", ")}) — read each`,
+      );
+    if (guard !== null) {
+      const why = launcherGuardDefect(consuming, files, guard);
+      if (why) miss("canUseTool launcher guard", why);
+    }
   }
+  for (const why of hostCliLauncherInertDefects(files)) miss("host CLI launcher inert", why);
 
   // qt-before-containment ORDER + removed-exemption ABSENCE: inside the hook body slice, the category
   // guard's function must be referenced BEFORE any containment-helper call, and NO containment call may
@@ -3122,9 +3297,17 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   else if (installAt < 0)
     miss("install offset", "the install site matched for discovery but not for ordering — the order check would skip");
   else {
-    const hookSlice = consuming.slice(installAt, installAt + 6000);
-    const qtCallAt = hookSlice.indexOf(`${qtDef[1]}(`);
-    if (qtCallAt < 0) miss("qt call in hook", "the category guard is not invoked from the hook body");
+    // The hook body, bounded literal-aware: since 1.32352.0 the hook delegates (`hooks:[async e=>{try{return await
+    // <D>(e)}…`) to `async function <D>(…)`; an inline body is admitted too. A fixed window after the matcher stopped
+    // reaching the containment call when 4.4212.0 grew the delegate, so the body is read whole.
+    const hookSlice = pathHookBody(consuming, installAt);
+    const qtCallAt = hookSlice === null ? -1 : hookSlice.indexOf(`${qtDef[1]}(`);
+    if (hookSlice === null)
+      miss(
+        "hook body",
+        "the PreToolUse hook neither delegates to one resolvable `async function` nor has an inline body — the ordering checks cannot run",
+      );
+    else if (qtCallAt < 0) miss("qt call in hook", "the category guard is not invoked from the hook body");
     else {
       // B18: this searched for `.isPathContainedInFolders(` / `isContained(`. Counted across BOTH the
       // 1.28929.0 and 1.30096.1 asars, those tokens occur ZERO times — production's containment helper is
