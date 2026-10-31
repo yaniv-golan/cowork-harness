@@ -1,6 +1,6 @@
 # `semantic_matches` — the full semantics
 
-Tracks `cowork-harness 4.12.0` (baseline `desktop-3.6556.2`). The one-line summary is in
+Tracks `cowork-harness 4.12.0` (baseline `desktop-4.4212.0`). The one-line summary is in
 [assertion-catalog-gates-hooks-modifiers.md](assertion-catalog-gates-hooks-modifiers.md); this is the whole contract, split out so the catalog stays within the
 agent's single-read size.
 
