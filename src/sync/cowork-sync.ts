@@ -2206,21 +2206,19 @@ export function checkWebFetchVendorFacts(files: Map<string, string>): { flags: s
   if (fns.length !== 1) return miss(`${fns.length} two-parameter refuse functions carry the refusal text, expected one`);
   const [, fn, url, list] = fns[0].m;
   const body = fns[0].body!;
-  const u = reEsc(url);
-  const l = reEsc(list);
   const step = (re: RegExp) => body.search(re);
   const order = [
-    step(new RegExp(`if\\(${u}\\.protocol!=="http:"&&${u}\\.protocol!=="https:"\\)return`)),
+    step(new RegExp(`if\\(${reEsc(url)}\\.protocol!=="http:"&&${reEsc(url)}\\.protocol!=="https:"\\)return`)),
     step(/is a local or private address/),
-    step(new RegExp(`if\\(${l}\\.includes\\("\\*"\\)\\)return null;`)),
-    step(new RegExp(`if\\([\\w$]+\\(${u}\\.hostname\\)\\)return`)),
-    step(new RegExp(`${l}\\.some\\(`)),
+    step(new RegExp(`if\\(${reEsc(list)}\\.includes\\("\\*"\\)\\)return null;`)),
+    step(new RegExp(`if\\([\\w$]+\\(${reEsc(url)}\\.hostname\\)\\)return`)),
+    step(new RegExp(`${reEsc(list)}\\.some\\(`)),
   ];
   const names = ["scheme check", "private-address check", "`*` short-circuit", "vendor check", "allowlist check"];
   for (let i = 0; i < order.length; i++) if (order[i] < 0) return miss(`the ${names[i]} is not in ${fn}`);
   for (let i = 1; i < order.length; i++)
     if (order[i] < order[i - 1]) return miss(`the ${names[i]} no longer follows the ${names[i - 1]} in ${fn}`);
-  const vendorFn = body.slice(order[3]).match(new RegExp(`^if\\(([\\w$]+)\\(${u}\\.hostname\\)\\)return`))![1];
+  const vendorFn = body.slice(order[3]).match(new RegExp(`^if\\(([\\w$]+)\\(${reEsc(url)}\\.hostname\\)\\)return`))![1];
   if (body.slice(order[3], order[3] + 300).indexOf(SENTINEL) < 0) return miss(`the vendor check in ${fn} does not return the refusal`);
   const matcher = chunk.match(
     new RegExp(
@@ -6007,7 +6005,7 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
           `${key} is built in the ${SCHED_KEY} object but its registry row is not session-conditional and S6g-guarded — ` +
             "classify it in src/sync/spawn-env-registry.ts before the allowlist admits it",
         );
-      const keyCtorRe = new RegExp(`(?:"${key}"|'${key}'|(?<![\\w$"'])${key}):(?!\\(\\)=>)`, "g");
+      const keyCtorRe = new RegExp(`(?:"${reEsc(key)}"|'${reEsc(key)}'|(?<![\\w$"'])${reEsc(key)}):(?!\\(\\)=>)`, "g");
       const keyCtors = chunks.reduce((n, c) => n + [...c.matchAll(keyCtorRe)].length, 0);
       if (keyCtors !== 1)
         schedMiss(

@@ -156,6 +156,7 @@ const ESCAPED_OR_CONSTANT_SPANS: Record<string, string> = {
   ASSIGN_OP: "a regex SOURCE constant (assignment operators), interpolated as pattern on purpose",
   GRANT_KEY: "a string constant naming an env key",
   SCHED_KEY: "a string constant naming an env key",
+  KEY_ITEM: 'a regex source constant (one KEY:"1" item of the scheduled-run env object), interpolated as pattern on purpose',
   keyOpen: "a regex source fragment built from SCHED_KEY, interpolated as pattern on purpose",
   taskArray: "a regex source fragment built from constants",
   blkParam: "a regex source constant chosen by the S6c split-form flag",
