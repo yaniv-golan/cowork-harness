@@ -668,8 +668,10 @@ refuses a short list of vendor hosts, and any subdomain of one, even when the se
 of them are in the default allowlist. Only an unrestricted (`*`) allowlist skips the check. The gate on Path A,
 which checks only scheme and private addresses, is unchanged.
 
-**Harness behaviour:** modeled on Path B. `sync` reads the list from the asar into the baseline as
-`network.webFetchVendorDeny`, and the harness's port of the gate applies it in Cowork's order. A baseline synced
+**Harness behaviour:** modeled on Path B. `sync` reads from the asar whether the build has this step, and when it
+does records the list in the baseline as `network.webFetchVendorDeny`; the value is a list pinned in the harness, and a
+build whose list differs stops the sync until that list is reviewed. The harness's port of the gate applies it in
+Cowork's order. A baseline synced
 from an older Desktop has no list, so a run pinned to it keeps no refusal, as that Desktop did. Adding one of
 these hosts with `egress.extra_allow` therefore does not let web_fetch reach it on Path B; `egress.unrestricted:
 true` does.
