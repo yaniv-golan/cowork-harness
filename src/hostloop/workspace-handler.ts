@@ -151,7 +151,7 @@ export function u1t(u: URL, allow: string[], matcher: (h: string) => boolean, ve
   if (allow.includes("*")) return null;
   const host = u.hostname.toLowerCase().split(".").filter(Boolean).join("."); // as Cowork: empty labels dropped
   if (vendorDeny.some((v) => host === v || host.endsWith("." + v)))
-    return `Host "${u.hostname}" is blocked for web fetch because its traffic goes to an outside vendor. Adding it to the allowlist does not change this, so retrying will not help. Continue without this page.`;
+    return `Web fetch refused for "${u.hostname}": its traffic is handled by an outside vendor, which no allowlist entry overrides, so a retry gets the same answer.`;
   if (!allow.length) return "No network allowlist is configured for this session. The web_fetch tool is disabled.";
   if (!matcher(u.hostname))
     return `Web fetch was not allowed: ${u.hostname} is not in the session web-fetch allowlist. Ask to add this domain.`;

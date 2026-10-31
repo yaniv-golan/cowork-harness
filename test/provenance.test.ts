@@ -273,7 +273,9 @@ describe("web_fetch Path B — U1t + manual redirect re-check (provenance off)",
     const vendor = ["a-cdn.anthropic.com", "s-cdn.anthropic.com"];
     const allow = ["a-cdn.anthropic.com", "*.s-cdn.anthropic.com", "example.com"];
     const m = compile(allow);
-    expect(u1t(new URL("https://a-cdn.anthropic.com/x"), allow, m, vendor)).toMatch(/outside vendor.*retrying will not help/);
+    expect(u1t(new URL("https://a-cdn.anthropic.com/x"), allow, m, vendor)).toMatch(
+      /outside vendor.*no allowlist entry overrides.*retry gets the same answer/,
+    );
     expect(u1t(new URL("https://x.s-cdn.anthropic.com/"), allow, m, vendor)).toMatch(/outside vendor/);
     expect(u1t(new URL("https://example.com/"), allow, m, vendor)).toBeNull();
     expect(u1t(new URL("https://A-CDN.anthropic.com./x"), allow, m, vendor)).toMatch(/outside vendor/); // case + trailing dot, as Cowork

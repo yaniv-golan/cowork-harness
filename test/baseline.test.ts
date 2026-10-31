@@ -599,7 +599,7 @@ describe("checkWebFetchVendorFacts (web_fetch vendor-host refusal)", () => {
   const REFUSE =
     'function jm(e,n=[]){if(e.protocol!=="http:"&&e.protocol!=="https:")return`URL scheme "${e.protocol}" is not allowed.`;' +
     'if(t.GQ(e.hostname))return`Host "${e.hostname}" is a local or private address.`;if(n.includes("*"))return null;' +
-    'if(gm(e.hostname))return`Host "${e.hostname}" is blocked for web fetch because its traffic goes to an outside vendor. Retrying will not help {not a brace}.`;' +
+    'if(gm(e.hostname))return`Host "${e.hostname}" goes to an outside vendor {not a brace}.`;' +
     'let r=t.AB(e);if(!n.some((n=>t.LG(e.hostname,n,r))))return"not in the allowlist";return null}';
   const CALL = "async function fetchIt(r){return t.TY({url:1,refuseTarget:e=>jm(e,r.allowedDomains)})}";
   const chunk = (c = LIST + ALIAS + MATCHER + REFUSE + CALL) => new Map([["index.chunk-MAIN.js", c]]);
