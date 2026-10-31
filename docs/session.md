@@ -272,7 +272,7 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 > [docs/cli.md → Test a local skill in one command](./cli.md#test-a-local-skill-in-one-command).
 
 ### Egress
-`extra_allow` adds hosts to the release allowlist for this session; `unrestricted: true` reproduces Cowork's `"*"` (allow-all). The allowlist is enforced at `container`/`microvm`/`hostloop` fidelity (and `cowork`, which resolves to one of those) — only `protocol` has no egress boundary; see [boundary.md](./boundary.md).
+`extra_allow` adds hosts to the release allowlist for this session; `unrestricted: true` reproduces Cowork's `"*"` (allow-all). One exception on web_fetch's Path B: from baseline `desktop-4.4212.0`, the hosts in the baseline's `network.webFetchVendorDeny` are refused even when `extra_allow` names them, as Cowork does; only `unrestricted: true` lets web_fetch reach them. The allowlist is enforced at `container`/`microvm`/`hostloop` fidelity (and `cowork`, which resolves to one of those) — only `protocol` has no egress boundary; see [boundary.md](./boundary.md).
 
 | Field | Type | Cowork control | Notes |
 |---|---|---|---|

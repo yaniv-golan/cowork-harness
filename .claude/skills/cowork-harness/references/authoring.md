@@ -232,7 +232,8 @@ your gate actually has a label called `"first"`.
   session
   `web_fetch.approved_domains`, or a live decider.
 
-Surprise to remember: adding a host to `egress.extra_allow` is a **no-op** for a provenanced fetch.
+Surprise to remember: adding a host to `egress.extra_allow` is a **no-op** for a provenanced fetch, and on Path B it
+cannot admit the baseline's `network.webFetchVendorDeny` hosts (from `desktop-4.4212.0`).
 Full model in `references/scenario-schema.md`.
 
 ### A skill that parks and resumes in a later session: `legs:`

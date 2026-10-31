@@ -331,7 +331,8 @@ mcp:
 
 # network (Cowork egress, pre-prompt)
 egress:
-  extra_allow: []                # added to the release allowlist (bash / Path-B web_fetch only)
+  extra_allow: []                # added to the release allowlist (bash / Path-B web_fetch only;
+                                 # never re-admits the baseline's network.webFetchVendorDeny hosts)
   unrestricted: false            # true == Cowork "*" (allow all)
 
 # web_fetch (TEST CONVENIENCE — not a real Cowork setting)
@@ -551,7 +552,9 @@ on a manifest-less cassette those are skipped, so the gate can't see the deliver
 
 **The surprise:** adding a host to `egress.extra_allow` is a **no-op** for a provenanced fetch
 (Path A ignores the allowlist); conversely a provenanced fetch succeeds to a host NOT in
-`extra_allow`. Provenance is the gate, not the allowlist.
+`extra_allow`. Provenance is the gate, not the allowlist. On Path B, from baseline `desktop-4.4212.0`, a few
+vendor hosts (`network.webFetchVendorDeny` in the baseline) are refused even when `extra_allow` or the release
+allowlist names them; only `egress.unrestricted: true` lets web_fetch reach them, as in Cowork.
 
 ## Scenario YAML vs the pytest lane
 
@@ -652,7 +655,8 @@ debugging a run's behavior. The two are **numbered independently**: a bare "gotc
     `.env`.
 
 17. **web_fetch: `egress.extra_allow` is a no-op on the provenanced path** — provenance is the gate
-    (see the web_fetch section). multiSelect gates ARE supported across every answer channel: scripted
+    (see the web_fetch section). On Path B it also cannot admit the baseline's `network.webFetchVendorDeny`
+    hosts (from `desktop-4.4212.0`); only `egress.unrestricted: true` does. multiSelect gates ARE supported across every answer channel: scripted
     (`choose:` list), in-band `--decider-dir` (repeat `--choose`, or a JSON-array reply), and
     `--decider-cmd` (JSON-array reply) — all deliver the same `", "`-joined wire shape; a member label
     containing a comma warns (the wire join is unescaped — a Cowork limitation).

@@ -125,6 +125,7 @@ STABLE (rarely changes; lives in code)
 VOLATILE (changes per release; lives in baselines/*.json, sync-regenerated)
   - agentVersion
   - network.allowDomains + network.mode + requireFullVmSandbox
+  - network.webFetchVendorDeny (Desktop 4.4212.0+; presence read from the asar, value the pinned list)
   - gates
   - asarFingerprint (provenance + "unknown delta" tripwire)
   - cloud (the remote-devices tool list + description fingerprints; data only, never carried forward;
