@@ -613,10 +613,33 @@ describe("checkWebFetchVendorFacts (web_fetch vendor-host refusal)", () => {
     const r = checkWebFetchVendorFacts(chunk(LIST + ALIAS + MATCHER.replace("`.${e}`", '"."+e') + REFUSE + CALL));
     expect(r).toEqual({ flags: [], vendorDeny: FOUR });
   });
-  it("a build without the refusal (3.6556.2, 4.29.0 shape) yields no list and no flag", () => {
+  it("a build without the vendor step (3.6556.2, 4.29.0 shape: no refusal, no host list, no matcher) yields no list and no flag", () => {
     const older = REFUSE.replace(/if\(gm\(e\.hostname\)\)return`[^`]*`;/, "");
     expect(older).not.toBe(REFUSE);
-    expect(checkWebFetchVendorFacts(chunk(LIST + ALIAS + MATCHER + older + CALL))).toEqual({ flags: [], vendorDeny: null });
+    expect(checkWebFetchVendorFacts(chunk(older + CALL))).toEqual({ flags: [], vendorDeny: null });
+  });
+  // Presence does not rest on the wording alone: with the refusal reworded, the host literals or the matcher still show
+  // the step is there, so the sync flags instead of dropping the list in silence.
+  const reworded = REFUSE.replace("goes to an outside vendor", "is handled elsewhere");
+  it.each([
+    [
+      "the refusal reworded, list and matcher intact",
+      () => LIST + ALIAS + MATCHER + reworded + CALL,
+      /a known vendor host literal and the vendor matcher's shape remain/,
+    ],
+    [
+      "the refusal reworded, only the host list left",
+      () => LIST + ALIAS + reworded.replace("if(gm(e.hostname))", "if(!1)") + CALL,
+      /a known vendor host literal remains/,
+    ],
+    ["the refusal reworded, only the matcher left", () => MATCHER + reworded + CALL, /the vendor matcher's shape remains/],
+  ])("flags: %s", (_n, make, re) => {
+    const c = make();
+    expect(c).not.toContain("outside vendor");
+    const out = checkWebFetchVendorFacts(chunk(c));
+    expect(out.vendorDeny).toBeNull();
+    expect(out.flags).toHaveLength(1);
+    expect(out.flags[0]).toMatch(re);
   });
   it.each([
     ["the vendor step removed, its text left in the function", () => REFUSE.replace("if(gm(e.hostname))return`", "void`")],

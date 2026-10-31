@@ -223,6 +223,10 @@ describe("checkScheduledSessionFacts — 4.29.0 chat arm and the cowork frame-to
       );
     expect(at("4.29.0")).toEqual([]);
     expect(at("4.4212.0").join("\n")).toMatch(/no longer in the list \(`list_typed_artifacts`\)/);
+    // A version that is not a dotted number ("Unknown" compares as 0.0.0) is no version: the trace scan decides, and the
+    // fixture still exports the name.
+    expect(at("Unknown").join("\n")).toMatch(/no longer in the list \(`list_typed_artifacts`\)/);
+    expect(at("").join("\n")).toMatch(/no longer in the list \(`list_typed_artifacts`\)/);
     // No version (a saved asar read by a test): excused only when the build has no trace of the name. The fixture still
     // exports it, so it flags.
     expect(run(CHAT, drop)).toMatch(/no longer in the list \(`list_typed_artifacts`\)/);

@@ -1600,8 +1600,9 @@ export function hostCliLauncherInertDefects(files: Map<string, string>): string[
   else {
     const writes = [...L.chunk.matchAll(new RegExp(`(?<![\\w$.])${reEsc(holder)}(?:=(?!=)|\\?\\?=|\\|\\|=|&&=)`, "g"))];
     // A destructuring assignment writes the holder too: `[…,<h>,…]=x` or `({…,k:<h>,…}=x)` / `({<h>}=x)`. The element
-    // lists exclude brackets, `=` and `;`, so a nested pattern or a default value is not read here (it fails closed only
-    // if it also matches below).
+    // lists exclude brackets, `=` and `;`, so a NESTED pattern (`[[r]]=x`), a default value (`[r=1]=x`), and a
+    // `for (r of …)` / `for ([r] of …)` loop target are out of scope: none is counted. The holder is a module-level
+    // `let` read only through the path accessor; those forms would need a scope-aware reader to count reliably.
     const destructured = [
       ...L.chunk.matchAll(new RegExp(`\\[(?:[^\\[\\]=;]*,)?\\s*(?:\\.\\.\\.)?${reEsc(holder)}\\s*(?:,[^\\[\\]=;]*)?\\]=(?!=)`, "g")),
       ...L.chunk.matchAll(new RegExp(`\\{(?:[^{}=;]*,)?\\s*(?:[\\w$]+:)?(?:\\.\\.\\.)?${reEsc(holder)}\\s*(?:,[^{}=;]*)?\\}=(?!=)`, "g")),
@@ -2213,12 +2214,26 @@ export const KNOWN_WEBFETCH_VENDOR_DENY: readonly string[] = [
 export function checkWebFetchVendorFacts(files: Map<string, string>): { flags: string[]; vendorDeny: string[] | null } {
   const SENTINEL = "goes to an outside vendor";
   const hits = [...files].filter(([, c]) => c.includes(SENTINEL));
-  if (hits.length === 0) return { flags: [], vendorDeny: null };
   const flags: string[] = [];
   const miss = (why: string) => {
     flags.push(`web_fetch vendor deny: ${why} — re-verify the Path B refuse function before the baseline records its list`);
     return { flags, vendorDeny: null };
   };
+  if (hits.length === 0) {
+    // Presence must not rest on the refusal's wording alone: reworded, the step would vanish from the baseline in
+    // silence. Two independent signs of the vendor step, each absent from every build before 4.4212.0 (0 in 3.6556.2
+    // and 4.29.0): a known vendor host as a string literal, and the normalize + host-or-subdomain matcher's shape.
+    const all = [...files.values()];
+    const hostLiteral = KNOWN_WEBFETCH_VENDOR_DENY.some((h) => all.some((c) => new RegExp(`["'\`]${reEsc(h)}["'\`]`).test(c)));
+    const matcherShape = all.some((c) =>
+      /toLowerCase\(\)\.split\("\."\)\.filter\(Boolean\)\.join\("\."\);return [\w$]+\.some\(\(([\w$]+)=>[\w$]+===\1\|\|/.test(c),
+    );
+    if (hostLiteral || matcherShape)
+      return miss(
+        `the refusal text is gone but ${[hostLiteral && "a known vendor host literal", matcherShape && "the vendor matcher's shape"].filter(Boolean).join(" and ")} remain${hostLiteral && matcherShape ? "" : "s"} — the refusal may have been reworded`,
+      );
+    return { flags, vendorDeny: null };
+  }
   if (hits.length !== 1) return miss(`the refusal text is in ${hits.length} chunks, expected one`);
   const chunk = hits[0][1];
   const fns = [...chunk.matchAll(/function ([\w$]+)\(([\w$]+),([\w$]+)=\[\]\)\{/g)]
@@ -4201,7 +4216,9 @@ export function checkScheduledSessionFacts(files: Map<string, string>, appVersio
     const addedLater = (k: string) => {
       const since = COWORK_FRAME_TOOLS_SINCE[k];
       if (since === undefined) return false;
-      if (appVersion !== undefined) return cmpVersionStrings(appVersion, since) < 0;
+      // Only a real dotted version: `cmpVersionStrings` reads a non-numeric segment as 0, so "Unknown" would compare as
+      // older than every build and excuse the name. Anything else falls through to the trace scan.
+      if (appVersion !== undefined && /^\d+(?:\.\d+)+$/.test(appVersion)) return cmpVersionStrings(appVersion, since) < 0;
       return ![...files.values()].some((c) => c.includes(k));
     };
     const dropped = KNOWN_COWORK_FRAME_TOOLS.filter((k) => !read.has(k) && !addedLater(k));
