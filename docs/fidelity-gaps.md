@@ -661,6 +661,19 @@ chasing a phantom drift between a live probe and the pinned baseline.
 
 ---
 
+## web_fetch refuses a few vendor hosts even when allowlisted — modeled from baseline 4.4212.0
+
+**Real Cowork behaviour:** from Desktop 4.4212.0, the web_fetch domain gate on the allowlist branch (Path B)
+refuses a short list of vendor hosts, and any subdomain of one, even when the session allowlist names them. Two
+of them are in the default allowlist. Only an unrestricted (`*`) allowlist skips the check. The gate on Path A,
+which checks only scheme and private addresses, is unchanged.
+
+**Harness behaviour:** modeled on Path B. `sync` reads the list from the asar into the baseline as
+`network.webFetchVendorDeny`, and the harness's port of the gate applies it in Cowork's order. A baseline synced
+from an older Desktop has no list, so a run pinned to it keeps no refusal, as that Desktop did. Adding one of
+these hosts with `egress.extra_allow` therefore does not let web_fetch reach it on Path B; `egress.unrestricted:
+true` does.
+
 ## `--raw` mode bypasses the egress sandbox
 
 **Real Cowork behaviour:** All outbound network traffic from the agent is filtered through the configured egress allowlist.

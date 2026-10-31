@@ -198,7 +198,7 @@ export const PINNED_GATES: Record<string, string> = {
   // 1.46388.3 (see its entry below). A pinned drift alone WARNS + still writes.
   "245679952": "suggestSkillsEnabled", // live on/force — gates whether suggest_skills renders at all
   // proactive (unprompted) suggest mode. DEAD IN DESKTOP CODE FROM 1.46388.3: 2 occurrences in the 1.40609.1
-  // and 1.44121.1 asars, 0 in every asar from 1.46388.3 through 3.6556.2, and the `proactiveSkillSuggestEnabled`
+  // and 1.44121.1 asars, 0 in every asar from 1.46388.3 through 4.4212.0, and the `proactiveSkillSuggestEnabled`
   // name is gone too. From that build Desktop gives suggest_skills its proactive description and `trigger`
   // param unconditionally whenever the tool is declared. Up to 1.44121.1 the gate was live, with three effects:
   // the description swap, `trigger`, and a swapped suggest-guidance line in the generated

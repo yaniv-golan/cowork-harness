@@ -114,6 +114,7 @@ mcp:
 # ── network (Cowork egress, pre-prompt) ────────────────────────────────────────
 egress:
   extra_allow: []                # added to the synced allowlist for this session (bash/Path-B web_fetch)
+                                 # (cannot re-admit the baseline's network.webFetchVendorDeny hosts for web_fetch)
   unrestricted: false            # true == Cowork "*" (allow all)
 
 # ── web_fetch (TEST CONVENIENCE — not a real Cowork setting) ────────────────────
