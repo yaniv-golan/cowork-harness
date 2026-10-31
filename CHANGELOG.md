@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
-## [4.13.0] - 2026-10-31
+## [4.13.0] - 2026-11-01
 
 ### Upgrade notes
 
@@ -30,7 +30,8 @@ All notable changes to this project are documented here. The format is based on
     hosts, and their subdomains, even when the allowlist names them; only an unrestricted allowlist skips the check.
     `sync` records the list in the baseline as `network.webFetchVendorDeny` and checks the order of the gate's steps;
     the harness applies it in the same order. `sync` finds the step by its host list and matcher as well as by its
-    wording, so a reworded refusal flags instead of dropping the list from the baseline. A baseline from an older Desktop has no list and keeps no refusal. See
+    wording, so a reworded refusal flags instead of dropping the list from the baseline. A baseline from an older
+    Desktop has no list and keeps no refusal. See
     [fidelity gaps](docs/fidelity-gaps.md#web_fetch-refuses-a-few-vendor-hosts-even-when-allowlisted--modeled-from-baseline-442120).
   - **Spawn env (not modeled):** a scheduled task's agent now also gets `CLAUDE_CODE_DISABLE_FILE_MENTIONS`, so a
     file named with `@` in its prompt reaches the model as a path, not as inlined contents. The harness models an
