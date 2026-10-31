@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.13.0] - 2026-10-31
+
 ### Upgrade notes
 
 - **Cassettes: re-stamp or re-record one recorded through `baseline: latest`.** `latest` moves to `desktop-4.4212.0`
@@ -25,11 +27,13 @@ All notable changes to this project are documented here. The format is based on
   - **web_fetch vendor hosts (modeled):** on the allowlist branch (Path B), Desktop now refuses a short list of vendor
     hosts, and their subdomains, even when the allowlist names them; only an unrestricted allowlist skips the check.
     `sync` records the list in the baseline as `network.webFetchVendorDeny` and checks the order of the gate's steps;
-    the harness applies it in the same order. A baseline from an older Desktop has no list and keeps no refusal. See
+    the harness applies it in the same order. `sync` finds the step by its host list and matcher as well as by its
+    wording, so a reworded refusal flags instead of dropping the list from the baseline. A baseline from an older Desktop has no list and keeps no refusal. See
     [fidelity gaps](docs/fidelity-gaps.md#web_fetch-refuses-a-few-vendor-hosts-even-when-allowlisted--modeled-from-baseline-442120).
   - **Spawn env (not modeled):** a scheduled task's agent now also gets `CLAUDE_CODE_DISABLE_FILE_MENTIONS`, so a
     file named with `@` in its prompt reaches the model as a path, not as inlined contents. The harness models an
-    ordinary task session and does not set it. See
+    ordinary task session and does not set it. Like the scheduled-run marker, the key is not reported as a
+    default-absent spawn-env key when every session read was a scheduled task. See
     [fidelity gaps](docs/fidelity-gaps.md#-mentioned-files-in-a-scheduled-task--not-modeled).
   - **Typed-artifact tools in chat sessions (not modeled):** from Desktop 4.29.0, Desktop's own chat-typed sessions
     also get the typed-artifact tools of its `cowork` server, and the host loop pre-approves the read-only ones.
