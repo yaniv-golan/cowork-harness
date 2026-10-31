@@ -47,6 +47,8 @@ export interface SyncResult {
   appVersion: string;
   agentVersion: string;
   allowDomains: string[];
+  /** Hosts web_fetch's Path B refuses even when allowlisted, read from this build; null = the build has no such step. */
+  webFetchVendorDeny: string[] | null;
   networkMode: string | null;
   requireFullVmSandbox: unknown;
   asarFingerprint: string;
@@ -837,8 +839,19 @@ export function syncedNetworkBlock(
   prior: Record<string, unknown> | undefined,
   networkMode: string | null,
   allowDomains: string[],
+  webFetchVendorDeny: string[] | null = null,
 ): Record<string, unknown> {
-  return { ...prior, $comment: NETWORK_ALLOWDOMAINS_COMMENT, mode: networkMode ?? "gvisor", allowKind: "allowlist", allowDomains };
+  // `webFetchVendorDeny` is derived from THIS build every time: dropped from the prior block, written only when the
+  // build has the step. Carrying it forward would put a refusal into a baseline whose Desktop never made it.
+  const { webFetchVendorDeny: _prior, ...rest } = prior ?? {};
+  return {
+    ...rest,
+    $comment: NETWORK_ALLOWDOMAINS_COMMENT,
+    mode: networkMode ?? "gvisor",
+    allowKind: "allowlist",
+    allowDomains,
+    ...(webFetchVendorDeny ? { webFetchVendorDeny } : {}),
+  };
 }
 
 /** Read `network.allowDomains` from the NEWEST committed baseline — the pinned, hand-curated egress
@@ -944,6 +957,7 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
     bundleHasProductName,
     spawnEnvProducer,
     cloud,
+    webFetchVendorDeny,
     notes,
   } = extractFromAsar(unknown, gates);
 
@@ -1020,6 +1034,7 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
     appVersion,
     agentVersion,
     allowDomains,
+    webFetchVendorDeny,
     networkMode,
     requireFullVmSandbox,
     asarFingerprint: fingerprint,
@@ -1491,6 +1506,14 @@ function skipLiteralAt(text: string, i: number): number {
   return j + 1;
 }
 
+/** The body of the `{` block opening at `open`, string- and template-literal-aware (a brace inside a message does not
+ *  end it), or null if unbalanced. For bodies that carry user-facing text, where `braceBodyOf` could mis-bound. */
+export function literalAwareBodyAt(text: string, open: number): string | null {
+  if (text[open] !== "{") return null;
+  const close = matchBrace(text, open);
+  return close < 0 ? null : text.slice(open + 1, close);
+}
+
 /** Index of the `}` closing the block that opens at `open`, or -1 if unbalanced. */
 function matchBrace(text: string, open: number): number {
   let depth = 0;
@@ -1662,6 +1685,9 @@ function extractFromAsar(
   /** Whether the bundle still logs the host-loop dump the observed spawn-env oracle reads; null = unread. */
   spawnEnvProducer: boolean | null;
   cloud: CloudBlock | null;
+  /** web_fetch Path B vendor-host refusal list (`checkWebFetchVendorFacts`); null when the build has no such step or
+   *  the bundle could not be read. */
+  webFetchVendorDeny: string[] | null;
   notes: string[];
 } {
   if (!existsSync(ASAR)) {
@@ -1679,6 +1705,7 @@ function extractFromAsar(
       bundleHasProductName: null,
       spawnEnvProducer: null,
       cloud: null,
+      webFetchVendorDeny: null,
       notes: [],
     };
   }
@@ -1699,6 +1726,9 @@ function extractFromAsar(
     for (const f of checkMountModeFacts(bundle, bundleFiles)) flag(unknown, f);
     for (const f of checkAutoMemoryFacts(bundleFiles)) flag(unknown, f);
     for (const f of checkWebFetchFacts(bundle)) flag(unknown, f);
+    const vendor = checkWebFetchVendorFacts(bundleFiles);
+    for (const f of vendor.flags) flag(unknown, f);
+    const webFetchVendorDeny = vendor.flags.length ? null : vendor.vendorDeny;
     for (const f of checkPathHookFacts(bundleFiles)) flag(unknown, f);
     for (const f of checkSyspromptMapFacts(bundleFiles)) flag(unknown, f);
     // Code-shape tripwires (getMcpSkillSources caller, MCP-skills cap) — deltas hard-fail, NOTEs inform.
@@ -1777,6 +1807,7 @@ function extractFromAsar(
           new RegExp(`\\.${reEsc(name)}(?![\\w$])`).test(bundle)),
       spawnEnvProducer: bundleHasSpawnEnvProducer(bundle),
       cloud,
+      webFetchVendorDeny,
       notes: [...notes, ...postWriteNotes, ...promptDrift.notes, ...tripwireNotes, ...cloudNotes],
     };
   } catch (e) {
@@ -1794,6 +1825,7 @@ function extractFromAsar(
       bundleHasProductName: null,
       spawnEnvProducer: null,
       cloud: null,
+      webFetchVendorDeny: null,
       notes: [],
     };
   } finally {
@@ -2053,6 +2085,88 @@ export function checkWebFetchFacts(bundle: string): string[] {
         `web_fetch: ${what} is gone from the asar — Cowork's web_fetch mechanism may have changed; re-verify the two-path port (see webfetch-high-fidelity-plan)`,
       );
   return flags;
+}
+
+/** The vendor hosts Desktop 4.4212.0's web_fetch refuse function lists. A different list flags, so a change is read
+ *  before it reaches a baseline. */
+export const KNOWN_WEBFETCH_VENDOR_DENY: readonly string[] = [
+  "a-api.anthropic.com",
+  "a-cdn.anthropic.com",
+  "s-cdn.anthropic.com",
+  "notebook.anthropic.com",
+];
+
+/**
+ * web_fetch vendor-host refusal (Desktop 4.4212.0). Cowork's web_fetch refuse function — the one the harness ports as
+ * `u1t` — runs: scheme → local/private address → `*` in the allowlist ⇒ allow → a vendor host (or a subdomain of one)
+ * ⇒ refuse → the allowlist. The workspace server's `web_fetch` passes it as `refuseTarget` on its
+ * `coworkWebFetchViaApi`-off branch (the harness's Path B), with the session's allowed domains.
+ *
+ * PRESENCE-CONDITIONAL: a build without the refusal text has no step (3.6556.2, 4.29.0) → no flags and a null list,
+ * so the baseline gets no field. Once the text is present everything is pinned: one refuse function containing it, the
+ * five steps in that order, the matcher's normalize + host-or-subdomain shape, the list resolved through at most one
+ * alias to one array literal equal to `KNOWN_WEBFETCH_VENDOR_DENY`, and the `refuseTarget` call site. Any miss flags,
+ * so a reshaped step never silently drops the refusal or keeps a stale list.
+ */
+export function checkWebFetchVendorFacts(files: Map<string, string>): { flags: string[]; vendorDeny: string[] | null } {
+  const SENTINEL = "goes to an outside vendor";
+  const hits = [...files].filter(([, c]) => c.includes(SENTINEL));
+  if (hits.length === 0) return { flags: [], vendorDeny: null };
+  const flags: string[] = [];
+  const miss = (why: string) => {
+    flags.push(`web_fetch vendor deny: ${why} — re-verify the Path B refuse function before the baseline records its list`);
+    return { flags, vendorDeny: null };
+  };
+  if (hits.length !== 1) return miss(`the refusal text is in ${hits.length} chunks, expected one`);
+  const chunk = hits[0][1];
+  const fns = [...chunk.matchAll(/function ([\w$]+)\(([\w$]+),([\w$]+)=\[\]\)\{/g)]
+    .map((m) => ({ m, body: literalAwareBodyAt(chunk, (m.index ?? 0) + m[0].length - 1) }))
+    .filter((f) => f.body?.includes(SENTINEL));
+  if (fns.length !== 1) return miss(`${fns.length} two-parameter refuse functions carry the refusal text, expected one`);
+  const [, fn, url, list] = fns[0].m;
+  const body = fns[0].body!;
+  const u = reEsc(url);
+  const l = reEsc(list);
+  const step = (re: RegExp) => body.search(re);
+  const order = [
+    step(new RegExp(`if\\(${u}\\.protocol!=="http:"&&${u}\\.protocol!=="https:"\\)return`)),
+    step(/is a local or private address/),
+    step(new RegExp(`if\\(${l}\\.includes\\("\\*"\\)\\)return null;`)),
+    step(new RegExp(`if\\([\\w$]+\\(${u}\\.hostname\\)\\)return`)),
+    step(new RegExp(`${l}\\.some\\(`)),
+  ];
+  const names = ["scheme check", "private-address check", "`*` short-circuit", "vendor check", "allowlist check"];
+  for (let i = 0; i < order.length; i++) if (order[i] < 0) return miss(`the ${names[i]} is not in ${fn}`);
+  for (let i = 1; i < order.length; i++)
+    if (order[i] < order[i - 1]) return miss(`the ${names[i]} no longer follows the ${names[i - 1]} in ${fn}`);
+  const vendorFn = body.slice(order[3]).match(new RegExp(`^if\\(([\\w$]+)\\(${u}\\.hostname\\)\\)return`))![1];
+  if (body.slice(order[3], order[3] + 300).indexOf(SENTINEL) < 0) return miss(`the vendor check in ${fn} does not return the refusal`);
+  const matcher = chunk.match(
+    new RegExp(
+      `function ${reEsc(vendorFn)}\\(([\\w$]+)\\)\\{let ([\\w$]+)=\\1\\.toLowerCase\\(\\)\\.split\\("\\."\\)\\.filter\\(Boolean\\)\\.join\\("\\."\\);` +
+        `return ([\\w$]+)\\.some\\(\\(([\\w$]+)=>\\2===\\4\\|\\|\\2\\.endsWith\\((?:\`\\.\\$\\{\\4\\}\`|"\\."\\+\\4)\\)\\)\\)\\}`,
+    ),
+  );
+  if (!matcher) return miss(`${vendorFn} is no longer a normalize + host-or-subdomain match over one list`);
+  let ref = matcher[3];
+  let arr: string | null = null;
+  for (let hop = 0; hop < 2 && arr === null; hop++) {
+    const defs = [...chunk.matchAll(new RegExp(`(?<![\\w$.])${reEsc(ref)}=(\\[[^\\]]*\\]|[\\w$]+)(?=[,;])`, "g"))];
+    if (defs.length !== 1) return miss(`the list ${ref} has ${defs.length} definitions in its chunk, expected one`);
+    if (new RegExp(`(?<![\\w$])${reEsc(ref)}\\.(?:push|splice|unshift)\\(`).test(chunk)) return miss(`the list ${ref} is mutated`);
+    if (defs[0][1].startsWith("[")) arr = defs[0][1];
+    else ref = defs[0][1];
+  }
+  if (arr === null || !/^\[(?:"[^"]+"(?:,"[^"]+")*)?\]$/.test(arr)) return miss("the vendor list is not one array of string literals");
+  const vendorDeny = [...arr.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  if (vendorDeny.join("|") !== KNOWN_WEBFETCH_VENDOR_DENY.join("|"))
+    return miss(`the vendor list changed (${vendorDeny.join(", ")}); review it, then update KNOWN_WEBFETCH_VENDOR_DENY`);
+  const calls = [...chunk.matchAll(new RegExp(`refuseTarget:([\\w$]+)=>${reEsc(fn)}\\(\\1,[\\w$]+\\.allowedDomains\\)`, "g"))];
+  if (calls.length !== 1)
+    return miss(
+      `${calls.length} \`refuseTarget\` call sites pass ${fn} the session's allowed domains, expected one (the workspace web_fetch)`,
+    );
+  return { flags, vendorDeny };
 }
 
 /**

@@ -563,6 +563,7 @@ function spawnHostLoopTracked(
     vmMnt: mntRoot,
     runner,
     webFetchAllow: plan.egressAllow,
+    webFetchVendorDeny: plan.webFetchVendorDeny,
     onEgress: (e) => hostEgress.push(e),
     onInfraError: logExecInfra,
     provenanceRef: opts.provenanceRef,

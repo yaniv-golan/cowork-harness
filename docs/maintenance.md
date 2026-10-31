@@ -15,6 +15,8 @@ STABLE (in code, rarely changes)        VOLATILE (in baselines/, sync-regenerate
                                           - asarFingerprint (drift tripwire)
                                           - spawn.env
                                           - spawn.effortByModel + spawn.effortRegexDefault
+                                          - network.webFetchVendorDeny (Desktop 4.4212.0+;
+                                            absent when the build has none)
 
 HAND-AUTHORED (in baselines/, drift-guarded — sync does NOT extract these; they carry
 forward from the previous baseline untouched)

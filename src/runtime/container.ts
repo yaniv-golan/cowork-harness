@@ -256,6 +256,7 @@ export function spawnContainer(
           // process, outside the container network namespace and therefore invisible to the sidecar
           // proxy. That silently voids this tier's default-deny egress promise for this one tool.
           webFetchAllow: plan.egressAllow,
+          webFetchVendorDeny: plan.webFetchVendorDeny,
           tools: ["web_fetch"],
         }),
       }

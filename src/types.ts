@@ -269,6 +269,10 @@ export const PlatformBaseline = z.looseObject({
     mode: z.string(),
     allowKind: z.enum(["allowlist", "unrestricted"]),
     allowDomains: z.array(z.string()),
+    /** Hosts Cowork's web_fetch refuses on its Path B branch even when allowlisted (Desktop 4.4212.0+). DERIVED by
+     *  `sync` from the asar's refuse function each time — never carried forward — and absent when that build has no
+     *  such step. */
+    webFetchVendorDeny: z.array(z.string()).optional(),
   }),
   bgEnvStrip: z
     .object({ knownVars: z.array(z.string()) })

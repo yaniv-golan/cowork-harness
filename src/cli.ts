@@ -3661,7 +3661,12 @@ async function cmdSync(args: string[]) {
       capturedAt,
       agentVersion: res.agentVersion,
       agentBinary: nextAgentBinary,
-      network: syncedNetworkBlock(base.network as Record<string, unknown> | undefined, res.networkMode, res.allowDomains),
+      network: syncedNetworkBlock(
+        base.network as Record<string, unknown> | undefined,
+        res.networkMode,
+        res.allowDomains,
+        res.webFetchVendorDeny,
+      ),
       requireFullVmSandbox: res.requireFullVmSandbox,
       // spawn.env AND spawn.effortByModel/effortRegexDefault are the GENERATED tier: re-derived from the asar
       // each sync, canonically ordered so a benign source-reorder is a zero-line diff. All the hand-curated

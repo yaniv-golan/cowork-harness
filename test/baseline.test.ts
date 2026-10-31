@@ -25,6 +25,8 @@ import {
   sync,
   checkMountModeFacts,
   checkWebFetchFacts,
+  checkWebFetchVendorFacts,
+  syncedNetworkBlock,
   readMainBundle,
   readMainBundleFiles,
   normalizeBundleQuotes,
@@ -563,6 +565,108 @@ describe.skipIf(!ASAR_BACKUPS)("checkPathHookFacts oracle over saved Desktop asa
     const flags = checkPathHookFacts(files);
     if (clean) expect(flags).toEqual([]);
     else expect(flags.length).toBeGreaterThan(0);
+  });
+});
+
+// web_fetch Path B vendor-host refusal (Desktop 4.4212.0), presence-conditional. Shape transcribed from the 4.4212.0 main
+// chunk (normalized): the vendor list behind one alias, the normalize + host-or-subdomain matcher, the five-step refuse
+// function, and the workspace web_fetch passing it as `refuseTarget` with the session's allowed domains.
+describe("checkWebFetchVendorFacts (web_fetch vendor-host refusal)", () => {
+  const LIST = 'var om=["a-api.anthropic.com","a-cdn.anthropic.com","s-cdn.anthropic.com","notebook.anthropic.com"],sm=1;';
+  const ALIAS = 'var mm="cowork-egress-blocked",hm=om;';
+  const MATCHER =
+    'function gm(e){let t=e.toLowerCase().split(".").filter(Boolean).join(".");return hm.some((e=>t===e||t.endsWith(`.${e}`)))}';
+  const REFUSE =
+    'function jm(e,n=[]){if(e.protocol!=="http:"&&e.protocol!=="https:")return`URL scheme "${e.protocol}" is not allowed.`;' +
+    'if(t.GQ(e.hostname))return`Host "${e.hostname}" is a local or private address.`;if(n.includes("*"))return null;' +
+    'if(gm(e.hostname))return`Host "${e.hostname}" is blocked for web fetch because its traffic goes to an outside vendor. Retrying will not help {not a brace}.`;' +
+    'let r=t.AB(e);if(!n.some((n=>t.LG(e.hostname,n,r))))return"not in the allowlist";return null}';
+  const CALL = "async function fetchIt(r){return t.TY({url:1,refuseTarget:e=>jm(e,r.allowedDomains)})}";
+  const chunk = (c = LIST + ALIAS + MATCHER + REFUSE + CALL) => new Map([["index.chunk-MAIN.js", c]]);
+  const FOUR = ["a-api.anthropic.com", "a-cdn.anthropic.com", "s-cdn.anthropic.com", "notebook.anthropic.com"];
+
+  it("the 4.4212.0 shape is clean and yields the four hosts", () => {
+    expect(checkWebFetchVendorFacts(chunk())).toEqual({ flags: [], vendorDeny: FOUR });
+  });
+  it('the `"."+e` spelling of the suffix match is admitted', () => {
+    const r = checkWebFetchVendorFacts(chunk(LIST + ALIAS + MATCHER.replace("`.${e}`", '"."+e') + REFUSE + CALL));
+    expect(r).toEqual({ flags: [], vendorDeny: FOUR });
+  });
+  it("a build without the refusal (3.6556.2, 4.29.0 shape) yields no list and no flag", () => {
+    const older = REFUSE.replace(/if\(gm\(e\.hostname\)\)return`[^`]*`;/, "");
+    expect(older).not.toBe(REFUSE);
+    expect(checkWebFetchVendorFacts(chunk(LIST + ALIAS + MATCHER + older + CALL))).toEqual({ flags: [], vendorDeny: null });
+  });
+  it.each([
+    ["the vendor step removed, its text left in the function", () => REFUSE.replace("if(gm(e.hostname))return`", "void`")],
+    [
+      "the vendor step moved after the allowlist",
+      () =>
+        REFUSE.replace(/if\(gm\(e\.hostname\)\)return(`[^`]*`);/, "").replace(
+          'return"not in the allowlist";return null}',
+          'return"not in the allowlist";if(gm(e.hostname))return`goes to an outside vendor`;return null}',
+        ),
+    ],
+    ["the `*` short-circuit removed", () => REFUSE.replace('if(n.includes("*"))return null;', "")],
+  ])("flags: %s", (_n, mutate) => {
+    const r = mutate();
+    expect(r).not.toBe(REFUSE);
+    const out = checkWebFetchVendorFacts(chunk(LIST + ALIAS + MATCHER + r + CALL));
+    expect(out.vendorDeny).toBeNull();
+    expect(out.flags).toHaveLength(1);
+    expect(out.flags[0]).toMatch(/^web_fetch vendor deny: /);
+  });
+  it.each([
+    [
+      "the list changed",
+      () => LIST.replace('"notebook.anthropic.com"', '"notebook.anthropic.com","x.example.com"') + ALIAS + MATCHER + REFUSE + CALL,
+    ],
+    ["the matcher became exact-only", () => LIST + ALIAS + MATCHER.replace("||t.endsWith(`.${e}`)", "") + REFUSE + CALL],
+    ["a second definition of the alias", () => LIST + ALIAS + "hm=[];" + MATCHER + REFUSE + CALL],
+    ["the list is mutated", () => LIST + ALIAS + 'om.push("x");' + MATCHER + REFUSE + CALL],
+    ["refuseTarget calls another function", () => LIST + ALIAS + MATCHER + REFUSE + CALL.replace("=>jm(", "=>km(")],
+    ["the refusal text in two chunks", () => null],
+  ])("flags: %s", (_n, make) => {
+    const c = make();
+    const files = c === null ? new Map([...chunk(), ["index.chunk-OTHER.js", "goes to an outside vendor"]]) : chunk(c);
+    const out = checkWebFetchVendorFacts(files);
+    expect(out.vendorDeny).toBeNull();
+    expect(out.flags).toHaveLength(1);
+  });
+
+  it("the baseline gets the field only when this build has the step; a prior value is never carried forward", () => {
+    const prior = { $comment: "old", mode: "gvisor", allowKind: "allowlist", allowDomains: ["a"], webFetchVendorDeny: ["stale.example"] };
+    expect(syncedNetworkBlock(prior, null, ["a"], null)).not.toHaveProperty("webFetchVendorDeny");
+    expect(syncedNetworkBlock(prior, null, ["a"])).not.toHaveProperty("webFetchVendorDeny");
+    expect(syncedNetworkBlock(prior, null, ["a"], FOUR).webFetchVendorDeny).toEqual(FOUR);
+  });
+
+  it("structural regression: the REAL asar is clean", () => {
+    const real = readRealBundleFilesOrSkip();
+    if (!real) return;
+    expect(checkWebFetchVendorFacts(real).flags).toEqual([]);
+  });
+});
+describe.skipIf(!ASAR_BACKUPS)("checkWebFetchVendorFacts over saved Desktop asars (COWORK_ASAR_BACKUP_DIR)", () => {
+  it.each([
+    ["3.6556.2", null],
+    ["4.29.0", null],
+    ["4.4212.0", ["a-api.anthropic.com", "a-cdn.anthropic.com", "s-cdn.anthropic.com", "notebook.anthropic.com"]],
+  ])("%s: vendor list = %j, no flags", (version, list) => {
+    const asar = join(ASAR_BACKUPS!, version, "app.asar");
+    expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
+    const files = readAsarBuildFiles(asar);
+    expect(files.size).toBeGreaterThan(100);
+    expect(checkWebFetchVendorFacts(files)).toEqual({ flags: [], vendorDeny: list });
+    // what sync writes from it: no field for a build without the step
+    const net = syncedNetworkBlock(
+      { allowDomains: [], webFetchVendorDeny: ["carried"] },
+      null,
+      [],
+      checkWebFetchVendorFacts(files).vendorDeny,
+    );
+    if (list) expect(net.webFetchVendorDeny).toEqual(list);
+    else expect(net).not.toHaveProperty("webFetchVendorDeny");
   });
 });
 

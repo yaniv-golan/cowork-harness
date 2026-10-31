@@ -485,6 +485,9 @@ export interface LaunchPlan {
   hostOnlyFolders?: Mount[];
   pluginDirs: string[]; // mnt-relative plugin roots for --plugin-dir (incl. marketplace-resolved)
   egressAllow: string[]; // baseline allowlist + session extra (or ["*"] if unrestricted)
+  /** Hosts web_fetch's Path B refuses even when allowlisted: the baseline's `network.webFetchVendorDeny`, `[]` when the
+   *  baseline predates Desktop 4.4212.0. Optional so hand-built plans (tests, device lanes) keep working. */
+  webFetchVendorDeny?: string[];
   agentSessionId?: string; // the agent's native --session-id (pinned for resume); set by executeScenario
   resume?: boolean; // pass --resume <agentSessionId> instead of --session-id (continue a prior session)
   /** capture the `no_unexpected_files` pre-run baseline before spawning. Set by executeScenario when the
@@ -1399,6 +1402,7 @@ export function buildLaunchPlan(
     hostOnlyFolders,
     pluginDirs,
     egressAllow,
+    webFetchVendorDeny: baseline.network.webFetchVendorDeny ?? [],
     ...(sources.workspaceFixture ? { workspaceFixture: sources.workspaceFixture } : {}),
     ...(skills.length ? { stagedSkills: skills.map(({ src, dest }) => ({ src, dest })) } : {}),
   };
