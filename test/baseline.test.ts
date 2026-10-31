@@ -2381,13 +2381,18 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     it("4.29.0 control: an export-table getter naming the extra key is not a construction", () => {
       expect(facts(filesOf({ mod: modFM(), main: MAIN + "var ex={CLAUDE_CODE_DISABLE_FILE_MENTIONS:()=>q};" }))).toBe("");
     });
+    // FM is one flat object literal: its only `}` is the closing one. Append a key before it.
+    const withKey = (entry: string) => {
+      expect(FM.endsWith("}") && FM.indexOf("}") === FM.length - 1).toBe(true);
+      return FM.slice(0, -1) + "," + entry + "}";
+    };
     const ROW = "registry row is not session-conditional and S6g-guarded";
     const ONLY = "must be its only construction";
     const FM_MUT: [string, () => Map<string, string>, string][] = [
-      ["F1 an extra key the registry does not classify", () => filesOf({ mod: modFM(FM.replace("}", ',ZNEW_KEY:"1"}')) }), ROW],
+      ["F1 an extra key the registry does not classify", () => filesOf({ mod: modFM(withKey('ZNEW_KEY:"1"')) }), ROW],
       [
         "F2 an extra key whose registry row is not session-conditional",
-        () => filesOf({ mod: modFM(FM.replace("}", ',CLAUDE_CODE_MODEL_CATALOG:"1"}')) }),
+        () => filesOf({ mod: modFM(withKey('CLAUDE_CODE_MODEL_CATALOG:"1"')) }),
         ROW,
       ],
       [
@@ -4108,7 +4113,7 @@ describe("checkPathHookFacts — the delegate hook body and the 4.4212.0 launche
     ).toEqual([]);
   });
   it("a containment call after a long delegate is still found (no fixed window)", () => {
-    const pad = `const pad=${JSON.stringify("x".repeat(7000))};`;
+    const pad = 'const pad="' + "x".repeat(7000) + '";';
     expect(
       checkPathHookFacts(launcherHookFiles({ consuming: (c) => c.replace("async function Ye(g){", "async function Ye(g){" + pad) })),
     ).toEqual([]);
