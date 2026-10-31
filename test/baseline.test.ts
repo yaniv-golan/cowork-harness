@@ -3184,6 +3184,15 @@ describe("extractPromptFingerprint — the parameter form and the module-constan
       "`;function bld(e){return{cowork_system_prompt:{value:{prompt:oon}}}}";
     expect(fp(filesOf(main, {}))).toBeNull();
   });
+  it("module-constant form: another (non-template) binding of the name, not exported → null", () => {
+    const main =
+      "function hh(e){let oon=e;return oon}var oon=`" + PROMPT + "`;function bld(e){return{cowork_system_prompt:{value:{prompt:oon}}}}";
+    expect(fp(filesOf(main, {}))).toBeNull();
+  });
+  it("parameter form: a default holding parentheses does not end the parameter list early", () => {
+    const r = fp(filesOf(DECOY + LOADER + BUILDER.replace("n={}", "n=g(1)")));
+    expect(r?.decodedSha256).toBe(decoded(PROMPT));
+  });
   it("two consumption sites → null", () => {
     const main =
       "var oon=`" + PROMPT + "`;var a={cowork_system_prompt:{value:{prompt:oon}}},b={cowork_system_prompt:{value:{prompt:oon}}};";
