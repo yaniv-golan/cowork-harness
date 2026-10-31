@@ -14,6 +14,7 @@ import {
   type CloudBlock,
   type DesktopInitSurface,
   type ObservedSpawnEnvDeclaration,
+  SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS,
 } from "../types.js";
 import { safeCloudBlock } from "./remote-devices.js";
 import { readDesktopInitSurface, desktopInstalledAtMs } from "./desktop-init-surface.js";
@@ -47,6 +48,8 @@ export interface SyncResult {
   appVersion: string;
   agentVersion: string;
   allowDomains: string[];
+  /** Hosts web_fetch's Path B refuses even when allowlisted, read from this build; null = the build has no such step. */
+  webFetchVendorDeny: string[] | null;
   networkMode: string | null;
   requireFullVmSandbox: unknown;
   asarFingerprint: string;
@@ -195,7 +198,7 @@ export const PINNED_GATES: Record<string, string> = {
   // 1.46388.3 (see its entry below). A pinned drift alone WARNS + still writes.
   "245679952": "suggestSkillsEnabled", // live on/force — gates whether suggest_skills renders at all
   // proactive (unprompted) suggest mode. DEAD IN DESKTOP CODE FROM 1.46388.3: 2 occurrences in the 1.40609.1
-  // and 1.44121.1 asars, 0 in every asar from 1.46388.3 through 3.6556.2, and the `proactiveSkillSuggestEnabled`
+  // and 1.44121.1 asars, 0 in every asar from 1.46388.3 through 4.4212.0, and the `proactiveSkillSuggestEnabled`
   // name is gone too. From that build Desktop gives suggest_skills its proactive description and `trigger`
   // param unconditionally whenever the tool is declared. Up to 1.44121.1 the gate was live, with three effects:
   // the description swap, `trigger`, and a swapped suggest-guidance line in the generated
@@ -837,8 +840,19 @@ export function syncedNetworkBlock(
   prior: Record<string, unknown> | undefined,
   networkMode: string | null,
   allowDomains: string[],
+  webFetchVendorDeny: string[] | null = null,
 ): Record<string, unknown> {
-  return { ...prior, $comment: NETWORK_ALLOWDOMAINS_COMMENT, mode: networkMode ?? "gvisor", allowKind: "allowlist", allowDomains };
+  // `webFetchVendorDeny` is derived from THIS build every time: dropped from the prior block, written only when the
+  // build has the step. Carrying it forward would put a refusal into a baseline whose Desktop never made it.
+  const { webFetchVendorDeny: _prior, ...rest } = prior ?? {};
+  return {
+    ...rest,
+    $comment: NETWORK_ALLOWDOMAINS_COMMENT,
+    mode: networkMode ?? "gvisor",
+    allowKind: "allowlist",
+    allowDomains,
+    ...(webFetchVendorDeny ? { webFetchVendorDeny } : {}),
+  };
 }
 
 /** Read `network.allowDomains` from the NEWEST committed baseline — the pinned, hand-curated egress
@@ -944,8 +958,9 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
     bundleHasProductName,
     spawnEnvProducer,
     cloud,
+    webFetchVendorDeny,
     notes,
-  } = extractFromAsar(unknown, gates);
+  } = extractFromAsar(unknown, gates, appVersion);
 
   // 6. Desktop's own server tool surface, from real Desktop init frames of THIS release (see
   // desktop-init-surface.ts). An unobserved surface is a WARNING, never an unknown delta: every Desktop
@@ -1020,6 +1035,7 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
     appVersion,
     agentVersion,
     allowDomains,
+    webFetchVendorDeny,
     networkMode,
     requireFullVmSandbox,
     asarFingerprint: fingerprint,
@@ -1491,6 +1507,14 @@ function skipLiteralAt(text: string, i: number): number {
   return j + 1;
 }
 
+/** The body of the `{` block opening at `open`, string- and template-literal-aware (a brace inside a message does not
+ *  end it), or null if unbalanced. For bodies that carry user-facing text, where `braceBodyOf` could mis-bound. */
+export function literalAwareBodyAt(text: string, open: number): string | null {
+  if (text[open] !== "{") return null;
+  const close = matchBrace(text, open);
+  return close < 0 ? null : text.slice(open + 1, close);
+}
+
 /** Index of the `}` closing the block that opens at `open`, or -1 if unbalanced. */
 function matchBrace(text: string, open: number): number {
   let depth = 0;
@@ -1510,6 +1534,93 @@ function matchBrace(text: string, open: number): number {
     i++;
   }
   return -1;
+}
+
+/** Index of the `)` closing the `(` at `open` (literal-aware, any bracket kind nests), or -1 if unbalanced. */
+function matchParen(text: string, open: number): number {
+  let depth = 0;
+  let i = open;
+  while (i < text.length) {
+    const lit = skipLiteralAt(text, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
+    const c = text[i];
+    if (c === "(" || c === "[" || c === "{") depth++;
+    else if (c === ")" || c === "]" || c === "}") {
+      depth--;
+      if (depth === 0) return c === ")" ? i : -1;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/** A canUseTool chain link, with Desktop 4.4212.0's launcher-conditional form unwrapped: `(<g>?void 0:await <F>(…))`
+ *  is `{ guard: g, call: "await <F>(…)" }`; any other operand is `{ guard: null, call: op }`. Only that exact shape is
+ *  unwrapped — arms swapped, another alternative, a non-call inner, or an inner call followed by anything (`??x`) keeps
+ *  the raw operand, which the plain-call rule then flags. */
+export function unwrapConditionalLink(op: string): { guard: string | null; call: string } {
+  const m = op.match(/^\(([\w$]+)\?void 0:/);
+  if (!m || matchParen(op, 0) !== op.length - 1) return { guard: null, call: op };
+  const call = op.slice(m[0].length, -1);
+  // The inner text must be ONE call: its argument list closes at the end. `await F(…)??{behavior:"allow"}` or
+  // `F(…)??G(…)` would otherwise read as the link `F` while hiding a fall-through or a further link.
+  const head = call.match(/^(?:await\s+)?[\w$]+\(/);
+  if (!head || matchParen(call, head[0].length - 1) !== call.length - 1) return { guard: null, call: op };
+  return { guard: m[1]!, call };
+}
+
+/** The chunk exporting `spawnThroughHostCliLauncher` and the local it names, or null. */
+function hostCliLauncherExport(files: Map<string, string>): { chunk: string; local: string } | null {
+  // Only the export map's arrow form (`spawnThroughHostCliLauncher:()=>l`): a destructuring read of the same name
+  // (`let{spawnThroughHostCliLauncher:r}=await …`) in a consumer chunk is not the definition.
+  const hits = [...files.values()].flatMap((c) => {
+    const m = c.match(/(?<![\w$])spawnThroughHostCliLauncher:\(\)=>([A-Za-z_$][\w$]*)/);
+    return m ? [{ chunk: c, local: m[1]! }] : [];
+  });
+  return hits.length === 1 ? hits[0]! : null;
+}
+
+/** Desktop's host CLI launcher is wired (2.9939.2 on) but inert: the holder its path accessor reads has no writer
+ *  beyond its `=null` declaration, and the chunk it lazily loads for `initSimulatorToolchainHost` exports no such name.
+ *  While both hold, `viaLauncher` is always false, so a chain link skipped under the launcher always runs. Presence-
+ *  conditional on the name; once present, every missing anchor is a defect. */
+export function hostCliLauncherInertDefects(files: Map<string, string>): string[] {
+  if (![...files.values()].some((c) => c.includes("spawnThroughHostCliLauncher"))) return [];
+  const out: string[] = [];
+  const L = hostCliLauncherExport(files);
+  if (!L) return ["no single chunk exports spawnThroughHostCliLauncher — the launcher can no longer be shown inert"];
+  const holder = L.chunk.match(/function [\w$]+\(\)\{return ([\w$]+)!==null&&\1\.stillWanted\(\)\?\1\.path:null\}/)?.[1];
+  if (!holder)
+    out.push(
+      "the launcher's path accessor (`return <h>!==null&&<h>.stillWanted()?<h>.path:null`) is gone — read where its path comes from",
+    );
+  else {
+    const writes = [...L.chunk.matchAll(new RegExp(`(?<![\\w$.])${reEsc(holder)}(?:=(?!=)|\\?\\?=|\\|\\|=|&&=)`, "g"))];
+    // A destructuring assignment writes the holder too: `[…,<h>,…]=x` or `({…,k:<h>,…}=x)` / `({<h>}=x)`. The element
+    // lists exclude brackets, `=` and `;`, so a NESTED pattern (`[[r]]=x`), a default value (`[r=1]=x`), and a
+    // `for (r of …)` / `for ([r] of …)` loop target are out of scope: none is counted. The holder is a module-level
+    // `let` read only through the path accessor; those forms would need a scope-aware reader to count reliably.
+    const destructured = [
+      ...L.chunk.matchAll(new RegExp(`\\[(?:[^\\[\\]=;]*,)?\\s*(?:\\.\\.\\.)?${reEsc(holder)}\\s*(?:,[^\\[\\]=;]*)?\\]=(?!=)`, "g")),
+      ...L.chunk.matchAll(new RegExp(`\\{(?:[^{}=;]*,)?\\s*(?:[\\w$]+:)?(?:\\.\\.\\.)?${reEsc(holder)}\\s*(?:,[^{}=;]*)?\\}=(?!=)`, "g")),
+    ].length;
+    if (writes.length !== 1 || destructured || !L.chunk.startsWith(`${holder}=null`, writes[0]!.index!))
+      out.push(
+        `the launcher's path holder \`${holder}\` is written ${writes.length - 1 + destructured} time(s) beyond its \`=null\` declaration — the launcher may now be live, so a link skipped under it may not run`,
+      );
+  }
+  const init = L.chunk.match(/require\("\.\/([^"]+)"\)\)\)?\.then\(\(?([\w$]+)\)?=>\2\.initSimulatorToolchainHost/);
+  if (!init) out.push("the launcher no longer lazily loads a chunk for initSimulatorToolchainHost — read what starts it now");
+  else {
+    const target = files.get(init[1]!.slice(init[1]!.lastIndexOf("/") + 1));
+    if (target === undefined) out.push(`the launcher's lazy init chunk (${init[1]}) is not in the bundle`);
+    else if (exportLocalOf(target, "initSimulatorToolchainHost") !== null)
+      out.push("the launcher's lazy init chunk now exports initSimulatorToolchainHost — the launcher may now be live");
+  }
+  return out;
 }
 
 /** The top-level, comma-separated arguments of the call whose `(` is at `open`, or null when it does not close. */
@@ -1601,10 +1712,13 @@ function nullishChainInBlock(block: string): string | null {
  *  ONE operand ("the chain has 1 links"). Both shapes are handled; `block` is non-null only for the block
  *  form, and the caller MUST assert the wrapper facts on it — teaching the extractor the shape without
  *  that would silence three flags and leave two new decision points invisible. */
+/** The canUseTool install, `let K=e.canUseTool;K&&(e.canUseTool=async(<params>)=>`. Groups: 1 the saved original,
+ *  2 the options object, 3 the callback's parameter list. `\1` binds the guard to the SAVED ORIGINAL:
+ *  `let K=e.canUseTool;zz&&(…)` must not read as guarded. The single spelling of this shape in the file. */
+const CAN_USE_TOOL_INSTALL = /(?:const|let|var) ([\w$]+)=([\w$]+)\.canUseTool;\1&&\(\2\.canUseTool=async\(([^)]*)\)=>/;
+
 export function extractCanUseToolChain(text: string): { orig: string; operands: string[]; block: string | null } | null {
-  // `\1` binds the guard to the SAVED ORIGINAL: `let K=e.canUseTool;K&&(e.canUseTool=async(…)=>`.
-  // Without the backreference, `let K=e.canUseTool;zz&&(…)` reads as guarded while being unconditional.
-  const m = text.match(/(?:const|let|var) ([\w$]+)=([\w$]+)\.canUseTool;\1&&\(\2\.canUseTool=async\([^)]*\)=>/);
+  const m = text.match(CAN_USE_TOOL_INSTALL);
   if (!m || m.index === undefined) return null;
   const start = m.index + m[0].length;
 
@@ -1645,6 +1759,7 @@ export function extractCanUseToolChain(text: string): { orig: string; operands: 
 function extractFromAsar(
   unknown: string[],
   gates: Record<string, GateState> | null,
+  appVersion: string, // the same installed app's Info.plist version; "" when unreadable (already flagged)
 ): {
   fingerprint: string;
   asarGateIds: string[];
@@ -1662,6 +1777,9 @@ function extractFromAsar(
   /** Whether the bundle still logs the host-loop dump the observed spawn-env oracle reads; null = unread. */
   spawnEnvProducer: boolean | null;
   cloud: CloudBlock | null;
+  /** web_fetch Path B vendor-host refusal list (`checkWebFetchVendorFacts`); null when the build has no such step or
+   *  the bundle could not be read. */
+  webFetchVendorDeny: string[] | null;
   notes: string[];
 } {
   if (!existsSync(ASAR)) {
@@ -1679,6 +1797,7 @@ function extractFromAsar(
       bundleHasProductName: null,
       spawnEnvProducer: null,
       cloud: null,
+      webFetchVendorDeny: null,
       notes: [],
     };
   }
@@ -1699,6 +1818,9 @@ function extractFromAsar(
     for (const f of checkMountModeFacts(bundle, bundleFiles)) flag(unknown, f);
     for (const f of checkAutoMemoryFacts(bundleFiles)) flag(unknown, f);
     for (const f of checkWebFetchFacts(bundle)) flag(unknown, f);
+    const vendor = checkWebFetchVendorFacts(bundleFiles);
+    for (const f of vendor.flags) flag(unknown, f);
+    const webFetchVendorDeny = vendor.flags.length ? null : vendor.vendorDeny;
     for (const f of checkPathHookFacts(bundleFiles)) flag(unknown, f);
     for (const f of checkSyspromptMapFacts(bundleFiles)) flag(unknown, f);
     // Code-shape tripwires (getMcpSkillSources caller, MCP-skills cap) — deltas hard-fail, NOTEs inform.
@@ -1720,7 +1842,7 @@ function extractFromAsar(
     for (const f of checkVmAgentStagingFacts(bundleFiles)) flag(unknown, f);
     const subagentFps = readSubagentFingerprints();
     for (const f of checkSubagentPromptFacts(bundleFiles, subagentFps)) flag(unknown, f);
-    for (const f of checkScheduledSessionFacts(bundleFiles)) flag(unknown, f);
+    for (const f of checkScheduledSessionFacts(bundleFiles, appVersion || undefined)) flag(unknown, f);
     const spawn = deriveSpawnEnv(bundle, gates, bundleFiles);
     const { deltas: spawnDeltas, notes } = partitionSpawnFlags(spawn.flags);
     for (const f of spawnDeltas) flag(unknown, f);
@@ -1749,7 +1871,8 @@ function extractFromAsar(
     // NOT write-blocking: the block is data no harness path reads. A failed extraction writes the baseline
     // without it (never the previous release's) and says so; check:versions then warns.
     const { cloud, notes: cloudNotes } = safeCloudBlock(rawFiles);
-    const promptFingerprint = extractPromptFingerprint(bundle);
+    const promptFingerprint = extractPromptFingerprint(bundle, bundleFiles);
+    for (const f of checkPromptReaderFacts(bundleFiles)) flag(unknown, f);
     const fingerprintsFile = readPromptFingerprintsFile();
     const promptDrift = checkPromptDrift(
       promptFingerprint,
@@ -1777,6 +1900,7 @@ function extractFromAsar(
           new RegExp(`\\.${reEsc(name)}(?![\\w$])`).test(bundle)),
       spawnEnvProducer: bundleHasSpawnEnvProducer(bundle),
       cloud,
+      webFetchVendorDeny,
       notes: [...notes, ...postWriteNotes, ...promptDrift.notes, ...tripwireNotes, ...cloudNotes],
     };
   } catch (e) {
@@ -1794,6 +1918,7 @@ function extractFromAsar(
       bundleHasProductName: null,
       spawnEnvProducer: null,
       cloud: null,
+      webFetchVendorDeny: null,
       notes: [],
     };
   } finally {
@@ -2053,6 +2178,114 @@ export function checkWebFetchFacts(bundle: string): string[] {
         `web_fetch: ${what} is gone from the asar — Cowork's web_fetch mechanism may have changed; re-verify the two-path port (see webfetch-high-fidelity-plan)`,
       );
   return flags;
+}
+
+/** The typed-artifact tools Desktop's own `cowork` SDK server builds (checkScheduledSessionFacts (6)). A name outside
+ *  this list fails the sync until it is read. One list with the one baseline-diff reads (types.ts), so the guard and
+ *  the diff note cannot disagree. `list_typed_artifacts` is new in Desktop 4.4212.0. */
+export const KNOWN_COWORK_FRAME_TOOLS: readonly string[] = SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS.cowork ?? [];
+
+/** The KNOWN_COWORK_FRAME_TOOLS names Desktop added after the frame-tool list first appeared, each with the Desktop version
+ *  that added it. Every other known name must be in the list; one of these may be missing only from an older build. */
+export const COWORK_FRAME_TOOLS_SINCE: Readonly<Record<string, string>> = { list_typed_artifacts: "4.4212.0" };
+
+/** The vendor hosts Desktop 4.4212.0's web_fetch refuse function lists. Sync reads only whether the build has the
+ *  vendor step; the value it records is this constant. A build whose list differs flags and records no field, so the
+ *  baseline follows a changed list only after this constant is edited, by someone who has read the change. */
+export const KNOWN_WEBFETCH_VENDOR_DENY: readonly string[] = [
+  "a-api.anthropic.com",
+  "a-cdn.anthropic.com",
+  "s-cdn.anthropic.com",
+  "notebook.anthropic.com",
+];
+
+/**
+ * web_fetch vendor-host refusal (Desktop 4.4212.0). Cowork's web_fetch refuse function — the one the harness ports as
+ * `u1t` — runs: scheme → local/private address → `*` in the allowlist ⇒ allow → a vendor host (or a subdomain of one)
+ * ⇒ refuse → the allowlist. The workspace server's `web_fetch` passes it as `refuseTarget` on its
+ * `coworkWebFetchViaApi`-off branch (the harness's Path B), with the session's allowed domains.
+ *
+ * PRESENCE-CONDITIONAL: a build without the refusal text has no step (3.6556.2, 4.29.0) → no flags and a null list,
+ * so the baseline gets no field. Once the text is present everything is pinned: one refuse function containing it, the
+ * five steps in that order, the matcher's normalize + host-or-subdomain shape, the list resolved through at most one
+ * alias to one array literal equal to `KNOWN_WEBFETCH_VENDOR_DENY`, and the `refuseTarget` call site. Any miss flags,
+ * so a reshaped step never silently drops the refusal or keeps a stale list.
+ */
+export function checkWebFetchVendorFacts(files: Map<string, string>): { flags: string[]; vendorDeny: string[] | null } {
+  const SENTINEL = "goes to an outside vendor";
+  const hits = [...files].filter(([, c]) => c.includes(SENTINEL));
+  const flags: string[] = [];
+  const miss = (why: string) => {
+    flags.push(`web_fetch vendor deny: ${why} — re-verify the Path B refuse function before the baseline records its list`);
+    return { flags, vendorDeny: null };
+  };
+  if (hits.length === 0) {
+    // Presence must not rest on the refusal's wording alone: reworded, the step would vanish from the baseline in
+    // silence. Two independent signs of the vendor step, each absent from every build before 4.4212.0 (0 in 3.6556.2
+    // and 4.29.0): a known vendor host as a string literal, and the normalize + host-or-subdomain matcher's shape.
+    const all = [...files.values()];
+    const hostLiteral = KNOWN_WEBFETCH_VENDOR_DENY.some((h) => all.some((c) => new RegExp(`["'\`]${reEsc(h)}["'\`]`).test(c)));
+    const matcherShape = all.some((c) =>
+      /toLowerCase\(\)\.split\("\."\)\.filter\(Boolean\)\.join\("\."\);return [\w$]+\.some\(\(([\w$]+)=>[\w$]+===\1\|\|/.test(c),
+    );
+    if (hostLiteral || matcherShape)
+      return miss(
+        `the refusal text is gone but ${[hostLiteral && "a known vendor host literal", matcherShape && "the vendor matcher's shape"].filter(Boolean).join(" and ")} remain${hostLiteral && matcherShape ? "" : "s"} — the refusal may have been reworded`,
+      );
+    return { flags, vendorDeny: null };
+  }
+  if (hits.length !== 1) return miss(`the refusal text is in ${hits.length} chunks, expected one`);
+  const chunk = hits[0][1];
+  const fns = [...chunk.matchAll(/function ([\w$]+)\(([\w$]+),([\w$]+)=\[\]\)\{/g)]
+    .map((m) => ({ m, body: literalAwareBodyAt(chunk, (m.index ?? 0) + m[0].length - 1) }))
+    .filter((f) => f.body?.includes(SENTINEL));
+  if (fns.length !== 1) return miss(`${fns.length} two-parameter refuse functions carry the refusal text, expected one`);
+  const [, fn, url, list] = fns[0].m;
+  const body = fns[0].body!;
+  const step = (re: RegExp) => body.search(re);
+  // The vendor-step locator `if(<f>(<url>.hostname))return` takes a BARE callee, and so does not match the
+  // private-address check only because that one is a namespaced call (`t.GQ(<url>.hostname)` on 4.4212.0). If Desktop
+  // made it a bare local, the locator would land on it, and the ordering rule would flag (fail closed) but name the
+  // vendor check as the step out of order.
+  const order = [
+    step(new RegExp(`if\\(${reEsc(url)}\\.protocol!=="http:"&&${reEsc(url)}\\.protocol!=="https:"\\)return`)),
+    step(/is a local or private address/),
+    step(new RegExp(`if\\(${reEsc(list)}\\.includes\\("\\*"\\)\\)return null;`)),
+    step(new RegExp(`if\\([\\w$]+\\(${reEsc(url)}\\.hostname\\)\\)return`)),
+    step(new RegExp(`${reEsc(list)}\\.some\\(`)),
+  ];
+  const names = ["scheme check", "private-address check", "`*` short-circuit", "vendor check", "allowlist check"];
+  for (let i = 0; i < order.length; i++) if (order[i] < 0) return miss(`the ${names[i]} is not in ${fn}`);
+  for (let i = 1; i < order.length; i++)
+    if (order[i] < order[i - 1]) return miss(`the ${names[i]} no longer follows the ${names[i - 1]} in ${fn}`);
+  const vendorFn = body.slice(order[3]).match(new RegExp(`^if\\(([\\w$]+)\\(${reEsc(url)}\\.hostname\\)\\)return`))![1];
+  if (body.slice(order[3], order[3] + 300).indexOf(SENTINEL) < 0) return miss(`the vendor check in ${fn} does not return the refusal`);
+  const matcher = chunk.match(
+    new RegExp(
+      `function ${reEsc(vendorFn)}\\(([\\w$]+)\\)\\{let ([\\w$]+)=\\1\\.toLowerCase\\(\\)\\.split\\("\\."\\)\\.filter\\(Boolean\\)\\.join\\("\\."\\);` +
+        `return ([\\w$]+)\\.some\\(\\(([\\w$]+)=>\\2===\\4\\|\\|\\2\\.endsWith\\((?:\`\\.\\$\\{\\4\\}\`|"\\."\\+\\4)\\)\\)\\)\\}`,
+    ),
+  );
+  if (!matcher) return miss(`${vendorFn} is no longer a normalize + host-or-subdomain match over one list`);
+  let ref = matcher[3];
+  let arr: string | null = null;
+  for (let hop = 0; hop < 2 && arr === null; hop++) {
+    const defs = [...chunk.matchAll(new RegExp(`(?<![\\w$.])${reEsc(ref)}=(\\[[^\\]]*\\]|[\\w$]+)(?=[,;])`, "g"))];
+    if (defs.length !== 1) return miss(`the list ${ref} has ${defs.length} definitions in its chunk, expected one`);
+    if (new RegExp(`(?<![\\w$])${reEsc(ref)}\\.(?:push|splice|unshift)\\(`).test(chunk)) return miss(`the list ${ref} is mutated`);
+    if (defs[0][1].startsWith("[")) arr = defs[0][1];
+    else ref = defs[0][1];
+  }
+  if (arr === null || !/^\[(?:"[^"]+"(?:,"[^"]+")*)?\]$/.test(arr)) return miss("the vendor list is not one array of string literals");
+  const vendorDeny = [...arr.matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  if (vendorDeny.join("|") !== KNOWN_WEBFETCH_VENDOR_DENY.join("|"))
+    return miss(`the vendor list changed (${vendorDeny.join(", ")}); review it, then update KNOWN_WEBFETCH_VENDOR_DENY`);
+  const calls = [...chunk.matchAll(new RegExp(`refuseTarget:([\\w$]+)=>${reEsc(fn)}\\(\\1,[\\w$]+\\.allowedDomains\\)`, "g"))];
+  if (calls.length !== 1)
+    return miss(
+      `${calls.length} \`refuseTarget\` call sites pass ${fn} the session's allowed domains, expected one (the workspace web_fetch)`,
+    );
+  return { flags, vendorDeny };
 }
 
 /**
@@ -2321,10 +2554,10 @@ function artifactCaptureDefects(
   // The SDK's camelCase field is the hook payload's tool_use_id; the store key is checked below.
   if (field !== "toolUseID") add("key", `the lookup reads \`${field}\`, not toolUseID — it can never find what the hook stored`);
 
-  const install = chunk.match(/(?:const|let|var) ([\w$]+)=([\w$]+)\.canUseTool;\1&&\(\2\.canUseTool=async\([^)]*\)=>\{/);
-  if (!install || install.index === undefined) return out;
+  const install = chunk.match(CAN_USE_TOOL_INSTALL);
+  if (!install || install.index === undefined || chunk[install.index + install[0].length] !== "{") return out;
   const installAt = install.index;
-  const installEnd = matchBrace(chunk, installAt + install[0].length - 1);
+  const installEnd = matchBrace(chunk, installAt + install[0].length);
   // A declaration (`let M=new Map` or `,M=new Map` in a declaration list), never a bare `M=new Map` reassignment —
   // otherwise a reassignment would become the scope start and hide itself. The NEAREST declaration is taken: a
   // same-named Map declared later inside the hook makes the real writer fall outside, and that is flagged (under
@@ -2582,6 +2815,104 @@ function bindsPathKeys(chunk: string, local: string): GateBinding {
   return m && m[1] === pathGateMapId(chunk) ? { form: "derived", map: m[1] } : null;
 }
 
+/** The body of the path-gate PreToolUse hook whose matcher starts at `installAt`: the delegate's
+ *  (`hooks:[async e=>{try{return await <D>(e)}…` → the single `async function <D>(…){…}`) or the inline arrow's.
+ *  Literal-aware, so a brace inside a message does not end it. null when neither form resolves. */
+function pathHookBody(chunk: string, installAt: number): string | null {
+  // 600 chars is only the HEAD the two forms are recognised in (the delegate call sits ~32 chars in on 4.4212.0); the
+  // body itself is read whole, below.
+  const head = chunk.slice(installAt, installAt + 600);
+  const pre = /^\[\.\.\.[\w$]+(?:\.[\w$]+)?,"MultiEdit"\]\.join\("\|"\),hooks:\[async \(?([\w$]+)\)?=>\{/;
+  const del = head.match(new RegExp(pre.source + String.raw`try\{return await ([\w$]+)\(\1\)`));
+  if (del) {
+    const header = `async function ${del[2]}(`;
+    const at = chunk.indexOf(header);
+    if (at < 0 || chunk.indexOf(header, at + 1) >= 0) return null;
+    const close = matchParen(chunk, at + header.length - 1);
+    return close < 0 ? null : literalAwareBodyAt(chunk, close + 1);
+  }
+  const inline = head.match(pre);
+  return inline ? literalAwareBodyAt(chunk, installAt + inline[0].length - 1) : null;
+}
+
+/** Why the launcher guard `<g>` of a conditional canUseTool link is not `<o>.viaLauncher` read from the launcher call
+ *  in the install's own function, or null. See checkPathHookFacts (6). */
+function launcherGuardDefect(chunk: string, files: Map<string, string>, g: string, conditionalLinks: number): string | null {
+  const L = hostCliLauncherExport(files);
+  if (!L) return `a chain link is skipped under \`${g}\`, but no single chunk exports spawnThroughHostCliLauncher`;
+  const install = chunk.match(CAN_USE_TOOL_INSTALL);
+  const installAt = install?.index ?? -1;
+  const calls = [...chunk.slice(0, Math.max(0, installAt)).matchAll(/(?<![\w$.])([\w$]+)=await ([\w$]+\.[\w$]+)\(/g)].filter((m) => {
+    const r = resolveNamespaceRef(m[2]!, chunk, files);
+    return !!r && r.chunk === L.chunk && r.local === L.local;
+  });
+  if (installAt < 0 || calls.length === 0)
+    return `a chain link is skipped under \`${g}\`, but no call to the host CLI launcher precedes the canUseTool install`;
+  // Exactly one: with two, which one the flag reads is a question this walk would answer by position alone.
+  if (calls.length !== 1)
+    return `the host CLI launcher is called ${calls.length} times before the canUseTool install (expected exactly once) — read which result the flag comes from`;
+  const call = calls[0]!;
+  // One function: the brace depth (literal-aware) never drops below where the launcher call sits.
+  let depth = 0;
+  for (let i = call.index!; i < installAt;) {
+    const lit = skipLiteralAt(chunk, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
+    if (chunk[i] === "{") depth++;
+    else if (chunk[i] === "}" && --depth < 0)
+      return (
+        `the host CLI launcher call (\`${call[1]}\`) is not in the canUseTool install's function ` +
+        "(or a string or regex literal between them could not be read, which desyncs this walk)"
+      );
+    i++;
+  }
+  const assignRe = (name: string) => new RegExp(`(?<![\\w$.])${reEsc(name)}(?:=(?!=)|\\?\\?=|\\|\\|=|&&=)`, "g");
+  const window = chunk.slice(call.index!, installAt);
+  // The launcher result itself: bound once (the call), and its `viaLauncher` never written in between.
+  const oBinds = [...window.matchAll(assignRe(call[1]!))].length;
+  if (oBinds !== 1 || new RegExp(`(?<![\\w$.])${reEsc(call[1]!)}\\.viaLauncher(?:=(?!=)|\\?\\?=|\\|\\|=|&&=)`).test(window))
+    return `the host CLI launcher result \`${call[1]}\` is re-bound or its \`viaLauncher\` written between the call and the canUseTool install`;
+  const binds = [...window.matchAll(assignRe(g))];
+  if (binds.length !== 1)
+    return `\`${g}\` is bound ${binds.length} times between the host CLI launcher call and the canUseTool install (expected exactly once)`;
+  const rhs = window.slice(binds[0]!.index! + binds[0]![0].length);
+  if (!new RegExp(`^${reEsc(call[1]!)}\\.viaLauncher(?![\\w$])`).test(rhs))
+    return `\`${g}\` is not bound to the host CLI launcher result's \`viaLauncher\` (\`${call[1]}.viaLauncher\`)`;
+  // Shadowing. The callback's own parameter, a binding inside the block, or a hoisted `var`/`function` of the same name
+  // anywhere in the function would make the links read something other than the flag bound above.
+  const idRe = (name: string) => new RegExp(`(?<![\\w$.])${reEsc(name)}(?![\\w$])`);
+  if (idRe(g).test(install![3]!)) return `\`${g}\` is a parameter of the canUseTool callback, which shadows the launcher flag`;
+  const open = installAt + install![0].length;
+  if (chunk[open] === "{") {
+    const close = matchBrace(chunk, open);
+    const block = close < 0 ? "" : chunk.slice(open + 1, close);
+    // Inside the block the flag may appear only as each conditional link's `(<g>?void 0:` and as ONE call argument (the
+    // pre-pass's `!<g>`; whether that argument is right is the pairing rule's to say, not this one's). An arrow
+    // parameter `(…,<g>)=>` is a binding, not an argument.
+    const uses = [...block.matchAll(new RegExp(idRe(g).source, "g"))].length;
+    const arg = [...block.matchAll(new RegExp(`[,(]!?${reEsc(g)}(?=,|\\)(?!=>))`, "g"))].length;
+    const cond = [...block.matchAll(new RegExp(`\\(${reEsc(g)}\\?void 0:`, "g"))].length;
+    if (close < 0 || arg > 1 || cond !== conditionalLinks || uses !== arg + cond)
+      return `\`${g}\` appears in the canUseTool block ${uses} time(s), not only as one pre-pass argument and the ${conditionalLinks} skipped link(s) — it may be re-bound there`;
+  }
+  // The rest of the function, for a hoisted declaration (`var <g>` or `function <g>` after the install still rebinds it).
+  let end = installAt;
+  for (let d = depth; end < chunk.length; end++) {
+    const lit = skipLiteralAt(chunk, end);
+    if (lit >= 0) {
+      end = lit - 1;
+      continue;
+    }
+    if (chunk[end] === "{") d++;
+    else if (chunk[end] === "}" && --d < 0) break;
+  }
+  if (new RegExp(`(?:\\bvar\\s+|\\bfunction\\s*)${reEsc(g)}(?![\\w$])`).test(chunk.slice(call.index!, end)))
+    return `\`${g}\` has a hoisted \`var\` or \`function\` declaration in the canUseTool install's function`;
+  return null;
+}
+
 export function checkPathHookFacts(files: Map<string, string>): string[] {
   const flags: string[] = [];
   const miss = (what: string, why: string) => flags.push(`path-hook: ${what} anchor missing — ${why}`);
@@ -2833,6 +3164,11 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   } else {
     const { orig, operands, block } = chain;
     const calleeOf = (op: string) => op.match(/^(?:await\s+)?([\w$]+)\(/)?.[1];
+    // Desktop 4.4212.0: a link may be skipped when the agent runs through the host CLI launcher,
+    // `(<g>?void 0:await <F>(…))`. Every rule below reads the inner call; the guard itself is pinned in (6).
+    const links = operands.map(unwrapConditionalLink);
+    const guards = [...new Set(links.map((l) => l.guard).filter((g): g is string => g !== null))];
+    const guard = guards.length === 1 ? guards[0]! : null;
     const bodyOf = (fn: string) => braceBodyOf(consuming, `async function ${fn}(`) ?? braceBodyOf(consuming, `function ${fn}(`);
 
     // (1) TERMINAL: exactly one of two admitted forms — a bare call to the saved original, or the judged-
@@ -2860,7 +3196,7 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
       // older asar (bare terminal, deny form) still syncs. A flip back to deny, to an allow, or the branch
       // vanishing is a permission-semantics change that must be classified, not absorbed.
       if (operands.length >= 2) {
-        const defect3 = managedAskDefect(operands[operands.length - 2], consuming, files, defining);
+        const defect3 = managedAskDefect(links[links.length - 2]!.call, consuming, files, defining);
         if (defect3) miss("canUseTool managed-ask", defect3);
       }
     }
@@ -2871,6 +3207,11 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     //     new decision points unmodelled — the exact way B16/B18 failed open.
     // An expression-form install has no pre-pass, so no capture lookup either: with the matcher widened to an MCP
     // server (3.6556.1 on), that is a permission wrapper with none of the capture's checks.
+    if (block === null && guard !== null)
+      miss(
+        "canUseTool launcher pairing",
+        "a chain link is skipped under the host CLI launcher, but the install has no pre-pass to pair it with",
+      );
     if (block === null && WIDENED_ARTIFACT_MATCHER.test(consuming))
       miss(
         "canUseTool capture lookup",
@@ -2879,9 +3220,7 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     if (block !== null) {
       // Desktop 3.6556.1: the block may open with a per-call capture lookup ahead of the pre-pass (see
       // artifactCaptureDefects). The pre-pass binding is then read from what follows it.
-      const p3 = consuming
-        .match(/(?:const|let|var) ([\w$]+)=([\w$]+)\.canUseTool;\1&&\(\2\.canUseTool=async\(([^)]*)\)=>\{/)?.[3]
-        .split(",")[2];
+      const p3 = consuming.match(CAN_USE_TOOL_INSTALL)?.[3].split(",")[2];
       const prelude = p3
         ? block.match(
             new RegExp(`^(?:const|let|var) ([\\w$]+)=([\\w$]+)\\.get\\(${reEsc(p3)}\\.([\\w$]+)\\);\\2\\.delete\\(${reEsc(p3)}\\.\\3\\);`),
@@ -2900,6 +3239,25 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
           miss("canUseTool wrapper", "the block body does not open with a pre-pass binding — classify the new shape before admitting it");
       } else {
         const [, resultId, awaited, preFn] = pre;
+        // B.2: the launcher-conditional link and the pre-pass's 5th argument come together. The pre-pass is told the
+        // agent runs on this host (`!<g>`); a 5th argument with no conditional link, or the reverse, is unread.
+        if (guard === null && preArgs.length > 4)
+          miss(
+            "canUseTool launcher pairing",
+            `the pre-pass \`${preFn}\` takes ${preArgs.length} arguments but no chain link is conditional on the host CLI launcher — classify the new argument`,
+          );
+        if (guard !== null) {
+          const hdrAt = consuming.indexOf(`async function ${preFn}(`);
+          const pOpen = hdrAt < 0 ? -1 : hdrAt + `async function ${preFn}`.length;
+          const params = pOpen < 0 ? null : topLevelArgs(consuming, pOpen);
+          if (preArgs.length !== 5 || preArgs[4]!.trim() !== `!${guard}`)
+            miss(
+              "canUseTool launcher pairing",
+              `a chain link is skipped under the host CLI launcher (\`${guard}\`), but the pre-pass is not passed \`!${guard}\` as its 5th argument`,
+            );
+          else if (!params || params.length !== 5 || !/^[\w$]+=!0$/.test(params[4]!.trim()))
+            miss("canUseTool launcher pairing", `the pre-pass \`${preFn}\` no longer takes a 5th parameter defaulting to true`);
+        }
         for (const [what, why] of artifactCaptureDefects(consuming, files, block, prelude, preArgs, preFn)) miss(what, why);
         // The await rule again, for the pre-pass: an un-awaited async call yields a Promise, so the early
         // deny never fires and `finish` is not a function. Both new decision points go inert in silence.
@@ -2947,7 +3305,7 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     //     never nullish, so an un-awaited link short-circuits `??` and silently disables EVERY later link
     //     INCLUDING the original callback. Executed: `Ke()??Xe()??qe()??K()` with Xe async resolves to
     //     undefined instead of qe's deny. Dropping one `await` is therefore a full permission bypass.
-    for (const op of operands) {
+    for (const { call: op } of links) {
       const fn = calleeOf(op);
       if (!fn) continue;
       if (new RegExp(`async function ${reEsc(fn)}\\(`).test(consuming) && !/^await\s/.test(op))
@@ -2961,7 +3319,7 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     //     put the auto-memory ALLOW ahead of the outside-roots deny deliberately; moving it ahead of the
     //     VM-path deny instead would let a VM path through. Nothing else here would notice a reorder.
     const idxOf = (pred: (b: string) => boolean) =>
-      operands.findIndex((op) => {
+      links.findIndex(({ call: op }) => {
         const fn = calleeOf(op);
         const b = fn ? bodyOf(fn) : null;
         return !!b && pred(b);
@@ -2981,13 +3339,30 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
 
     // (5) Every non-terminal callee must RESOLVE to a definition in this chunk. A link swapped for an
     //     unresolvable one keeps the count and the terminal intact, so without this D5 passes.
-    for (const op of operands.slice(0, -1)) {
+    for (const { call: op } of links.slice(0, -1)) {
       const fn = calleeOf(op);
       if (!fn)
         miss("canUseTool chain operand", `a chain link is not a plain call (\`${op.slice(0, 40)}\`) — classify it before admitting it`);
       else if (!bodyOf(fn)) miss("canUseTool chain operand", `chain link \`${fn}\` has no resolvable definition in the hook chunk`);
     }
+    if (links[links.length - 1]!.guard !== null)
+      miss("canUseTool chain terminal", "the call to the saved original is skipped under the host CLI launcher");
+
+    // (6) THE LAUNCHER GUARD. Every conditional link reads one flag `<g>`. Walking FORWARD from the single call that
+    //     resolves to the launcher's spawnThroughHostCliLauncher export (`let <o>=await <ns>.<m>(…)`) to the canUseTool
+    //     install, staying in one function, `<g>` is bound exactly once, to `<o>.viaLauncher`. A same-named binding
+    //     elsewhere in the chunk (4.4212.0 has `let ke=…` in another function) is never consulted.
+    if (guards.length > 1)
+      miss(
+        "canUseTool launcher guard",
+        `chain links are skipped under ${guards.length} different flags (${guards.join(", ")}) — read each`,
+      );
+    if (guard !== null) {
+      const why = launcherGuardDefect(consuming, files, guard, links.filter((l) => l.guard !== null).length);
+      if (why) miss("canUseTool launcher guard", why);
+    }
   }
+  for (const why of hostCliLauncherInertDefects(files)) miss("host CLI launcher inert", why);
 
   // qt-before-containment ORDER + removed-exemption ABSENCE: inside the hook body slice, the category
   // guard's function must be referenced BEFORE any containment-helper call, and NO containment call may
@@ -3002,9 +3377,17 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   else if (installAt < 0)
     miss("install offset", "the install site matched for discovery but not for ordering — the order check would skip");
   else {
-    const hookSlice = consuming.slice(installAt, installAt + 6000);
-    const qtCallAt = hookSlice.indexOf(`${qtDef[1]}(`);
-    if (qtCallAt < 0) miss("qt call in hook", "the category guard is not invoked from the hook body");
+    // The hook body, bounded literal-aware: since 1.32352.0 the hook delegates (`hooks:[async e=>{try{return await
+    // <D>(e)}…`) to `async function <D>(…)`; an inline body is admitted too. A fixed window after the matcher stopped
+    // reaching the containment call when 4.4212.0 grew the delegate, so the body is read whole.
+    const hookSlice = pathHookBody(consuming, installAt);
+    const qtCallAt = hookSlice === null ? -1 : hookSlice.indexOf(`${qtDef[1]}(`);
+    if (hookSlice === null)
+      miss(
+        "hook body",
+        "the PreToolUse hook neither delegates to one resolvable `async function` nor has an inline body — the ordering checks cannot run",
+      );
+    else if (qtCallAt < 0) miss("qt call in hook", "the category guard is not invoked from the hook body");
     else {
       // B18: this searched for `.isPathContainedInFolders(` / `isContained(`. Counted across BOTH the
       // 1.28929.0 and 1.30096.1 asars, those tokens occur ZERO times — production's containment helper is
@@ -3068,6 +3451,109 @@ export interface PromptFingerprint {
   sectionTagNames: string[]; // sorted unique <name> open-tag names
 }
 
+/** The single definition `<id>=\`` of `id` in `text` (as a declaration or after `,;{(`), when it is the only binding
+ *  of that name in the text or is exported; else null. Never "the first match": a short minified name recurs. */
+function uniqueTemplateDefinition(text: string, id: string): number | null {
+  const e = reEsc(id);
+  const defs = [...text.matchAll(new RegExp(`(?:[,;{(]|\\b(?:const|let|var)\\s+)${e}=\``, "g"))];
+  if (defs.length !== 1) return null;
+  const binds = [...text.matchAll(new RegExp(`(?<![\\w$.])${e}=(?![=>])`, "g"))].length;
+  const exported = new RegExp(`(?<![\\w$])[\\w$]+:\\(\\)=>${e}(?![\\w$])|defineProperty\\(exports,"[\\w$]+",\\{[^}]*?return ${e}\\}`).test(
+    text,
+  );
+  if (binds !== 1 && !exported) return null;
+  return defs[0]!.index! + defs[0]![0].length;
+}
+
+/** The parameter names of the innermost `function …(…){…}` whose body holds `at`, or null when none is found. The
+ *  parameter list is paren-matched first (`={}` defaults sit inside it), then the body brace-matched, both literal-aware. */
+function enclosingFunctionParams(text: string, at: number): string[] | null {
+  const heads = [...text.slice(Math.max(0, at - 200000), at).matchAll(/function\s*[\w$]*\(/g)];
+  const base = Math.max(0, at - 200000);
+  for (let k = heads.length - 1; k >= 0 && k >= heads.length - 400; k--) {
+    const pOpen = base + heads[k]!.index! + heads[k]![0].length - 1;
+    const pClose = matchParen(text, pOpen);
+    if (pClose < 0 || text[pClose + 1] !== "{") continue;
+    const close = matchBrace(text, pClose + 1);
+    if (close < at) continue;
+    const params = topLevelArgs(text, pOpen) ?? [];
+    return params
+      .map((p) =>
+        p
+          .trim()
+          .replace(/^\.\.\./, "")
+          .replace(/=[\s\S]*$/, ""),
+      )
+      .filter((p) => /^[\w$]+$/.test(p));
+  }
+  return null;
+}
+
+/** The lazy loader of the prompt chunk (Desktop 4.29.0+): `require("./<X>")…).DESKTOP_3P_BASE_PROMPT`; group 1 the path. */
+const PROMPT_LOADER = /require\("\.\/([^"]+)"\)(?:(?!require\()[^;]){0,80}?\)\.DESKTOP_3P_BASE_PROMPT(?![\w$])/g;
+
+/** Desktop 4.29.0+ also requires the prompt chunk EAGERLY, in the hook chunk, and reads its template for a third-party
+ *  session (`type==="3p"?ff(E.t,n):e` on 4.4212.0, `uf(w.t` on 4.29.0). The fingerprint covers the template the lazy
+ *  loader reaches; this pins that every eager read of that chunk's exports reaches the same template, and that one
+ *  does. Only reads of the chunk's own export names count: a minified binding name is reused as a local elsewhere in
+ *  the same chunk (`E.map`, `E.behavior`). Presence-conditional on the loader form; a missing or doubled loader is the
+ *  fingerprint's to report. */
+export function checkPromptReaderFacts(files: Map<string, string>): string[] {
+  const loaders = [...files.values()].flatMap((c) => [...c.matchAll(PROMPT_LOADER)]);
+  if (loaders.length !== 1) return [];
+  const name = loaders[0]![1]!.slice(loaders[0]![1]!.lastIndexOf("/") + 1);
+  const target = files.get(name);
+  const local = target === undefined ? null : exportLocalOf(target, "DESKTOP_3P_BASE_PROMPT");
+  if (!target || !local) return [];
+  const exported = new Map(
+    [...target.matchAll(/defineProperty\(exports,"([\w$]+)",\{[^}]*?return ([\w$]+)\}/g)].map((m) => [m[1]!, m[2]!]),
+  );
+  const flags = new Set<string>();
+  let toTemplate = 0;
+  for (const c of files.values())
+    for (const b of c.matchAll(new RegExp(`(?<![\\w$.])([\\w$]+)=require\\("\\./${reEsc(name)}"\\)`, "g")))
+      for (const r of c.matchAll(new RegExp(`(?<![\\w$.])${reEsc(b[1]!)}\\.([\\w$]+)(?![\\w$])`, "g"))) {
+        const to = exported.get(r[1]!);
+        if (to === undefined) continue;
+        if (to === local) toTemplate++;
+        else
+          flags.add(
+            `prompt: eager reader anchor missing — \`${b[1]}.${r[1]}\` reads the prompt chunk's \`${to}\`, not the fingerprinted template \`${local}\` — read what a third-party session is now sent`,
+          );
+      }
+  if (toTemplate === 0)
+    flags.add(
+      "prompt: eager reader anchor missing — no eager require of the prompt chunk reads the fingerprinted template — the third-party prompt path moved; read where it comes from now",
+    );
+  return [...flags];
+}
+
+/** Where the Cowork prompt template body starts, and in which text. Two shapes:
+ *  - through Desktop 3.6556.2 the consumption site names a module-level constant (`prompt:oon` … `var oon=\``);
+ *  - from Desktop 4.29.0 it names a PARAMETER of its builder (`function _gn(e,t,n={},…)`), and the default comes from
+ *    a lazy chunk: `require("./<X>")…).DESKTOP_3P_BASE_PROMPT`, whose `DESKTOP_3P_BASE_PROMPT:()=><L>` names `<L>=\``.
+ *  The parameter form binds through the loader's own `require` target, never "whichever chunk exports the name"; a
+ *  same-named template elsewhere in the consumption chunk (4.x has one, inside a function) is never taken. */
+function locatePromptTemplate(bundle: string, files?: Map<string, string>): { id: string; text: string; bodyStart: number } | null {
+  const chunks = files ? [...files.values()] : [bundle];
+  const sites = chunks.flatMap((c) => [...c.matchAll(/cowork_system_prompt:\{value:\{prompt:([A-Za-z_$][\w$]*)/g)].map((m) => ({ c, m })));
+  if (sites.length !== 1) return null;
+  const { c: chunk, m } = sites[0]!;
+  const id = m[1]!;
+  const params = enclosingFunctionParams(chunk, m.index!);
+  if (params?.includes(id)) {
+    const loaders = [...chunk.matchAll(PROMPT_LOADER)];
+    if (loaders.length !== 1 || !files) return null;
+    const target = files.get(loaders[0]![1]!.slice(loaders[0]![1]!.lastIndexOf("/") + 1));
+    const local = target === undefined ? null : exportLocalOf(target, "DESKTOP_3P_BASE_PROMPT");
+    if (!target || !local) return null;
+    const at = uniqueTemplateDefinition(target, local);
+    return at === null ? null : { id: local, text: target, bodyStart: at };
+  }
+  const at = uniqueTemplateDefinition(chunk, id);
+  return at === null ? null : { id, text: chunk, bodyStart: at };
+}
+
 /**
  * Extract the raw Cowork system-prompt constant's content fingerprint from the asar main bundle.
  * Mirrors the method documented in baselines/prompts/cowork-system-prompt-fingerprints.json
@@ -3123,22 +3609,18 @@ export function decodeTemplateEscapes(raw: string): string {
   return out;
 }
 
-export function extractPromptFingerprint(bundle: string): PromptFingerprint | null {
-  const consumptionM = bundle.match(/cowork_system_prompt:\{value:\{prompt:([A-Za-z_$][\w$]*)/);
-  if (!consumptionM) return null;
-  const id = consumptionM[1];
-  const idEsc = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const defM = bundle.match(new RegExp(`(?:[,;{(]|\\b(?:const|let|var)\\s+)${idEsc}=\``));
-  if (!defM || defM.index == null) return null;
-  const bodyStart = defM.index + defM[0].length; // index of the char right after the opening backtick
+export function extractPromptFingerprint(bundle: string, files?: Map<string, string>): PromptFingerprint | null {
+  const located = locatePromptTemplate(bundle, files);
+  if (!located) return null;
+  const { id, text, bodyStart } = located;
   let body = "";
   let i = bodyStart;
   let closed = false;
-  for (; i < bundle.length; i++) {
-    const c = bundle[i];
+  for (; i < text.length; i++) {
+    const c = text[i];
     if (c === "\\") {
       // Preserve the escape AND the escaped char intact (raw template source, not a decoded string).
-      body += c + (bundle[i + 1] ?? "");
+      body += c + (text[i + 1] ?? "");
       i++; // skip the escaped char too (loop's i++ advances past the backslash)
       continue;
     }
@@ -3568,7 +4050,7 @@ export function extractSubagentComposition(files: Map<string, string>): {
  *  chunk is the residual (S6g's comment names the same class).
  *  The scheduled-run spawn env key has its own guard (S6g). SCHEDULED_SESSION_WITHHELD_TOOLS (types.ts) lists the tools
  *  (2) and (3) withhold that a Desktop server of its own declares. */
-export function checkScheduledSessionFacts(files: Map<string, string>): string[] {
+export function checkScheduledSessionFacts(files: Map<string, string>, appVersion?: string): string[] {
   const flags: string[] = [];
   const miss = (what: string, why: string) => flags.push(`scheduled-session: ${what} anchor missing — ${why}`);
   const literal = (ref: string, module: string): string | null => {
@@ -3662,20 +4144,108 @@ export function checkScheduledSessionFacts(files: Map<string, string>): string[]
     )
       miss("scheduled frame artifacts", `the gate ${fa.m[2]} is no longer scheduledRunFrameArtifacts (1978029737, default on)`);
 
-  // (5) Desktop 3.6556.1: the typed-artifact tools and the prompt's frame-tools section go only to an untyped session
-  // with no scheduled task. They are served by a remote MCP server the init surface never reads, so this predicate is
-  // the only place the difference can be seen. Required once the bundle builds a frame-tools section OR names the
-  // claude-artifacts server: two independent dating signals (0 in every bundle before 3.6556.1), so renaming the
-  // prompt key alone cannot switch the check off.
-  if ([...files.values()].some((m) => m.includes("frameToolsSection:") || m.includes('"claude-artifacts"'))) {
-    const frame = all(
-      /([\w$]+)=[\w$]+&&([\w$]+)\.sessionType===void 0&&\(\2\.scheduledTaskId\?\?[\w$]+\.getActiveSession\([\w$]+\)\?\.scheduledTaskId\)===void 0,[\w$]+=\1\?/g,
+  // (5) Desktop 3.6556.1: the typed-artifact tools and the prompt's frame-tools section go only to a session with no
+  // scheduled task that is untyped — or, from Desktop 4.29.0, typed "chat". The tools are built by Desktop's own `cowork`
+  // SDK server (pinned in (6)), so an init frame of an ordinary session would show them, but a scheduled read never
+  // can: this predicate is what tells a scheduled observation apart from what an ordinary session gets. Required once
+  // the bundle builds a frame-tools section OR names the claude-artifacts server: two independent dating signals (0 in
+  // every bundle before 3.6556.1), so renaming the prompt key alone cannot switch the check off.
+  //   3.6556.x: `<P>=<f>&&<s>.sessionType===void 0&&(<s>.scheduledTaskId??…)===void 0,<x>=<P>?`
+  //   4.29.0+:  `let <C>=<s>.sessionType===<"chat">,<P>=<f>&&(<s>.sessionType===void 0||<C>)&&(…)===void 0,<x>=<P>?`
+  // `<C>` is the binding declared in the SAME let-list, right before `<P>` — never a chunk-wide lookup of the name: the
+  // minifier reuses these names (4.29.0's chat flag is `I` and its artifacts gate `F`; 4.4212.0 swaps them).
+  const framesDated = [...files.values()].some((m) => m.includes("frameToolsSection:") || m.includes('"claude-artifacts"'));
+  if (framesDated) {
+    const TAIL = String.raw`\(\2\.scheduledTaskId\?\?[\w$]+\.getActiveSession\([\w$]+\)\?\.scheduledTaskId\)===void 0,[\w$]+=\1\?`;
+    const frameOld = all(new RegExp(String.raw`([\w$]+)=[\w$]+&&([\w$]+)\.sessionType===void 0&&` + TAIL, "g"));
+    const frameChat = all(
+      new RegExp(
+        String.raw`(?<![\w$.])([\w$]+)=([\w$]+)\.sessionType===([\w$]+\.[\w$]+|"[^"]*"),([\w$]+)=[\w$]+&&\(\2\.sessionType===void 0\|\|\1\)&&\(\2\.scheduledTaskId\?\?[\w$]+\.getActiveSession\([\w$]+\)\?\.scheduledTaskId\)===void 0,[\w$]+=\4\?`,
+        "g",
+      ),
     );
-    if (frame.length !== 1)
+    if (frameOld.length + frameChat.length !== 1)
       miss(
         "scheduled frame tools",
-        `the typed-artifact tools are gated by ${frame.length} pinned \`sessionType===void 0 && scheduledTaskId===void 0\` predicates (expected exactly one) — a scheduled observation can no longer tell what an ordinary session gets`,
+        `the typed-artifact tools are gated by ${frameOld.length + frameChat.length} pinned \`sessionType===void 0 && scheduledTaskId===void 0\` predicates (expected exactly one) — a scheduled observation can no longer tell what an ordinary session gets`,
       );
+    for (const c of frameChat) {
+      const kind = literal(c.m[3]!, c.module);
+      if (kind !== "chat")
+        miss(
+          "scheduled frame tools",
+          `the session type admitted beside an untyped session resolves to ${kind === null ? "nothing readable" : `"${kind}"`}, not "chat" — read which sessions now get the typed-artifact tools`,
+        );
+    }
+  }
+
+  // (6) The typed-artifact tool list on Desktop's own `cowork` server, and its read-only subset. The list is
+  // `<L>=[<ns>.<k>,…]`, the subset `<R>=<L>.filter(e=><T>[e].annotations?.readOnlyHint===!0).map(e=>\`mcp__${<srv>}__${e}\`)`.
+  // Every name must be one this sync has read (KNOWN_COWORK_FRAME_TOOLS), and `<srv>` must be "cowork". From Desktop
+  // 4.29.0 the host loop's allowed-tools list spreads `<R>` (`...<f>(<G>.<export of R>)`), pre-approving the read-only
+  // tools; any spread of this module into that list must be exactly `<R>`, never the whole list. Required under the same
+  // dating signals as (5): every bundle that has the predicate has had this list (3.6556.2, 4.29.0, 4.4212.0).
+  const roSites = all(
+    /(?<![\w$.])([\w$]+)=\[((?:[\w$]+\.[\w$]+,)*[\w$]+\.[\w$]+)\],([\w$]+)=\1\.filter\(\(e=>[\w$]+\[e\]\.annotations\?\.readOnlyHint===!0\)\)\.map\(\(e=>`mcp__\$\{([\w$]+\.[\w$]+)\}__\$\{e\}`\)\)/g,
+  );
+  if (roSites.length > 1 || (framesDated && roSites.length === 0))
+    miss(
+      "cowork frame-tool list",
+      `${roSites.length} typed-artifact tool list(s) with a read-only subset (expected exactly one) — the tools Desktop's cowork server builds can no longer be read`,
+    );
+  const ro = roSites.length === 1 ? roSites[0]! : null;
+  if (ro) {
+    const server = literal(ro.m[4]!, ro.module);
+    if (server !== "cowork")
+      miss(
+        "cowork frame-tool list",
+        `the typed-artifact tools are served under ${server === null ? "an unreadable server name" : `"${server}"`}, not "cowork"`,
+      );
+    const names = ro.m[2]!.split(",").map((r) => literal(r, ro.module));
+    const unread = names.filter((n) => n === null || !KNOWN_COWORK_FRAME_TOOLS.includes(n));
+    if (unread.length)
+      miss(
+        "cowork frame-tool list",
+        `${unread.length} typed-artifact tool name(s) this sync has not read (${unread.map((n) => (n === null ? "unresolved" : `\`${n}\``)).join(", ")}) — read the tool, then add it to KNOWN_COWORK_FRAME_TOOLS`,
+      );
+    // The list must be EXACTLY the known set: a tool Desktop drops would otherwise stay in the withheld list, the fidelity
+    // notes and check 7, and baseline-diff would call its real disappearance "not attributable". A name dated in
+    // COWORK_FRAME_TOOLS_SINCE is excused on an older build: by the build's version when sync passes one, else (a saved
+    // asar read by a test) only when the build carries no trace of the name at all.
+    const read = new Set(names);
+    const addedLater = (k: string) => {
+      const since = COWORK_FRAME_TOOLS_SINCE[k];
+      if (since === undefined) return false;
+      // Only a real dotted version: `cmpVersionStrings` reads a non-numeric segment as 0, so "Unknown" would compare as
+      // older than every build and excuse the name. Anything else falls through to the trace scan.
+      if (appVersion !== undefined && /^\d+(?:\.\d+)+$/.test(appVersion)) return cmpVersionStrings(appVersion, since) < 0;
+      return ![...files.values()].some((c) => c.includes(k));
+    };
+    const dropped = KNOWN_COWORK_FRAME_TOOLS.filter((k) => !read.has(k) && !addedLater(k));
+    if (dropped.length)
+      miss(
+        "cowork frame-tool list",
+        `${dropped.length} known typed-artifact tool(s) no longer in the list (${dropped.map((n) => `\`${n}\``).join(", ")}) — read the change, then drop the name from SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS`,
+      );
+    const roExport = [...ro.module.matchAll(/exports,"([\w$]+)",\{enumerable:!0,get:function\(\)\{return ([\w$]+)\}\}/g)];
+    const roName = roExport.find((e) => e[2] === ro.m[3])?.[1];
+    const allowLists = all(/\["WebSearch","AskUserQuestion","ToolSearch",([^\]]*(?:\][^\]]*)*?)\];/g);
+    if (allowLists.length !== 1)
+      miss(
+        "cowork frame-tool pre-approval",
+        `the host loop's allowed-tools list appears ${allowLists.length} times (expected exactly one) — which typed-artifact tools it pre-approves can no longer be read`,
+      );
+    for (const a of allowLists) {
+      for (const sp of a.m[1]!.matchAll(/\.\.\.(?:[\w$]+\()?([\w$]+)\.([\w$]+)(?![\w$.])/g)) {
+        const r = resolveNamespaceRef(`${sp[1]}.${sp[2]}`, a.module, files);
+        if (!r || r.chunk !== ro.module) continue;
+        if (r.local !== ro.m[3] || sp[2] !== roName)
+          miss(
+            "cowork frame-tool pre-approval",
+            `the host loop's allowed-tools list spreads \`${sp[1]}.${sp[2]}\` from the cowork frame-tool module, which is not its read-only subset — read which typed-artifact tools are now pre-approved`,
+          );
+      }
+    }
   }
   return flags;
 }
@@ -5454,11 +6024,19 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
     // inside its own module, where no importer's guard applies, fails. The object counts as guarded only when it has at
     // least one reference and all of them are admitted (an unreferenced object fails closed: its use moved somewhere
     // this counter cannot see).
+    // MULTI-KEY OBJECT (Desktop 4.29.0): the object also carries `CLAUDE_CODE_DISABLE_FILE_MENTIONS:"1"`. Every other key in
+    // it rides the same guard, so the object is guarded as a whole — but each such key is allowlisted on that claim, and
+    // an allowlist hit is unconditional. So each extra key gets its OWN bundle-wide construction census (below): the
+    // scheduled object must be its only construction, and its registry row must say it is S6g-guarded and
+    // session-conditional. Without that, the key built anywhere else would be admitted in silence.
+    const extraKeys = new Set<string>();
     if (files) {
-      const objRe = new RegExp(`(?<![\\w$.])([\\w$]+)=\\{["']?${SCHED_KEY}["']?:"1"\\}`, "g");
+      const KEY_ITEM = `["']?[A-Z][A-Z0-9_]*["']?:"1"`;
+      const objRe = new RegExp(`(?<![\\w$.])([\\w$]+)=\\{((?:${KEY_ITEM},)*)["']?${SCHED_KEY}["']?:"1"((?:,${KEY_ITEM})*)\\}`, "g");
       for (const [name, def] of files) {
         for (const om of def.matchAll(objRe)) {
           const local = om[1];
+          for (const k of `${om[2]}${om[3]}`.matchAll(/["']?([A-Z][A-Z0-9_]*)["']?:"1"/g)) extraKeys.add(k[1]);
           // A minified module reuses one-letter names in its inner scopes: 2.37337.1 bundles an HTTP client into
           // this chunk whose method declares its own `c` and spreads it. A hit counts unless an inner
           // let/const/var declaration of the same name encloses it; a parameter or any other shape still fails.
@@ -5559,6 +6137,21 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
           else if (admitted === refs) guarded++;
         }
       }
+    }
+    for (const key of [...extraKeys].sort()) {
+      const row = classifySpawnEnvKey(key, "window");
+      if (!row || row.class !== "session-conditional" || !/\bS6g\b/.test(row.reason))
+        schedMiss(
+          `${key} is built in the ${SCHED_KEY} object but its registry row is not session-conditional and S6g-guarded — ` +
+            "classify it in src/sync/spawn-env-registry.ts before the allowlist admits it",
+        );
+      const keyCtorRe = new RegExp(`(?:"${reEsc(key)}"|'${reEsc(key)}'|(?<![\\w$"'])${reEsc(key)}):(?!\\(\\)=>)`, "g");
+      const keyCtors = chunks.reduce((n, c) => n + [...c.matchAll(keyCtorRe)].length, 0);
+      if (keyCtors !== 1)
+        schedMiss(
+          `${key} is constructed ${keyCtors} time(s) in the bundle; the ${SCHED_KEY} object must be its only construction, ` +
+            "so the allowlist's 'scheduled runs only' claim no longer holds; reclassify",
+        );
     }
     if (ctors === 0 && bundle.includes(SCHED_KEY))
       schedMiss(

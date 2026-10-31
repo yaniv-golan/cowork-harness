@@ -514,6 +514,28 @@ does not apply here. Everything else in the normal flow does.
    Land it through a PR like any other change, then delete the release branch
    (`git push origin --delete release/X.Y.Z`). `main`'s next minor bumps every version string again.
 
+## A release run that timed out
+
+`release.yml` caps the job at 90 minutes and its two long steps at 25 (Build + test) and 30 (Publish). A cap
+that fires **before** `npm publish` finishes leaves nothing published: re-run the job. A cap that fires **after**
+the upload is different: the version is on npm under `next`, but the GitHub Release and the `vX`/`vX.Y` alias
+tags were never made, and a re-run fails at publish, because npm never accepts the same version twice.
+Finish it by hand instead:
+
+1. Confirm the upload: `npm view cowork-harness@X.Y.Z version` prints `X.Y.Z`.
+2. Create the GitHub Release from that version's CHANGELOG section (the same `awk` the workflow's
+   "Extract this version's CHANGELOG section" step runs), e.g.
+   `gh release create vX.Y.Z --notes-file RELEASE_NOTES.md --generate-notes`.
+3. Move the aliases with the loop in the workflow's "Move the major/minor alias tags" step, run locally. It
+   moves an alias only when this release is the highest on that line.
+
+Steps 2 and 3 create a release and push tags, so they need the same explicit decision as any other release step.
+`publish-image.yml` has its own 45-minute cap. A timed-out run started by the release tag pushes only the
+`:2-<version>` co-tag and never meets the immutable-tag guard, so it can simply be re-run. A timed-out **manual**
+(`workflow_dispatch`) run is different: check whether it already pushed `:2-r<N>` for either image. If it did, a re-run
+stops at "Refuse to repoint an existing immutable revision tag" by design, and the fix is a `revision` bump in
+`docker/agent-image.json`, not a re-run.
+
 ## Notes
 
 - "Merge is not push." Local merges/commits never imply a release — the steps above are the only

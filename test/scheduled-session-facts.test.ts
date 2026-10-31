@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { checkScheduledSessionFacts } from "../src/sync/cowork-sync.js";
+import { SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS } from "../src/types.js";
 
 // The four sites, in the real bundle's shape with the minified names replaced. Each constant is exported the way
 // the real bundle exports it, so the check has to resolve it to its value rather than trust the name.
@@ -22,10 +23,38 @@ const CODE_TAB =
   'class R{async buildStartSdkOptions(e){let{sessionId:r,options:i}=e;i.scheduledTaskId&&($.disallowedTools=["AskUserQuestion"]),fe&&1;}}';
 const MAIN = "index.chunk-sched.js";
 const OTHER = "index.chunk-code.js";
-const files = (edit: (s: string) => string = (s) => s, editOther: (s: string) => string = (s) => s) =>
+// Desktop's own `cowork` SDK server module: the typed-artifact tool list, its read-only subset (exported as `m`), and
+// the host loop that pre-approves that subset (Desktop 4.29.0+). Names resolve through MAIN's exports.
+// The frame-tool list carries every known name: `list_types` and `db_write` under k1/k2 (the edits below name them),
+// the rest under x0…xN.
+const OTHER_FRAME_TOOLS = (SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS.cowork ?? []).filter((n) => n !== "list_types" && n !== "db_write");
+const FRAMEMOD_NAME = "index.chunk-frame.js";
+const FRAMEMOD =
+  `var NS=require("./index.chunk-sched.js");var W={},q=[NS.k1,NS.k2${OTHER_FRAME_TOOLS.map((_, i) => `,NS.x${i}`).join("")}],` +
+  "mt=q.filter((e=>W[e].annotations?.readOnlyHint===!0)).map((e=>`mcp__${NS.u2}__${e}`)),ht=new Map(q.map((e=>[e,e])));" +
+  'Object.defineProperty(exports,"m",{enumerable:!0,get:function(){return mt}});Object.defineProperty(exports,"n",{enumerable:!0,get:function(){return q}});';
+const HOST_NAME = "index.chunk-host.js";
+const HOST =
+  'var NS=require("./index.chunk-sched.js"),G=require("./index.chunk-frame.js");function go(){let a=["WebSearch","AskUserQuestion","ToolSearch",...i([NS.k1]),...i(G.m),...Pt.readRules];return a}';
+const FRAME_EXPORTS =
+  'Object.defineProperty(exports,"k1",{enumerable:!0,get:function(){return K1}});var K1="list_types";' +
+  'Object.defineProperty(exports,"k2",{enumerable:!0,get:function(){return K2}});var K2="db_write";' +
+  'Object.defineProperty(exports,"u2",{enumerable:!0,get:function(){return U2}});var U2="cowork";' +
+  'Object.defineProperty(exports,"r3",{enumerable:!0,get:function(){return R3}});var R3="chat";' +
+  OTHER_FRAME_TOOLS.map(
+    (n, i) => `Object.defineProperty(exports,"x${i}",{enumerable:!0,get:function(){return X${i}}});var X${i}="${n}";`,
+  ).join("");
+const files = (
+  edit: (s: string) => string = (s) => s,
+  editOther: (s: string) => string = (s) => s,
+  editFrame: (s: string) => string = (s) => s,
+  editHost: (s: string) => string = (s) => s,
+) =>
   new Map([
-    [MAIN, edit(SITES + EXPORTS)],
+    [MAIN, edit(SITES + EXPORTS + FRAME_EXPORTS)],
     [OTHER, editOther(CODE_TAB)],
+    [FRAMEMOD_NAME, editFrame(FRAMEMOD)],
+    [HOST_NAME, editHost(HOST)],
   ]);
 const mutate = (from: string, to: string) => {
   const f = files((s) => s.replace(from, to));
@@ -104,7 +133,7 @@ describe("checkScheduledSessionFacts — a second site beside the pinned one", (
     expect(add(OTHER, "e.frameArtifactsEnabled=!0;")).toMatch(/assigned at 2 sites, only 1 the gated scheduled clear/);
   });
 
-  // Desktop 3.6556.1: typed-artifact tools (a remote server the init surface never reads) go only to an untyped,
+  // Desktop 3.6556.1: typed-artifact tools (Desktop's own `cowork` server; a scheduled read never shows them) go only to an untyped,
   // unscheduled session. Required once the bundle builds a frame-tools section; absent before that release.
   const FRAME =
     "let ce=f&&a.sessionType===void 0&&(a.scheduledTaskId??r.getActiveSession(i)?.scheduledTaskId)===void 0,le=ce?NS.qo():[],ue=ce&&1;" +
@@ -140,5 +169,87 @@ describe("checkScheduledSessionFacts — a second site beside the pinned one", (
   });
   it("before 3.6556.1 (no frame-tools section) the predicate is not required", () => {
     expect(checkScheduledSessionFacts(files())).toEqual([]);
+  });
+});
+
+// Desktop 4.29.0: the predicate also admits a session typed "chat", through a flag declared in the same let-list. The
+// minifier reuses binding names (4.29.0's chat flag is `I`, its artifacts gate `F`; 4.4212.0 swaps them), so the flag
+// is read only from the let-list beside the predicate.
+describe("checkScheduledSessionFacts — 4.29.0 chat arm and the cowork frame-tool list", () => {
+  const CHAT =
+    "let F=a.sessionType===NS.r3,ae=f&&(a.sessionType===void 0||F)&&(a.scheduledTaskId??r.getActiveSession(i)?.scheduledTaskId)===void 0,oe=ae?NS.qo():[],ue=ae&&1;" +
+    "build({frameToolsSection:oe.length>0?Df(oe):void 0,hasFrameTools:ue});" +
+    'var HTr="claude-artifacts";';
+  const ARM = "&&(a.scheduledTaskId??r.getActiveSession(i)?.scheduledTaskId)===void 0";
+  const run = (main = CHAT, frame?: (s: string) => string, host?: (s: string) => string, exp?: (s: string) => string) =>
+    checkScheduledSessionFacts(files((s) => (exp ? exp(s) : s) + main, undefined, frame, host)).join("\n");
+  it("the chat form, the frame-tool list and the pre-approval in their pinned shape have no flags", () => {
+    expect(run()).toBe("");
+  });
+  it("an earlier binding of the same name (the artifacts gate) does not stand in for the chat flag", () => {
+    expect(run("let F=NS.gate();" + CHAT)).toBe("");
+  });
+  it("the adjacent flag resolving to another session type flags", () => {
+    expect(run(CHAT, undefined, undefined, (s) => s.replace('R3="chat"', 'R3="scheduled"'))).toMatch(/resolves to "scheduled", not "chat"/);
+  });
+  it("the adjacent flag reading an inline literal other than chat flags", () => {
+    expect(run(CHAT.replace("===NS.r3", '==="agent"'))).toMatch(/resolves to "agent", not "chat"/);
+  });
+  it("the chat form losing its scheduledTaskId arm flags", () => {
+    expect(run(CHAT.replace(ARM, ""))).toMatch(/scheduled frame tools anchor missing — the typed-artifact tools are gated by 0/);
+  });
+  it("the chat form beside the old form (two predicates) flags", () => {
+    const OLD = "let ce=f&&a.sessionType===void 0&&(a.scheduledTaskId??r.getActiveSession(i)?.scheduledTaskId)===void 0,le=ce?NS.qo():[];";
+    expect(run(CHAT + OLD)).toMatch(/gated by 2 pinned/);
+  });
+  it("the predicate dated but no frame-tool list flags", () => {
+    expect(run(CHAT, () => "")).toMatch(/cowork frame-tool list anchor missing — 0 typed-artifact tool list/);
+  });
+  it("a frame-tool name this sync has not read flags", () => {
+    expect(run(CHAT, undefined, undefined, (s) => s.replace('K2="db_write"', 'K2="db_drop"'))).toMatch(/not read \(`db_drop`\)/);
+  });
+  it("a known tool dropped from the list flags (the list must be exactly the known set)", () => {
+    const f = run(CHAT, (s) => s.replace("NS.k1,NS.k2,", "NS.k1,"));
+    expect(f.split("\n")).toHaveLength(1);
+    expect(f).toMatch(/1 known typed-artifact tool\(s\) no longer in the list \(`db_write`\)/);
+  });
+  it("list_typed_artifacts missing: excused by an older build's version, flagged from 4.4212.0", () => {
+    const i = OTHER_FRAME_TOOLS.indexOf("list_typed_artifacts");
+    const drop = (s: string) => s.replace(`,NS.x${i}`, "");
+    const at = (v: string) =>
+      checkScheduledSessionFacts(
+        files((s) => s + CHAT, undefined, drop),
+        v,
+      );
+    expect(at("4.29.0")).toEqual([]);
+    expect(at("4.4212.0").join("\n")).toMatch(/no longer in the list \(`list_typed_artifacts`\)/);
+    // A version that is not a dotted number ("Unknown" compares as 0.0.0) is no version: the trace scan decides, and the
+    // fixture still exports the name.
+    expect(at("Unknown").join("\n")).toMatch(/no longer in the list \(`list_typed_artifacts`\)/);
+    expect(at("").join("\n")).toMatch(/no longer in the list \(`list_typed_artifacts`\)/);
+    // No version (a saved asar read by a test): excused only when the build has no trace of the name. The fixture still
+    // exports it, so it flags.
+    expect(run(CHAT, drop)).toMatch(/no longer in the list \(`list_typed_artifacts`\)/);
+  });
+  it("the tools served under another server name flags", () => {
+    expect(run(CHAT, undefined, undefined, (s) => s.replace('U2="cowork"', 'U2="claude-artifacts"'))).toMatch(
+      /served under "claude-artifacts", not "cowork"/,
+    );
+  });
+  it("the host loop pre-approving the whole tool list (not its read-only subset) flags", () => {
+    expect(run(CHAT, undefined, (s) => s.replace("...i(G.m)", "...i(G.n)"))).toMatch(/spreads `G.n` from the cowork frame-tool module/);
+  });
+  it("the read-only subset dropping its readOnlyHint filter is no longer the pinned list, and flags", () => {
+    expect(run(CHAT, (s) => s.replace(".filter((e=>W[e].annotations?.readOnlyHint===!0))", ""))).toMatch(
+      /cowork frame-tool list anchor missing/,
+    );
+  });
+  it("a second allowed-tools list flags", () => {
+    expect(run(CHAT, undefined, (s) => s + 'let b=["WebSearch","AskUserQuestion","ToolSearch",...i(G.m)];')).toMatch(
+      /allowed-tools list appears 2 times/,
+    );
+  });
+  it("no pre-approval spread (3.6556.x) is not a flag", () => {
+    expect(run(CHAT, undefined, (s) => s.replace("...i(G.m),", ""))).toBe("");
   });
 });

@@ -436,11 +436,13 @@ export function checkObservedAgainstHarness(
       );
   }
   // A key the registry calls absent by default that every observed session carries: the reason is out of date. Except
-  // the scheduled-run key when every dump was a scheduled task: there, carrying it is what the kind means.
+  // a key of the scheduled-run object when every dump was a scheduled task: there, carrying it is what the kind means.
+  // Those keys are the session-conditional rows S6g guards (CLAUDE_CODE_HOST_SCHEDULED_RUN, and from Desktop 4.29.0
+  // CLAUDE_CODE_DISABLE_FILE_MENTIONS); S6g fails the sync if any of them is built anywhere but that object.
   const allScheduled = block.sessionKinds !== undefined && block.sessionKinds.scheduled === block.sessions;
   for (const k of block.keysAll) {
     const c = classifySpawnEnvKey(k, "observed");
-    if (allScheduled && k === "CLAUDE_CODE_HOST_SCHEDULED_RUN") continue;
+    if (allScheduled && c?.class === "session-conditional" && /\bS6g\b/.test(c.reason)) continue;
     if (c && DEFAULT_ABSENT.has(c.class))
       notes.push(
         `observedSpawnEnv: ${k} is classed ${c.class} (absent by default) but every observed session carries it — re-check its classification in src/sync/spawn-env-registry.ts`,

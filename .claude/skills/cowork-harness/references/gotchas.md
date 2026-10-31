@@ -1,13 +1,13 @@
 # Gotchas
 
-Tracks `cowork-harness 4.12.0` (baseline `desktop-3.6556.2`). The full "✓ passed ≠ correct" landmine catalog.
+Tracks `cowork-harness 4.12.0` (baseline `desktop-4.4212.0`). The full "✓ passed ≠ correct" landmine catalog.
 
 ## Gotchas — the "✓ passed ≠ correct" landmines
 
 Stated as *symptom → why → fix*. This is the **workflow/record/answer-path** view — the broader of the
 two lists, but **not a strict superset**: `references/scenario-schema.md`'s *Authoring gotcha list*
 carries a few assertion-level landmines this one omits (`transcript_no_host_path`'s scan width,
-`egress.extra_allow`'s no-op on the provenanced `web_fetch` path, `replay_protocol_fidelity` not being
+`egress.extra_allow`'s no-op on the provenanced `web_fetch` path and the vendor hosts it cannot admit on Path B, `replay_protocol_fidelity` not being
 authorable). Reach for this list when debugging a run's behavior, that one while authoring `assert:`.
 **The two lists are numbered independently** — a bare "gotcha N" means the list you are reading.
 

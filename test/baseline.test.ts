@@ -25,6 +25,8 @@ import {
   sync,
   checkMountModeFacts,
   checkWebFetchFacts,
+  checkWebFetchVendorFacts,
+  syncedNetworkBlock,
   readMainBundle,
   readMainBundleFiles,
   normalizeBundleQuotes,
@@ -46,6 +48,7 @@ import {
   partitionSpawnFlags,
   resolveConst,
   extractModelEffortConfig,
+  decodeTemplateEscapes,
   extractPromptFingerprint,
   checkPromptDrift,
   REQUIRED_SPAWN_KEYS,
@@ -63,7 +66,13 @@ import { hostLoopCwds } from "../src/runtime/hostloop.js";
 import { fidelityOmitted } from "../src/run/execute.js";
 import { buildJudgedDocument } from "../src/assert.js";
 import { renderPrompts } from "../src/prompt.js";
-import { checkPathHookFacts, checkScheduledSessionFacts, checkVmAgentStagingFacts } from "../src/sync/cowork-sync.js";
+import {
+  checkPathHookFacts,
+  checkScheduledSessionFacts,
+  checkVmAgentStagingFacts,
+  unwrapConditionalLink,
+  checkPromptReaderFacts,
+} from "../src/sync/cowork-sync.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../src/prompt.js";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -555,6 +564,8 @@ describe.skipIf(!ASAR_BACKUPS)("checkPathHookFacts oracle over saved Desktop asa
     ["3.1623.4", true],
     ["3.6556.1", true],
     ["3.6556.2", true],
+    ["4.29.0", true],
+    ["4.4212.0", true],
   ])("%s: clean = %s", (version, clean) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
     expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
@@ -563,6 +574,143 @@ describe.skipIf(!ASAR_BACKUPS)("checkPathHookFacts oracle over saved Desktop asa
     const flags = checkPathHookFacts(files);
     if (clean) expect(flags).toEqual([]);
     else expect(flags.length).toBeGreaterThan(0);
+  });
+});
+
+// The scheduled-session facts over saved asars: the frame-tool list, its read-only export and the host loop's spread
+// have had the same shape in every build that has the frame-tools predicate, before and after the chat arm (4.29.0).
+describe.skipIf(!ASAR_BACKUPS)("checkScheduledSessionFacts oracle over saved Desktop asars (COWORK_ASAR_BACKUP_DIR)", () => {
+  it.each(["3.6556.2", "4.29.0", "4.4212.0"])("%s: clean", (version) => {
+    const asar = join(ASAR_BACKUPS!, version, "app.asar");
+    expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
+    const files = readAsarBuildFiles(asar);
+    expect(files.size).toBeGreaterThan(100);
+    expect(checkScheduledSessionFacts(files)).toEqual([]);
+  });
+});
+
+// web_fetch Path B vendor-host refusal (Desktop 4.4212.0), presence-conditional. Shape transcribed from the 4.4212.0 main
+// chunk (normalized): the vendor list behind one alias, the normalize + host-or-subdomain matcher, the five-step refuse
+// function, and the workspace web_fetch passing it as `refuseTarget` with the session's allowed domains.
+describe("checkWebFetchVendorFacts (web_fetch vendor-host refusal)", () => {
+  const LIST = 'var om=["a-api.anthropic.com","a-cdn.anthropic.com","s-cdn.anthropic.com","notebook.anthropic.com"],sm=1;';
+  const ALIAS = 'var mm="cowork-egress-blocked",hm=om;';
+  const MATCHER =
+    'function gm(e){let t=e.toLowerCase().split(".").filter(Boolean).join(".");return hm.some((e=>t===e||t.endsWith(`.${e}`)))}';
+  const REFUSE =
+    'function jm(e,n=[]){if(e.protocol!=="http:"&&e.protocol!=="https:")return`URL scheme "${e.protocol}" is not allowed.`;' +
+    'if(t.GQ(e.hostname))return`Host "${e.hostname}" is a local or private address.`;if(n.includes("*"))return null;' +
+    'if(gm(e.hostname))return`Host "${e.hostname}" goes to an outside vendor {not a brace}.`;' +
+    'let r=t.AB(e);if(!n.some((n=>t.LG(e.hostname,n,r))))return"not in the allowlist";return null}';
+  const CALL = "async function fetchIt(r){return t.TY({url:1,refuseTarget:e=>jm(e,r.allowedDomains)})}";
+  const chunk = (c = LIST + ALIAS + MATCHER + REFUSE + CALL) => new Map([["index.chunk-MAIN.js", c]]);
+  const FOUR = ["a-api.anthropic.com", "a-cdn.anthropic.com", "s-cdn.anthropic.com", "notebook.anthropic.com"];
+
+  it("the 4.4212.0 shape is clean and yields the four hosts", () => {
+    expect(checkWebFetchVendorFacts(chunk())).toEqual({ flags: [], vendorDeny: FOUR });
+  });
+  it('the `"."+e` spelling of the suffix match is admitted', () => {
+    const r = checkWebFetchVendorFacts(chunk(LIST + ALIAS + MATCHER.replace("`.${e}`", '"."+e') + REFUSE + CALL));
+    expect(r).toEqual({ flags: [], vendorDeny: FOUR });
+  });
+  it("a build without the vendor step (3.6556.2, 4.29.0 shape: no refusal, no host list, no matcher) yields no list and no flag", () => {
+    const older = REFUSE.replace(/if\(gm\(e\.hostname\)\)return`[^`]*`;/, "");
+    expect(older).not.toBe(REFUSE);
+    expect(checkWebFetchVendorFacts(chunk(older + CALL))).toEqual({ flags: [], vendorDeny: null });
+  });
+  // Presence does not rest on the wording alone: with the refusal reworded, the host literals or the matcher still show
+  // the step is there, so the sync flags instead of dropping the list in silence.
+  const reworded = REFUSE.replace("goes to an outside vendor", "is handled elsewhere");
+  it.each([
+    [
+      "the refusal reworded, list and matcher intact",
+      () => LIST + ALIAS + MATCHER + reworded + CALL,
+      /a known vendor host literal and the vendor matcher's shape remain/,
+    ],
+    [
+      "the refusal reworded, only the host list left",
+      () => LIST + ALIAS + reworded.replace("if(gm(e.hostname))", "if(!1)") + CALL,
+      /a known vendor host literal remains/,
+    ],
+    ["the refusal reworded, only the matcher left", () => MATCHER + reworded + CALL, /the vendor matcher's shape remains/],
+  ])("flags: %s", (_n, make, re) => {
+    const c = make();
+    expect(c).not.toContain("outside vendor");
+    const out = checkWebFetchVendorFacts(chunk(c));
+    expect(out.vendorDeny).toBeNull();
+    expect(out.flags).toHaveLength(1);
+    expect(out.flags[0]).toMatch(re);
+  });
+  it.each([
+    ["the vendor step removed, its text left in the function", () => REFUSE.replace("if(gm(e.hostname))return`", "void`")],
+    [
+      "the vendor step moved after the allowlist",
+      () =>
+        REFUSE.replace(/if\(gm\(e\.hostname\)\)return(`[^`]*`);/, "").replace(
+          'return"not in the allowlist";return null}',
+          'return"not in the allowlist";if(gm(e.hostname))return`goes to an outside vendor`;return null}',
+        ),
+    ],
+    ["the `*` short-circuit removed", () => REFUSE.replace('if(n.includes("*"))return null;', "")],
+  ])("flags: %s", (_n, mutate) => {
+    const r = mutate();
+    expect(r).not.toBe(REFUSE);
+    const out = checkWebFetchVendorFacts(chunk(LIST + ALIAS + MATCHER + r + CALL));
+    expect(out.vendorDeny).toBeNull();
+    expect(out.flags).toHaveLength(1);
+    expect(out.flags[0]).toMatch(/^web_fetch vendor deny: /);
+  });
+  it.each([
+    [
+      "the list changed",
+      () => LIST.replace('"notebook.anthropic.com"', '"notebook.anthropic.com","x.example.com"') + ALIAS + MATCHER + REFUSE + CALL,
+    ],
+    ["the matcher became exact-only", () => LIST + ALIAS + MATCHER.replace("||t.endsWith(`.${e}`)", "") + REFUSE + CALL],
+    ["a second definition of the alias", () => LIST + ALIAS + "hm=[];" + MATCHER + REFUSE + CALL],
+    ["the list is mutated", () => LIST + ALIAS + 'om.push("x");' + MATCHER + REFUSE + CALL],
+    ["refuseTarget calls another function", () => LIST + ALIAS + MATCHER + REFUSE + CALL.replace("=>jm(", "=>km(")],
+    ["the refusal text in two chunks", () => null],
+  ])("flags: %s", (_n, make) => {
+    const c = make();
+    const files = c === null ? new Map([...chunk(), ["index.chunk-OTHER.js", "goes to an outside vendor"]]) : chunk(c);
+    const out = checkWebFetchVendorFacts(files);
+    expect(out.vendorDeny).toBeNull();
+    expect(out.flags).toHaveLength(1);
+  });
+
+  it("the baseline gets the field only when this build has the step; a prior value is never carried forward", () => {
+    const prior = { $comment: "old", mode: "gvisor", allowKind: "allowlist", allowDomains: ["a"], webFetchVendorDeny: ["stale.example"] };
+    expect(syncedNetworkBlock(prior, null, ["a"], null)).not.toHaveProperty("webFetchVendorDeny");
+    expect(syncedNetworkBlock(prior, null, ["a"])).not.toHaveProperty("webFetchVendorDeny");
+    expect(syncedNetworkBlock(prior, null, ["a"], FOUR).webFetchVendorDeny).toEqual(FOUR);
+  });
+
+  it("structural regression: the REAL asar is clean", () => {
+    const real = readRealBundleFilesOrSkip();
+    if (!real) return;
+    expect(checkWebFetchVendorFacts(real).flags).toEqual([]);
+  });
+});
+describe.skipIf(!ASAR_BACKUPS)("checkWebFetchVendorFacts over saved Desktop asars (COWORK_ASAR_BACKUP_DIR)", () => {
+  it.each([
+    ["3.6556.2", null],
+    ["4.29.0", null],
+    ["4.4212.0", ["a-api.anthropic.com", "a-cdn.anthropic.com", "s-cdn.anthropic.com", "notebook.anthropic.com"]],
+  ])("%s: vendor list = %j, no flags", (version, list) => {
+    const asar = join(ASAR_BACKUPS!, version, "app.asar");
+    expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
+    const files = readAsarBuildFiles(asar);
+    expect(files.size).toBeGreaterThan(100);
+    expect(checkWebFetchVendorFacts(files)).toEqual({ flags: [], vendorDeny: list });
+    // what sync writes from it: no field for a build without the step
+    const net = syncedNetworkBlock(
+      { allowDomains: [], webFetchVendorDeny: ["carried"] },
+      null,
+      [],
+      checkWebFetchVendorFacts(files).vendorDeny,
+    );
+    if (list) expect(net.webFetchVendorDeny).toEqual(list);
+    else expect(net).not.toHaveProperty("webFetchVendorDeny");
   });
 });
 
@@ -2212,6 +2360,62 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     it.each(MUT)("S6g import-form mutation %s fails loud (%#)", (_label, mutate) => {
       expect(facts(mutate())).toContain("S6g scheduled-run env key");
     });
+    // Desktop 4.29.0 put a second key in the object. Each extra key must have a session-conditional, S6g-guarded registry
+    // row, and the object must be its only construction in the bundle.
+    const FM = 'l={CLAUDE_CODE_HOST_SCHEDULED_RUN:"1",CLAUDE_CODE_DISABLE_FILE_MENTIONS:"1"}';
+    const modFM = (obj = FM) => MOD.replace('l={CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"}', obj);
+    it("4.29.0 control: the two-key object is CLEAN, and the extra key is allowlisted (never pinned) for an S6g reason", () => {
+      expect(modFM()).toContain(FM);
+      expect(facts(filesOf({ mod: modFM() }))).toBe("");
+      const { env, flags, keys } = derive(filesOf({ mod: modFM() }));
+      expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+      expect(env).toEqual(EXPECTED_GREEN);
+      expect(keys).toContain("CLAUDE_CODE_DISABLE_FILE_MENTIONS");
+      const row = classifySpawnEnvKey("CLAUDE_CODE_DISABLE_FILE_MENTIONS", "window");
+      expect(row?.class).toBe("session-conditional");
+      expect(row?.reason).toMatch(/\bS6g\b/);
+    });
+    it("4.29.0 control: key order and quoting inside the object do not matter", () => {
+      expect(facts(filesOf({ mod: modFM('l={"CLAUDE_CODE_DISABLE_FILE_MENTIONS":"1",CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"}') }))).toBe("");
+    });
+    it("4.29.0 control: an export-table getter naming the extra key is not a construction", () => {
+      expect(facts(filesOf({ mod: modFM(), main: MAIN + "var ex={CLAUDE_CODE_DISABLE_FILE_MENTIONS:()=>q};" }))).toBe("");
+    });
+    // FM is one flat object literal: its only `}` is the closing one. Append a key before it.
+    const withKey = (entry: string) => {
+      expect(FM.endsWith("}") && FM.indexOf("}") === FM.length - 1).toBe(true);
+      return FM.slice(0, -1) + "," + entry + "}";
+    };
+    const ROW = "registry row is not session-conditional and S6g-guarded";
+    const ONLY = "must be its only construction";
+    const FM_MUT: [string, () => Map<string, string>, string][] = [
+      ["F1 an extra key the registry does not classify", () => filesOf({ mod: modFM(withKey('ZNEW_KEY:"1"')) }), ROW],
+      [
+        "F2 an extra key whose registry row is not session-conditional",
+        () => filesOf({ mod: modFM(withKey('CLAUDE_CODE_MODEL_CATALOG:"1"')) }),
+        ROW,
+      ],
+      [
+        "F3 the extra key also constructed outside the object",
+        () => filesOf({ mod: modFM(), codetab: CODETAB + 'var z={CLAUDE_CODE_DISABLE_FILE_MENTIONS:"1"};' }),
+        ONLY,
+      ],
+      [
+        "F4 the extra key constructed outside the object under another value",
+        () => filesOf({ mod: modFM(), main: MAIN + 'var z={"CLAUDE_CODE_DISABLE_FILE_MENTIONS":"0"};' }),
+        ONLY,
+      ],
+      [
+        "F5 the two-key object spread with no guard",
+        () => filesOf({ mod: modFM(), spawn: spawn().replace(IMPORT_SPREAD, IMPORT_SPREAD + "...o.J,") }),
+        "neither the guarded spawn spread nor the Code-tab",
+      ],
+    ];
+    it.each(FM_MUT)("S6g extra-key mutation %s fails loud with its own reason (%#)", (_label, mutate, reason) => {
+      const out = facts(mutate());
+      expect(out).toContain("S6g scheduled-run env key");
+      expect(out).toContain(reason);
+    });
     // The count mismatch (constructions > guarded) also catches I10; this pins the dedicated reason, so dropping that
     // guard is not masked by the other.
     it("I12 names the reason: a non-getter function returns the object", () => {
@@ -2975,6 +3179,106 @@ describe("prompt fingerprints are escape-form independent", () => {
   });
 });
 
+// Desktop 4.29.0 moved the prompt constant into a lazy chunk: the consumption site names a PARAMETER of its builder,
+// and the default comes from `require("./<X>")…).DESKTOP_3P_BASE_PROMPT`. Through 3.6556.2 it named a module constant.
+describe("extractPromptFingerprint — the parameter form and the module-constant form", () => {
+  const LOADER =
+    'async function ggn(){return(await Promise.resolve().then((()=>require("./index.chunk-P.js"))).then((e=>e.n))).DESKTOP_3P_BASE_PROMPT}';
+  const BUILDER = "function _gn(e,t,n={},r){let o=n.x??{};return{system_prompts:{cowork_system_prompt:{value:{prompt:t},on:!0}}}}";
+  // The 4.x consumption chunk's own `let t=\`…\`` sits inside a function before the site: the old extractor took it.
+  const DECOY = "function hh(){let t=`Object can not safely be stringified`;return t}";
+  const PROMPT = "REAL <a> {{x}}";
+  const P_CHUNK = `var n=e.r({DESKTOP_3P_BASE_PROMPT:()=>t}),t=\`${PROMPT}\`;Object.defineProperty(exports,"n",{enumerable:!0,get:function(){return n}});`;
+  const filesOf = (main: string, chunks: Record<string, string> = { "index.chunk-P.js": P_CHUNK }) =>
+    new Map([["index.chunk-main.js", main], ...Object.entries(chunks)]);
+  const fp = (f: Map<string, string>) => extractPromptFingerprint([...f.values()].join(""), f);
+  const decoded = (body: string) => createHash("sha256").update(decodeTemplateEscapes(body), "utf8").digest("hex");
+
+  it("parameter form: reads the loader target's template, not the same-named decoy before the site (`={}` default in the list)", () => {
+    const r = fp(filesOf(DECOY + LOADER + BUILDER));
+    expect(r?.decodedSha256).toBe(decoded(PROMPT));
+    expect(r?.constantId).toBe("t");
+  });
+  it("parameter form: the loader target exports nothing → null", () => {
+    expect(fp(filesOf(DECOY + LOADER + BUILDER, { "index.chunk-P.js": "var t=`" + PROMPT + "`;" }))).toBeNull();
+  });
+  it("parameter form: another chunk exporting the name does not stand in for the loader's target → null", () => {
+    expect(fp(filesOf(DECOY + LOADER + BUILDER, { "index.chunk-P.js": '"use strict";', "index.chunk-Y.js": P_CHUNK }))).toBeNull();
+  });
+  it("parameter form: two templates for the exported local in the target → null", () => {
+    expect(fp(filesOf(DECOY + LOADER + BUILDER, { "index.chunk-P.js": P_CHUNK + "function z(){let t=`other`;return t}" }))).toBeNull();
+  });
+  it("parameter form: no loader → null (never falls back to a same-named template in the consumption chunk)", () => {
+    expect(fp(filesOf(DECOY + BUILDER))).toBeNull();
+  });
+  it("parameter form: two loaders → null", () => {
+    expect(fp(filesOf(DECOY + LOADER + LOADER.replace("ggn", "ggm") + BUILDER))).toBeNull();
+  });
+  it("module-constant form: one definition, one binding → read", () => {
+    const main = "var oon=`" + PROMPT + "`;function bld(e){return{system_prompts:{cowork_system_prompt:{value:{prompt:oon},on:!0}}}}";
+    expect(fp(filesOf(main, {}))?.decodedSha256).toBe(decoded(PROMPT));
+  });
+  it("module-constant form: a second definition of the name → null (never the first match)", () => {
+    const main =
+      "function hh(){let oon=`decoy`;return oon}var oon=`" +
+      PROMPT +
+      "`;function bld(e){return{cowork_system_prompt:{value:{prompt:oon}}}}";
+    expect(fp(filesOf(main, {}))).toBeNull();
+  });
+  it("module-constant form: another (non-template) binding of the name, not exported → null", () => {
+    const main =
+      "function hh(e){let oon=e;return oon}var oon=`" + PROMPT + "`;function bld(e){return{cowork_system_prompt:{value:{prompt:oon}}}}";
+    expect(fp(filesOf(main, {}))).toBeNull();
+  });
+  it("parameter form: a default holding parentheses does not end the parameter list early", () => {
+    const r = fp(filesOf(DECOY + LOADER + BUILDER.replace("n={}", "n=g(1)")));
+    expect(r?.decodedSha256).toBe(decoded(PROMPT));
+  });
+  // 4.29.0+: the hook chunk also requires the prompt chunk eagerly and reads its template (`E.t`) for a third-party
+  // session. That second `require` is not a second loader: the fingerprint is unchanged and the reader pin is clean.
+  const P_WITH_T = P_CHUNK + 'Object.defineProperty(exports,"t",{enumerable:!0,get:function(){return t}});';
+  const HOOK = (read: string) =>
+    `var E=require("./index.chunk-P.js");function df(e,n){return G.type==="3p"?ff(${read},n):e}function zz(E){return E.map(x=>x)}`;
+  const withReader = (read: string) =>
+    filesOf(DECOY + LOADER + BUILDER, { "index.chunk-P.js": P_WITH_T, "index.chunk-hook.js": HOOK(read) });
+  it("parameter form: an eager second require of the prompt chunk reading the template → fingerprint read, 0 reader flags", () => {
+    const f = withReader("E.t");
+    expect(fp(f)?.decodedSha256).toBe(decoded(PROMPT));
+    expect(checkPromptReaderFacts(f)).toEqual([]);
+  });
+  it("the eager reader reading another export of the prompt chunk → flags", () => {
+    const flags = checkPromptReaderFacts(withReader("E.n"));
+    expect(flags.join("\n")).toMatch(/`E\.n` reads the prompt chunk's `n`, not the fingerprinted template `t`/);
+    expect(flags.join("\n")).toMatch(/no eager require of the prompt chunk reads the fingerprinted template/);
+  });
+  it("no eager reader of the prompt chunk → 1 flag; the module-constant form (no loader) → none", () => {
+    expect(checkPromptReaderFacts(filesOf(DECOY + LOADER + BUILDER))).toEqual([
+      expect.stringMatching(/no eager require of the prompt chunk reads the fingerprinted template/),
+    ]);
+    const main = "var oon=`" + PROMPT + "`;function bld(e){return{cowork_system_prompt:{value:{prompt:oon}}}}";
+    expect(checkPromptReaderFacts(filesOf(main, {}))).toEqual([]);
+  });
+  it("two consumption sites → null", () => {
+    const main =
+      "var oon=`" + PROMPT + "`;var a={cowork_system_prompt:{value:{prompt:oon}}},b={cowork_system_prompt:{value:{prompt:oon}}};";
+    expect(fp(filesOf(main, {}))).toBeNull();
+  });
+});
+
+describe.skipIf(!ASAR_BACKUPS)("extractPromptFingerprint over saved Desktop asars (COWORK_ASAR_BACKUP_DIR)", () => {
+  it.each(["3.6556.2", "4.29.0", "4.4212.0"])("%s: the rendered prompt is unchanged", (version) => {
+    const asar = join(ASAR_BACKUPS!, version, "app.asar");
+    expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
+    const files = readAsarBuildFiles(asar);
+    const r = extractPromptFingerprint([...files.values()].join(""), files);
+    expect(r?.decodedSha256).toBe("a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf");
+    expect(r?.decodedCodePoints).toBe(37811);
+    expect(r?.sectionTags).toBe(43);
+    expect(r?.sha256.startsWith("e62bd9fa")).toBe(true);
+    expect(checkPromptReaderFacts(files)).toEqual([]);
+  });
+});
+
 describe("prompt drift guard (H1-H3)", () => {
   // D8: the RENDERED prompt has not moved since 1.20186.0 — but its RAW sha has, twice, purely from
   // codegen (1.32352.0 began escaping non-ASCII). Pinning the raw sha here made this oracle a VERSION pin
@@ -2988,7 +3292,7 @@ describe("prompt drift guard (H1-H3)", () => {
   it("golden oracle: the RENDERED prompt in the real asar is unchanged since 1.20186.0", () => {
     const bundle = readRealBundleOrSkip();
     if (!bundle) return;
-    const fp = extractPromptFingerprint(bundle);
+    const fp = extractPromptFingerprint(bundle, readRealBundleFilesOrSkip() ?? undefined);
     expect(fp).not.toBeNull();
     expect(fp!.decodedSha256).toBe(RENDERED_PROMPT_SHA);
     expect(fp!.decodedCodePoints).toBe(37811);
@@ -3002,7 +3306,7 @@ describe("prompt drift guard (H1-H3)", () => {
   it("checkPromptDrift is clean when fp matches the committed newest entry (real fingerprints file, real modeled/allowlisted sets)", () => {
     const bundle = readRealBundleOrSkip();
     if (!bundle) return;
-    const fp = extractPromptFingerprint(bundle);
+    const fp = extractPromptFingerprint(bundle, readRealBundleFilesOrSkip() ?? undefined);
     expect(fp).not.toBeNull();
     const fingerprintsFile = JSON.parse(
       readFileSync(join(process.cwd(), "baselines", "prompts", "cowork-system-prompt-fingerprints.json"), "utf8"),
@@ -3709,6 +4013,321 @@ function pathHookFiles(mut: Partial<Record<"defining" | "consuming", (s: string)
   ]);
 }
 
+// Desktop 3.6556.1 capture-lookup install (see the capture tests below), hoisted so the 4.4212.0 fixture builds on it.
+const captureInstall = () =>
+  // The server name resolves ACROSS chunks, through a `require` binding, as on the real asar.
+  'const q=require("./index.chunk-NS.js");var eh=RegExp(`^(?:Artifact[A-Za-z]*|mcp__${q.EO}__.+)$`);' +
+  "function other(e){let Ue=new Map;Ue.set(e.tool_use_id,1);Ue.set(e.tool_use_id,2);return Ue}" +
+  'async function Qm(c,f){return c.length===f.length?void 0:"files"}' +
+  `async function ss(e,n,r,i){if(e!=="Artifact"&&!e.startsWith("mcp__claude-artifacts__"))return null;const s=async x=>x;` +
+  `const u=async x=>x&&x.updatedInput&&x.updatedInput!==n?{behavior:"deny",message:"updatedInput differs from the request"}:x;` +
+  `if(String(n.file_path).startsWith("/sessions"))return{vmPathDeny:{behavior:"deny",message:"is a VM path. In this session the Artifact tool publishes from the host filesystem"},finish:s};` +
+  `if(n.dev===0)return{vmPathDeny:{behavior:"deny",message:"is on a drive that gives files no stable identity"},finish:s};` +
+  `if(n.files)return{finish:async x=>(await Qm(i??[],n.files))?{behavior:"deny",message:"source changed or unverifiable across the approval window"}:u(x)};` +
+  `const f=await stat(n.file_path);return{finish:async x=>x&&f?u(x):{behavior:"deny",message:"changed across the approval window"}}}` +
+  "let Ue=new Map;e.hooks={...e.hooks,PreToolUse:[{matcher:eh.source,hooks:[async e=>{const c=[];" +
+  "Ue.set(e.tool_use_id,c);for(let k of Ue.keys()){if(Ue.size<=16)break;Ue.delete(k)}return{}}]}]};" +
+  `const Se=e.canUseTool;Se&&(e.canUseTool=async(g,S,k)=>{let i=Ue.get(k.toolUseID);Ue.delete(k.toolUseID);` +
+  `const a=await ss(g,S,d,i);` +
+  `if(a?.vmPathDeny)return a.vmPathDeny;` +
+  `const o=xe(g,S)??await Xt(g,S,k.decisionReason,j,f)??Qt(g,S,k.decisionReason,n)??await Se(g,S,k);` +
+  `return a===null?o:a.finish(o)});`;
+const NS_CHUNK = 'var HTr="claude-artifacts";Object.defineProperty(exports,"EO",{enumerable:!0,get:function(){return HTr}});';
+/** The inline hook body of pathHookFiles, moved into a delegate the way real builds emit it since 1.32352.0:
+ *  `hooks:[async g=>{try{return await Ye(g)}catch(n){…}}]` and `async function Ye(g){…}` elsewhere in the chunk. */
+function toDelegateHook(consuming: string): string {
+  const open = "hooks:[async g=>{";
+  const close = '"}]}],';
+  const at = consuming.indexOf(open);
+  const end = consuming.indexOf(close, at);
+  const body = consuming.slice(at + open.length, end + 1);
+  return (
+    consuming.slice(0, at) +
+    'hooks:[async g=>{try{return await Ye(g)}catch(n){return{decision:"block",reason:"This path could not be checked"}}}]}],' +
+    consuming.slice(end + close.length) +
+    `async function Ye(g){${body}}`
+  );
+}
+
+/** Desktop 4.4212.0: the launcher-conditional link `(ke?void 0:await Xt(…))`, its pre-pass pairing (`ss(…,!ke)`, 5th
+ *  param defaulting to `!0`), the launcher binding (`let ke=Oe.viaLauncher` from the launcher call), the inert launcher
+ *  chunk, and its lazy init chunk with no exports. */
+const LAUNCHER_CHUNK =
+  'const e=require("./index.chunk-rt.js"),t=require("./index.chunk-util.js");var n=e.r({HOST_CLI_LAUNCHER_NOTE_ENV:()=>s,spawnThroughHostCliLauncher:()=>l}),r=null,i;' +
+  "function a(){return r!==null&&r.stillWanted()?r.path:null}" +
+  'function o(){return i??=t.LK(()=>Promise.resolve().then(()=>require("./index.chunk-init.js"))).then(e=>e.initSimulatorToolchainHost?.()).catch(()=>{i=void 0}),i}' +
+  'var s="CLAUDE_HOST_CLI_LAUNCHER_NOTE";async function l(e){await o();let t=a();return t===null?{...e,viaLauncher:!1}:{binaryPath:t,env:e.env,viaLauncher:!0}}' +
+  'Object.defineProperty(exports,"a",{enumerable:!0,get:function(){return l}}),Object.defineProperty(exports,"i",{enumerable:!0,get:function(){return n}});';
+const INIT_CHUNK = '"use strict";try{(function(){})()}catch{}';
+function launcherHookFiles(
+  mut: Partial<Record<"consuming" | "launcher" | "init", (s: string) => string>> = {},
+  delegate = true,
+): Map<string, string> {
+  const base = pathHookFiles({
+    consuming: (c) => {
+      let x = c.replace(/const Se=e\.canUseTool;[\s\S]*$/, () => captureInstall());
+      if (delegate) x = toDelegateHook(x);
+      x = x
+        .replace("async function ss(e,n,r,i){", "async function ss(e,n,r,i,a=!0){")
+        .replace("const a=await ss(g,S,d,i);", "const a=await ss(g,S,d,i,!ke);")
+        .replace("??await Xt(g,S,k.decisionReason,j,f)??", "??(ke?void 0:await Xt(g,S,k.decisionReason,j,f))??")
+        .replace(
+          "const Se=e.canUseTool;",
+          'var L=require("./index.chunk-launch.js");let Oe=await L.a({binaryPath:h,env:e.env??{}});let ke=Oe.viaLauncher;const Se=e.canUseTool;',
+        );
+      return mut.consuming ? mut.consuming(x) : x;
+    },
+  });
+  base.set("index.chunk-NS.js", NS_CHUNK);
+  base.set("index.chunk-launch.js", mut.launcher ? mut.launcher(LAUNCHER_CHUNK) : LAUNCHER_CHUNK);
+  base.set("index.chunk-init.js", mut.init ? mut.init(INIT_CHUNK) : INIT_CHUNK);
+  return base;
+}
+
+describe("checkPathHookFacts — the delegate hook body and the 4.4212.0 launcher-conditional link", () => {
+  const consumingOf = (f: Map<string, string>) => f.get("index.chunk-CS-g0Skn.js")!;
+  it("fixtures apply: the delegate and every launcher edit are present", () => {
+    const c = consumingOf(launcherHookFiles());
+    for (const t of [
+      "return await Ye(g)",
+      "async function Ye(g){",
+      "ss(e,n,r,i,a=!0)",
+      "ss(g,S,d,i,!ke)",
+      "(ke?void 0:await Xt(",
+      "let ke=Oe.viaLauncher",
+    ])
+      expect(c).toContain(t);
+  });
+  it("the delegate form (no launcher) → no flags", () => {
+    expect(checkPathHookFacts(pathHookFiles({ consuming: toDelegateHook }))).toEqual([]);
+  });
+  it("the 4.4212.0 shape (delegate + launcher-conditional link + inert launcher) → no flags", () => {
+    expect(checkPathHookFacts(launcherHookFiles())).toEqual([]);
+  });
+  it("the 4.4212.0 shape with an inline hook body → no flags", () => {
+    expect(checkPathHookFacts(launcherHookFiles({}, false))).toEqual([]);
+  });
+  it("a `}` inside a string in the delegate before the category guard does not mis-bound it → no flags", () => {
+    expect(
+      checkPathHookFacts(launcherHookFiles({ consuming: (c) => c.replace("async function Ye(g){", 'async function Ye(g){const zb="}";') })),
+    ).toEqual([]);
+  });
+  it("a containment call after a long delegate is still found (no fixed window)", () => {
+    const pad = 'const pad="' + "x".repeat(7000) + '";';
+    expect(
+      checkPathHookFacts(launcherHookFiles({ consuming: (c) => c.replace("async function Ye(g){", "async function Ye(g){" + pad) })),
+    ).toEqual([]);
+  });
+
+  const M: [string, Parameters<typeof launcherHookFiles>[0], RegExp][] = [
+    [
+      "the guard bound to something other than viaLauncher",
+      { consuming: (c) => c.replace("let ke=Oe.viaLauncher", "let ke=Oe.other") },
+      /launcher guard anchor missing — `ke` is not bound/,
+    ],
+    [
+      "the launcher result bound to a non-launcher value",
+      { consuming: (c) => c.replace("let Oe=await L.a({binaryPath:h,env:e.env??{}})", "let Oe={viaLauncher:!0}") },
+      /no call to the host CLI launcher precedes/,
+    ],
+    [
+      "the guard rebound between the binding and the install",
+      { consuming: (c) => c.replace("let ke=Oe.viaLauncher;", "let ke=Oe.viaLauncher;ke=!1;") },
+      /`ke` is bound 2 times/,
+    ],
+    [
+      "a same-named decoy as the nearest binding",
+      { consuming: (c) => c.replace("let ke=Oe.viaLauncher;", "let kq=Oe.viaLauncher;let ke=t.dF(u);") },
+      /`ke` is not bound/,
+    ],
+    [
+      "the launcher call in another function",
+      {
+        consuming: (c) =>
+          c.replace(
+            "let Oe=await L.a({binaryPath:h,env:e.env??{}});let ke=Oe.viaLauncher;",
+            "async function zz(){let Oe=await L.a({binaryPath:h,env:e.env??{}});let ke=Oe.viaLauncher;}",
+          ),
+      },
+      /not in the canUseTool install's function/,
+    ],
+    [
+      "a second launcher call before the install",
+      {
+        consuming: (c) => c.replace("let ke=Oe.viaLauncher;", "let ke=Oe.viaLauncher;let Pe=await L.a({binaryPath:h,env:{}});"),
+      },
+      /host CLI launcher is called 2 times before the canUseTool install/,
+    ],
+    [
+      "the inner await dropped",
+      { consuming: (c) => c.replace("(ke?void 0:await Xt(", "(ke?void 0:Xt(") },
+      /link `Xt` is an async function but is not awaited/,
+    ],
+    [
+      "the conditional link with a 4-argument pre-pass",
+      { consuming: (c) => c.replace("ss(g,S,d,i,!ke)", "ss(g,S,d,i)") },
+      /not passed `!ke` as its 5th argument/,
+    ],
+    [
+      "the 5th pre-pass argument not `!<g>`",
+      { consuming: (c) => c.replace("ss(g,S,d,i,!ke)", "ss(g,S,d,i,ke)") },
+      /not passed `!ke` as its 5th argument/,
+    ],
+    [
+      "the pre-pass 5th parameter without its default",
+      { consuming: (c) => c.replace("ss(e,n,r,i,a=!0)", "ss(e,n,r,i,a)") },
+      /no longer takes a 5th parameter defaulting to true/,
+    ],
+    ["the launcher holder given a writer", { launcher: (c) => c + "function w(x){r=x}" }, /path holder `r` is written 1 time/],
+    [
+      "the launcher holder written by array destructuring",
+      { launcher: (c) => c + "function w(x){[r]=x}" },
+      /path holder `r` is written 1 time/,
+    ],
+    [
+      "the launcher holder written by object destructuring",
+      { launcher: (c) => c + "function w(x){({path:r}=x)}" },
+      /path holder `r` is written 1 time/,
+    ],
+    [
+      "the launcher holder written by shorthand object destructuring, beside another name",
+      { launcher: (c) => c + "function w(x){({q,r}=x)}" },
+      /path holder `r` is written 1 time/,
+    ],
+    [
+      "the init chunk exporting initSimulatorToolchainHost",
+      {
+        init: (c) =>
+          c + 'Object.defineProperty(exports,"initSimulatorToolchainHost",{enumerable:!0,get:function(){return f}});function f(){}',
+      },
+      /now exports initSimulatorToolchainHost/,
+    ],
+    [
+      "the launcher no longer loading its init chunk",
+      { launcher: (c) => c.replace(".then(e=>e.initSimulatorToolchainHost?.())", "") },
+      /no longer lazily loads a chunk/,
+    ],
+    [
+      "the guard shadowed by the canUseTool callback's own parameter",
+      {
+        // The real 4.4212.0 shape of the rename: the 3rd parameter (the permission context, always truthy) named `ke`.
+        consuming: (c) =>
+          c
+            .replace("canUseTool=async(g,S,k)=>{", "canUseTool=async(g,S,ke)=>{")
+            .replace(/\bk\.(toolUseID|decisionReason)/g, "ke.$1")
+            .replace("await Se(g,S,k)", "await Se(g,S,ke)"),
+      },
+      /`ke` is a parameter of the canUseTool callback/,
+    ],
+    [
+      "the guard re-bound inside the canUseTool block (a hoisted var after the pre-pass)",
+      { consuming: (c) => c.replace("ss(g,S,d,i,!ke);", "ss(g,S,d,i,!ke);var ke=!0;") },
+      /`ke` appears in the canUseTool block 3 time\(s\)/,
+    ],
+    [
+      "the guard taken as an arrow parameter inside the block",
+      { consuming: (c) => c.replace("ss(g,S,d,i,!ke);", "ss(g,S,d,i,!ke);[1].map((x,ke)=>x);") },
+      /`ke` appears in the canUseTool block 3 time\(s\)/,
+    ],
+    [
+      "a hoisted var of the guard after the install",
+      { consuming: (c) => c + "var ke;" },
+      /`ke` has a hoisted `var` or `function` declaration/,
+    ],
+    [
+      "the launcher result re-pointed before the guard is bound",
+      { consuming: (c) => c.replace("let ke=Oe.viaLauncher;", "Oe={viaLauncher:!0};let ke=Oe.viaLauncher;") },
+      /launcher result `Oe` is re-bound or its `viaLauncher` written/,
+    ],
+    [
+      "the launcher result's viaLauncher written before the guard is bound",
+      { consuming: (c) => c.replace("let ke=Oe.viaLauncher;", "Oe.viaLauncher=!0;let ke=Oe.viaLauncher;") },
+      /launcher result `Oe` is re-bound or its `viaLauncher` written/,
+    ],
+    [
+      "the containment call moved out of the delegate",
+      { consuming: (c) => c.replace("if(!t.Po(cand,lt))return ct?", "if(!1)return ct?") + "function zc(){t.Po(cand,lt)}" },
+      /containment helper anchor missing/,
+    ],
+  ];
+  it.each(M)("%s → exactly 1 flag", (_l, mut, re) => {
+    const f = launcherHookFiles(mut);
+    expect([...f.values()].join("")).not.toBe([...launcherHookFiles().values()].join(""));
+    const flags = checkPathHookFacts(f);
+    expect(flags, flags.join("\n")).toHaveLength(1);
+    expect(flags[0]).toMatch(re);
+  });
+  it("arms swapped → the link is no longer a plain call, and the unpaired pre-pass argument flags too", () => {
+    const flags = checkPathHookFacts(
+      launcherHookFiles({
+        consuming: (c) => c.replace("(ke?void 0:await Xt(g,S,k.decisionReason,j,f))", "(ke?await Xt(g,S,k.decisionReason,j,f):void 0)"),
+      }),
+    ).join("\n");
+    expect(flags).toMatch(/a chain link is not a plain call/);
+    expect(flags).toMatch(/takes 5 arguments but no chain link is conditional/);
+  });
+  it.each([
+    ["a blanket allow behind the inner call", '??{behavior:"allow"}'],
+    ["a further link behind the inner call", "??Km(g,S)"],
+  ])("%s, inside the conditional → not a plain call, and the unpaired pre-pass argument flags too", (_l, tail) => {
+    const f = launcherHookFiles({
+      consuming: (c) =>
+        c.replace("(ke?void 0:await Xt(g,S,k.decisionReason,j,f))", `(ke?void 0:await Xt(g,S,k.decisionReason,j,f)${tail})`),
+    });
+    expect([...f.values()].join("")).toContain(tail);
+    const flags = checkPathHookFacts(f);
+    expect(flags, flags.join("\n")).toHaveLength(2);
+    expect(flags.join("\n")).toMatch(/a chain link is not a plain call/);
+    expect(flags.join("\n")).toMatch(/takes 5 arguments but no chain link is conditional/);
+  });
+  it("a 5th pre-pass argument with no conditional link → 1 flag", () => {
+    const f = launcherHookFiles({
+      consuming: (c) => c.replace("(ke?void 0:await Xt(g,S,k.decisionReason,j,f))", "await Xt(g,S,k.decisionReason,j,f)"),
+    });
+    expect(checkPathHookFacts(f)).toEqual([expect.stringMatching(/takes 5 arguments but no chain link is conditional/)]);
+  });
+  // A regex literal holding a quote at the top of the delegate desyncs the literal-aware walks. Whatever the scan then
+  // reads, it must flag (fail closed), never pass.
+  it("a regex literal with a quote at the top of the delegate fails closed", () => {
+    const f = launcherHookFiles({ consuming: (c) => c.replace("async function Ye(g){", "async function Ye(g){const zr=/[\"']/;") });
+    expect(f.get("index.chunk-CS-g0Skn.js")).toContain("const zr=/");
+    const flags = checkPathHookFacts(f);
+    expect(flags.length, "a desynced scan passed").toBeGreaterThan(0);
+  });
+  it("the delegate defined in another chunk → the hook body is unreadable, and flags", () => {
+    const f = launcherHookFiles();
+    const cs = f.get("index.chunk-CS-g0Skn.js")!;
+    const at = cs.indexOf("async function Ye(g){");
+    expect(at).toBeGreaterThan(0);
+    f.set("index.chunk-CS-g0Skn.js", cs.slice(0, at));
+    f.set("index.chunk-delegate.js", cs.slice(at));
+    const flags = checkPathHookFacts(f);
+    expect(flags.join("\n")).toMatch(/hook body/);
+  });
+  it("the launcher call resolving to a REAL exported function of another chunk → no launcher call, and flags", () => {
+    const f = launcherHookFiles({
+      consuming: (c) => c.replace('var L=require("./index.chunk-launch.js");', 'var L=require("./index.chunk-decoy.js");'),
+    });
+    f.set(
+      "index.chunk-decoy.js",
+      'async function l(e){return{...e,viaLauncher:!1}}Object.defineProperty(exports,"a",{enumerable:!0,get:function(){return l}});',
+    );
+    const flags = checkPathHookFacts(f);
+    expect(flags, flags.join("\n")).toHaveLength(1);
+    expect(flags[0]).toMatch(/no call to the host CLI launcher precedes the canUseTool install/);
+  });
+  it("unwrapConditionalLink unwraps only the exact shape", () => {
+    expect(unwrapConditionalLink("(ke?void 0:await Ch(e,n))")).toEqual({ guard: "ke", call: "await Ch(e,n)" });
+    expect(unwrapConditionalLink("(ke?void 0:await Ch(e,n))??x").guard).toBeNull();
+    expect(unwrapConditionalLink("(ke?await Ch(e,n):void 0)").guard).toBeNull();
+    expect(unwrapConditionalLink('(ke?void 0:{behavior:"allow"})').guard).toBeNull();
+    expect(unwrapConditionalLink("await Ch(e,n)")).toEqual({ guard: null, call: "await Ch(e,n)" });
+    expect(unwrapConditionalLink('(ke?void 0:await Ch(e,n)??{behavior:"allow"})').guard).toBeNull();
+    expect(unwrapConditionalLink("(ke?void 0:await Ch(e,n)??Km(e,n))").guard).toBeNull();
+    expect(unwrapConditionalLink("(ke?void 0:Ch(e,(n)))")).toEqual({ guard: "ke", call: "Ch(e,(n))" });
+  });
+});
+
 describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)", () => {
   it("clean bundle → no flags", () => {
     expect(checkPathHookFacts(pathHookFiles())).toEqual([]);
@@ -3750,25 +4369,6 @@ describe("checkPathHookFacts — 1.20186.1 path-gate sentinel (module-bounded)",
   // publishing, records each file's identity per tool_use_id in a closure-local Map. The canUseTool block opens with
   // a lookup that hands the capture to a 4-parameter pre-pass. A same-named Map in another scope is the decoy real
   // builds carry (minified names recur across a chunk).
-  const captureInstall = () =>
-    // The server name resolves ACROSS chunks, through a `require` binding, as on the real asar.
-    'const q=require("./index.chunk-NS.js");var eh=RegExp(`^(?:Artifact[A-Za-z]*|mcp__${q.EO}__.+)$`);' +
-    "function other(e){let Ue=new Map;Ue.set(e.tool_use_id,1);Ue.set(e.tool_use_id,2);return Ue}" +
-    'async function Qm(c,f){return c.length===f.length?void 0:"files"}' +
-    `async function ss(e,n,r,i){if(e!=="Artifact"&&!e.startsWith("mcp__claude-artifacts__"))return null;const s=async x=>x;` +
-    `const u=async x=>x&&x.updatedInput&&x.updatedInput!==n?{behavior:"deny",message:"updatedInput differs from the request"}:x;` +
-    `if(String(n.file_path).startsWith("/sessions"))return{vmPathDeny:{behavior:"deny",message:"is a VM path. In this session the Artifact tool publishes from the host filesystem"},finish:s};` +
-    `if(n.dev===0)return{vmPathDeny:{behavior:"deny",message:"is on a drive that gives files no stable identity"},finish:s};` +
-    `if(n.files)return{finish:async x=>(await Qm(i??[],n.files))?{behavior:"deny",message:"source changed or unverifiable across the approval window"}:u(x)};` +
-    `const f=await stat(n.file_path);return{finish:async x=>x&&f?u(x):{behavior:"deny",message:"changed across the approval window"}}}` +
-    "let Ue=new Map;e.hooks={...e.hooks,PreToolUse:[{matcher:eh.source,hooks:[async e=>{const c=[];" +
-    "Ue.set(e.tool_use_id,c);for(let k of Ue.keys()){if(Ue.size<=16)break;Ue.delete(k)}return{}}]}]};" +
-    `const Se=e.canUseTool;Se&&(e.canUseTool=async(g,S,k)=>{let i=Ue.get(k.toolUseID);Ue.delete(k.toolUseID);` +
-    `const a=await ss(g,S,d,i);` +
-    `if(a?.vmPathDeny)return a.vmPathDeny;` +
-    `const o=xe(g,S)??await Xt(g,S,k.decisionReason,j,f)??Qt(g,S,k.decisionReason,n)??await Se(g,S,k);` +
-    `return a===null?o:a.finish(o)});`;
-  const NS_CHUNK = 'var HTr="claude-artifacts";Object.defineProperty(exports,"EO",{enumerable:!0,get:function(){return HTr}});';
   const captureFiles = (mutate?: (s: string) => string, mutateNs?: (s: string) => string) => {
     const files = pathHookFiles({
       consuming: (c) => {

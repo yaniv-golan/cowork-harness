@@ -116,6 +116,8 @@ describe.skipIf(!ASAR_BACKUPS)("scanSpawnEnvPostWrites over saved Desktop asars 
     expect(red).toEqual({
       "1.37937.0": ["CLAUDE_CODE_MAX_CONTEXT_TOKENS", "CLAUDE_CODE_PLUGIN_ATTRIBUTION"],
       "1.46388.3": ["CLAUDE_CODE_SKILL_ATTRIBUTION"],
+      // Both written after construction from 2.37337.1, and classified in the registry since that build.
+      "2.37337.1": ["CLAUDE_CODE_MCP_APPS_HOST", "CLAUDE_CODE_HOST_PROMPT_SUPERSEDES_RECORD"],
     });
   }, 300_000);
 });

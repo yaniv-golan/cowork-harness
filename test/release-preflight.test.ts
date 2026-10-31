@@ -189,7 +189,7 @@ describe("checkInitSurfaceObserved (check 7)", () => {
     expect(r.status).toBe("PASS");
     expect(r.alwaysShowDetail).toBe(true);
     expect(r.detail).toMatch(
-      /scheduled-task sessions only — cowork\.send_user_message, .*static check asserts the code path, not observed$/,
+      /scheduled-task sessions only — cowork\.send_user_message, .*static check asserts the code path, not observed; cowork's 10 typed-artifact tools: .*not observable from this read$/,
     );
     const mixed = {
       provenance: { desktopInitSurface: { observed: true, sessionKinds: { interactive: 1, scheduled: 1, other: 0, unknown: 0 } } },

@@ -6,6 +6,60 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **Cassettes: re-stamp or re-record one recorded through `baseline: latest`.** `latest` moves to `desktop-4.4212.0`
+  (see Changed), so such a cassette reports `[stale] baseline moved 3.6556.2 → 4.4212.0 since record — re-record`.
+  Re-stamping `fingerprint.baseline` clears it. The agent moves from 2.1.308 to 2.1.309, so a re-stamped cassette
+  recorded on 2.1.308 now gets an `agent-version:` note; re-record it to clear the note. The bundled cassettes are
+  re-stamped; they were recorded on 2.1.299 and keep the note they already had.
+- **web_fetch on Path B refuses a few vendor hosts that the allowlist names**, as Cowork now does (see Changed). A
+  scenario that fetched one of them through the default allowlist now gets a refusal; `egress.extra_allow` does not
+  change that, `egress.unrestricted: true` does.
+
+### Changed
+
+- **`latest` moves to `desktop-4.4212.0`** (agent **2.1.309**). The Cowork system prompt and the egress allowlist are
+  unchanged from `desktop-3.6556.2`. Observed, as before, from a local scheduled task. Desktop 4.29.0 was not synced
+  separately; `sync`'s checks were run against it as well.
+  - **web_fetch vendor hosts (modeled):** on the allowlist branch (Path B), Desktop now refuses a short list of vendor
+    hosts, and their subdomains, even when the allowlist names them; only an unrestricted allowlist skips the check.
+    `sync` records the list in the baseline as `network.webFetchVendorDeny` and checks the order of the gate's steps;
+    the harness applies it in the same order. A baseline from an older Desktop has no list and keeps no refusal. See
+    [fidelity gaps](docs/fidelity-gaps.md#web_fetch-refuses-a-few-vendor-hosts-even-when-allowlisted--modeled-from-baseline-442120).
+  - **Spawn env (not modeled):** a scheduled task's agent now also gets `CLAUDE_CODE_DISABLE_FILE_MENTIONS`, so a
+    file named with `@` in its prompt reaches the model as a path, not as inlined contents. The harness models an
+    ordinary task session and does not set it. See
+    [fidelity gaps](docs/fidelity-gaps.md#-mentioned-files-in-a-scheduled-task--not-modeled).
+  - **Typed-artifact tools in chat sessions (not modeled):** from Desktop 4.29.0, Desktop's own chat-typed sessions
+    also get the typed-artifact tools of its `cowork` server, and the host loop pre-approves the read-only ones.
+    Desktop 4.4212.0 adds `list_typed_artifacts`. The harness serves none of these tools.
+  - **Agent 2.1.309, `onFailure: "block"` hooks:** a hook stopped after its own timeout now blocks even when the turn
+    was aborted at the same time. The harness already treated every cancelled hook frame on such an event as a
+    possible block, so its reading is unchanged.
+  - **Cassettes:** see the Upgrade notes.
+- **`sync` reads the Cowork system prompt where Desktop 4.29.0 moved it.** The prompt is now a parameter of the
+  function that builds the session options, with its default loaded from a separate chunk; `sync` follows that load
+  to the one definition it names instead of matching a constant by name, and refuses when there is not exactly one.
+  Its fingerprint is unchanged. `sync` also checks that the code reading the same template for a third-party session
+  reads that template and no other.
+- **`sync` checks each extra key of the scheduled-task env object.** Every key beside the scheduled-run marker must
+  have a registry row that names it as scheduled-only, and must be built nowhere else in the bundle.
+- **`sync` checks the typed-artifact tool predicate and the host loop's pre-approved list** in builds that date the
+  chat-session change: the tools must come from the `cowork` server, be exactly the ones the harness knows (a tool
+  added or dropped flags), and reach the pre-approved list only through its read-only export.
+- **`sync --diff` no longer reports the typed-artifact tools as DISAPPEARED when every session read was a scheduled
+  task.** Desktop never offers them to one, and offers them to an ordinary session only when the account has
+  typed-artifact types, so such a read can neither show nor rule them out; `sync --diff` lists them as not observed,
+  with that reason. A tool that appears is still reported as APPEARED. `npm run preflight`'s check of the newest
+  baseline's observed tool list names them the same way.
+- **`sync` follows the path hook's pre-pass when it is skipped for launched agents.** In Desktop 4.4212.0 the hook
+  that checks file paths delegates to a larger function, and one link of its check is skipped when the agent was
+  started through Desktop's CLI launcher. `sync` now reads the delegate's whole body, pairs that skip with the
+  pre-pass's matching argument, and flags the launcher if it can do anything beyond being inert.
+- **Release and CI jobs have time limits**, so a hung step fails instead of holding a runner for hours. See
+  RELEASING.md for finishing a release whose limit was hit after the npm upload.
+
 ## [4.12.0] - 2026-10-25
 
 ### Upgrade notes

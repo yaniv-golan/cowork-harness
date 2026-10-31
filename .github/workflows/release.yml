@@ -22,6 +22,11 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # A hung step must fail the job, not hold the runner for GitHub's 6-hour default. Sized from the waits it
+    # encloses: the CI-success poll (up to ~30 min by design) + Build + test (cap 25) + Publish (cap 30, which
+    # reruns the build via prepublishOnly) + headroom. If a cap lands AFTER the npm upload, see "A release run
+    # that timed out" in RELEASING.md: a re-run cannot publish the same version twice.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -67,6 +72,7 @@ jobs:
         run: npm run check:versions
 
       - name: Build + test (also runs via prepublishOnly)
+        timeout-minutes: 25
         # The hillclimb lite-contract test fetches pinned upstream files; on CI a fetch failure must fail, not skip.
         env:
           COWORK_HARNESS_CONTRACT_FETCH: required
@@ -84,6 +90,7 @@ jobs:
       # `npm i cowork-harness` (or the Action's `version: latest` default) resolves to until promoted.
       # Promotion is a documented step in RELEASING.md and needs a 2FA challenge, which is the point.
       - name: Publish to npm (Trusted Publishing + provenance, staged on `next`)
+        timeout-minutes: 30
         run: npm publish --provenance --access public --tag next
 
       - name: Extract this version's CHANGELOG section

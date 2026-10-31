@@ -269,6 +269,10 @@ export const PlatformBaseline = z.looseObject({
     mode: z.string(),
     allowKind: z.enum(["allowlist", "unrestricted"]),
     allowDomains: z.array(z.string()),
+    /** Hosts Cowork's web_fetch refuses on its Path B branch even when allowlisted (Desktop 4.4212.0+). DERIVED by
+     *  `sync` from the asar's refuse function each time — never carried forward — and absent when that build has no
+     *  such step. */
+    webFetchVendorDeny: z.array(z.string()).optional(),
   }),
   bgEnvStrip: z
     .object({ knownVars: z.array(z.string()) })
@@ -317,6 +321,27 @@ export type SessionKinds = z.infer<typeof SessionKinds>;
  *  in `desktopInitSurface`; `checkScheduledSessionFacts` (src/sync/cowork-sync.ts) asserts the code that withholds them instead. */
 export const SCHEDULED_SESSION_WITHHELD_TOOLS: Readonly<Record<string, readonly string[]>> = {
   cowork: ["send_user_message"],
+};
+
+/** Tools Desktop withholds from a scheduled-task session that an ordinary session MAY get, on a condition no baseline
+ *  records: the typed-artifact tools of Desktop's own `cowork` server reach an untyped or chat session with no
+ *  scheduled task only on the host-loop lane, and only when the account has typed-artifact types. So a scheduled
+ *  read's missing tool is never attributed to the session kind; baseline-diff names it as not attributable instead.
+ *  That note covers only a tool that goes: a tool that appears is reported as APPEARED.
+ *  `checkScheduledSessionFacts` (src/sync/cowork-sync.ts) pins the predicate and the list (KNOWN_COWORK_FRAME_TOOLS). */
+export const SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS: Readonly<Record<string, readonly string[]>> = {
+  cowork: [
+    "create_from_type",
+    "db_get",
+    "db_list",
+    "db_write",
+    "describe_type",
+    "list_files",
+    "list_typed_artifacts",
+    "list_types",
+    "publish_files",
+    "read_file",
+  ],
 };
 
 /** The gate a withheld tool ALSO needs before an ordinary session gets it, keyed `<server>.<tool>`, as its

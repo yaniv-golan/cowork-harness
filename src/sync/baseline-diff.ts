@@ -2,7 +2,7 @@
 // (stringify-compares each top key, printing whole subtrees on any nested change). Used by both the
 // standalone `diff <baseline-a> <baseline-b>` command and the refactored `sync --diff`.
 
-import { SCHEDULED_SESSION_WITHHELD_TOOLS, withheldToolGateOn } from "../types.js";
+import { SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS, SCHEDULED_SESSION_WITHHELD_TOOLS, withheldToolGateOn } from "../types.js";
 
 export type BaselineDiffEntry =
   | { path: string; kind: "scalar"; from: unknown; to: unknown; annotation: boolean }
@@ -96,6 +96,9 @@ function sessionKindsChange(mine: BaselineDiffEntry[], block: string): { line?: 
 }
 const SCHEDULED_ONLY_NOTE =
   "every session read was a scheduled task, which Desktop never offers it to, so this is not evidence of a removal; sync asserts the code path that offers it to an untyped session, and its gate is on in the new baseline's `provenance.gates`";
+
+const SCHEDULED_CONDITIONAL_NOTE =
+  "every session read was a scheduled task, which Desktop never offers them to, and an ordinary session gets them only on the host-loop lane when the account has typed-artifact types — not attributable from this data either way; sync asserts the code path that offers them";
 
 type InitServer = { presence?: string; toolsAll?: string[]; toolsSome?: string[] };
 type InitBlock = { agentVersion?: string; appVersion?: string; observed?: boolean; servers?: Record<string, InitServer> };
@@ -204,10 +207,17 @@ export function renderInitSurfaceEntries(entries: BaselineDiffEntry[], next?: un
     const withheld = withheldByKind
       ? gone.filter((t) => (SCHEDULED_SESSION_WITHHELD_TOOLS[server] ?? []).includes(t) && withheldToolGateOn(next, server, t))
       : [];
-    const disappeared = gone.filter((t) => !withheld.includes(t));
+    // Only a tool that GOES is attributed. The reverse is not: an interactive read on an account with typed-artifact
+    // types shows the cowork tools as ten plain APPEARED rows, since their arrival is real evidence about that read.
+    const conditional = withheldByKind
+      ? gone.filter((t) => !withheld.includes(t) && (SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS[server] ?? []).includes(t))
+      : [];
+    const disappeared = gone.filter((t) => !withheld.includes(t) && !conditional.includes(t));
     if (appeared.length) lines.push(`- Desktop server \`${server}\`: tool(s) APPEARED: ${code(appeared.sort())}`);
     if (disappeared.length) lines.push(`- Desktop server \`${server}\`: tool(s) DISAPPEARED: ${code(disappeared.sort())}`);
     if (withheld.length) lines.push(`- Desktop server \`${server}\`: ${code(withheld.sort())} not observed: ${SCHEDULED_ONLY_NOTE}`);
+    if (conditional.length)
+      lines.push(`- Desktop server \`${server}\`: ${code(conditional.sort())} not observed: ${SCHEDULED_CONDITIONAL_NOTE}`);
     const mix = "(sensitive to the mix of session kinds read — a prompt to look, not evidence)";
     if (toAll.length) lines.push(`- Desktop server \`${server}\`: ${code(toAll.sort())} moved from some sessions to every session ${mix}`);
     if (toSome.length)

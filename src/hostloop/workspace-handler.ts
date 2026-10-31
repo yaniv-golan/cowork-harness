@@ -141,10 +141,17 @@ async function resolveAndVet(host: string, resolve: Resolver): Promise<{ deny: s
 }
 
 /** Port of Cowork's `U1t` (Path B domain gate): scheme + private-address + the egress domain allowlist
- *  (the SAME `wen()`/`compile()` matcher the container egress uses). Returns a deny reason, or null = allow. */
-export function u1t(u: URL, allow: string[], matcher: (h: string) => boolean): string | null {
+ *  (the SAME `wen()`/`compile()` matcher the container egress uses). Returns a deny reason, or null = allow.
+ *
+ *  `vendorDeny` (Desktop 4.4212.0+, the baseline's `network.webFetchVendorDeny`): hosts Cowork refuses even when the
+ *  allowlist names them, matched as the host or any subdomain of it. Like Cowork, an allowlist holding `*` skips it. */
+export function u1t(u: URL, allow: string[], matcher: (h: string) => boolean, vendorDeny: readonly string[] = []): string | null {
   if (u.protocol !== "http:" && u.protocol !== "https:") return `URL scheme "${u.protocol}" is not allowed. Use http or https.`;
   if (isLocalOrPrivate(u.hostname)) return `Host "${u.hostname}" is a local or private address.`;
+  if (allow.includes("*")) return null;
+  const host = u.hostname.toLowerCase().split(".").filter(Boolean).join("."); // as Cowork: empty labels dropped
+  if (vendorDeny.some((v) => host === v || host.endsWith("." + v)))
+    return `Web fetch refused for "${u.hostname}": its traffic is handled by an outside vendor, which no allowlist entry overrides, so a retry gets the same answer.`;
   if (!allow.length) return "No network allowlist is configured for this session. The web_fetch tool is disabled.";
   if (!matcher(u.hostname))
     return `Web fetch was not allowed: ${u.hostname} is not in the session web-fetch allowlist. Ask to add this domain.`;
@@ -308,6 +315,9 @@ export interface WorkspaceHandlerOptions {
    *  advertised default-deny egress. `spawnContainer` forgot it, and only an adversarial review caught it.
    *  Every real caller passes `plan.egressAllow`; an omitted allowlist now denies rather than allows. */
   webFetchAllow?: string[];
+  /** Hosts PATH B refuses even when allowlisted (the baseline's `network.webFetchVendorDeny`; absent before Desktop
+   *  4.4212.0). Defaults to `[]`. */
+  webFetchVendorDeny?: readonly string[];
   onEgress?: (entry: EgressEntry) => void;
   onInfraError?: (message: string) => void;
   /** Run fills this before the stream starts. */
@@ -342,6 +352,7 @@ export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler 
     vmMnt,
     runner = "docker",
     webFetchAllow = [], // DENY-ALL when unset — see the option doc; an open default was a real hole
+    webFetchVendorDeny = [],
     onEgress,
     onInfraError,
     provenanceRef,
@@ -407,6 +418,7 @@ export function makeWorkspaceHandler(opts: WorkspaceHandlerOptions): McpHandler 
             rawFetch,
             resolve,
             dedup,
+            webFetchVendorDeny,
           ),
         };
       // Unreachable: the dispatch gate above rejects every name outside `exposed`, and `exposed` is a
@@ -663,6 +675,7 @@ async function fetchViaHost(
   rawFetch: RawFetch = defaultRawFetch,
   resolve: Resolver = defaultResolver,
   dedup?: WebFetchDedupCache,
+  vendorDeny: readonly string[] = [],
 ) {
   if (!url) return textResult("error: missing 'url'", true);
   let host: string;
@@ -726,5 +739,5 @@ async function fetchViaHost(
     warn("::warning:: web_fetch provenance is NOT enforced (fidelity gap vs Cowork)\n");
   }
   const matcher = compile(allow);
-  return followWithRedirects(url, rawFetch, (u) => u1t(u, allow, matcher), resolve, onEgress);
+  return followWithRedirects(url, rawFetch, (u) => u1t(u, allow, matcher, vendorDeny), resolve, onEgress);
 }

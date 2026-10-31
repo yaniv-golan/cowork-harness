@@ -70,6 +70,7 @@ Given a session + baseline, returns:
 | `pluginDirs[]` | mnt-relative plugin roots → `--plugin-dir` (incl. marketplace-resolved plugins) |
 | `model/effort/extendedThinking/permissionMode/permissionParity` | from session |
 | `egressAllow[]` | `baseline.network.allowDomains` + `session.egress.extra_allow` (or `["*"]` if unrestricted) |
+| `webFetchVendorDeny[]` | `baseline.network.webFetchVendorDeny` (Desktop 4.4212.0+), `[]` when absent; hosts web_fetch's Path B refuses even when `egressAllow` names them (an unrestricted allowlist skips it) |
 
 **Marketplace resolution (required):** for each `local_marketplaces` dir, parse `.claude-plugin/marketplace.json`; for each `session.plugins.enabled` entry `name@mkt` matching `manifest.name`, resolve `manifest.plugins[name].source` → a `.local-plugins/marketplaces/<marketplace>/<plugin>` mount + pluginDir. This reproduces the real desktop spawn argv (`--plugin-dir …/marketplaces/<mp>/<plugin>`). (Cowork loads plugins via `--plugin-dir`; the registry is inert in-VM — §6.)
 

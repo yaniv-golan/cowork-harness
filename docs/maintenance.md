@@ -15,6 +15,10 @@ STABLE (in code, rarely changes)        VOLATILE (in baselines/, sync-regenerate
                                           - asarFingerprint (drift tripwire)
                                           - spawn.env
                                           - spawn.effortByModel + spawn.effortRegexDefault
+                                          - network.webFetchVendorDeny (Desktop 4.4212.0+;
+                                            presence is read from the asar; the value is
+                                            the pinned KNOWN_WEBFETCH_VENDOR_DENY, and a
+                                            build with any other list stops the sync)
 
 HAND-AUTHORED (in baselines/, drift-guarded — sync does NOT extract these; they carry
 forward from the previous baseline untouched)
@@ -134,7 +138,7 @@ Another runtime knob in the same family: `COWORK_HARNESS_RESOURCE_INTERVAL_MS` s
 Old staged binaries are re-downloadable from Anthropic's own release channel. For the **container/microvm** tiers the harness needs the **Linux/arm64 ELF**, so download it directly and point the resolver at it:
 
 ```bash
-V=2.1.308   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
+V=2.1.309   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
 # The release channel is NOT always the stable one — Desktop also stages release CANDIDATES, served only
 # from .../claude-code-releases/rc/<commit>/, and the commit cannot be discovered from the network (the
 # `stable` and `latest` pointers name other versions). Read it from the same baseline; every baseline
@@ -630,6 +634,7 @@ The sync extractor currently targets macOS paths (`~/Library/Application Support
 > **Scope:** this section is a short pointer, not the runbook. The full release procedure (version
 > locations, the branch → PR → tag → publish flow, the checklist) lives in [RELEASING.md](../RELEASING.md).
 > The notes here only cover how a *parity sync* relates to versioning.
+> If a release run hits its timeout after the npm upload, see "A release run that timed out" in RELEASING.md.
 
 Versioning follows [SemVer](https://semver.org/); as of 1.0.0 a backwards-incompatible change to a
 covered surface (baseline-schema or CLI-contract changes count) is a major bump. A parity-baseline *content* update (a new

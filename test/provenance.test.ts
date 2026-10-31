@@ -235,7 +235,7 @@ describe("readGateFlag (prefixed key + prose/structured shapes)", () => {
 
 describe("web_fetch Path B — U1t + manual redirect re-check (provenance off)", () => {
   const publicResolver: Resolver = async () => [{ address: "203.0.113.10" }];
-  const callB = async (url: string, allow: string[], rawFetch: RawFetch, resolve: Resolver = publicResolver) => {
+  const callB = async (url: string, allow: string[], rawFetch: RawFetch, resolve: Resolver = publicResolver, vendorDeny?: string[]) => {
     const egress: EgressEntry[] = [];
     // provenanceRef + fetchImpl undefined → Path B; inject rawFetch for the redirect loop (spawn-free).
     // A network-free DNS stub keeps the SSRF backstop from NXDOMAIN-denying the synthetic test hosts.
@@ -243,6 +243,7 @@ describe("web_fetch Path B — U1t + manual redirect re-check (provenance off)",
       containerName: "c",
       vmMnt: "/mnt",
       webFetchAllow: allow,
+      webFetchVendorDeny: vendorDeny,
       onEgress: (e) => egress.push(e),
       rawFetch,
       resolve,
@@ -264,6 +265,26 @@ describe("web_fetch Path B — U1t + manual redirect re-check (provenance off)",
     expect(u1t(new URL("http://sub.example.com/"), ["example.com"], m)).toMatch(/not in the session/); // exact-for-bare: subdomain NOT matched
     expect(u1t(new URL("http://example.com/x"), ["example.com"], m)).toBeNull();
     expect(u1t(new URL("http://anything.com/"), ["*"], compile(["*"]))).toBeNull();
+  });
+
+  // Desktop 4.4212.0 added a vendor-host refusal to this function, after the `*` short-circuit and before the allowlist:
+  // a listed host (or a subdomain of one) is refused even when the allowlist names it.
+  it("u1t: a vendor-denied host is refused even when allowlisted, admitted only under '*'", () => {
+    const vendor = ["a-cdn.anthropic.com", "s-cdn.anthropic.com"];
+    const allow = ["a-cdn.anthropic.com", "*.s-cdn.anthropic.com", "example.com"];
+    const m = compile(allow);
+    expect(u1t(new URL("https://a-cdn.anthropic.com/x"), allow, m, vendor)).toMatch(
+      /outside vendor.*no allowlist entry overrides.*retry gets the same answer/,
+    );
+    expect(u1t(new URL("https://x.s-cdn.anthropic.com/"), allow, m, vendor)).toMatch(/outside vendor/);
+    expect(u1t(new URL("https://example.com/"), allow, m, vendor)).toBeNull();
+    expect(u1t(new URL("https://A-CDN.anthropic.com./x"), allow, m, vendor)).toMatch(/outside vendor/); // case + trailing dot, as Cowork
+    expect(u1t(new URL("https://notanthropic-a-cdn.anthropic.com.evil/"), ["*"], compile(["*"]), vendor)).toBeNull();
+    expect(u1t(new URL("https://a-cdn.anthropic.com/x"), ["*"], compile(["*"]), vendor)).toBeNull();
+    // scheme and private-address checks still come first
+    expect(u1t(new URL("ftp://a-cdn.anthropic.com/"), allow, m, vendor)).toMatch(/scheme/);
+    // no vendor list (a baseline older than 4.4212.0): the allowlist decides, as before
+    expect(u1t(new URL("https://a-cdn.anthropic.com/x"), allow, m)).toBeNull();
   });
 
   it("isLocalOrPrivate flags loopback/private/link-local, not public", () => {
@@ -318,6 +339,20 @@ describe("web_fetch Path B — U1t + manual redirect re-check (provenance off)",
     expect(r.isError).toBe(true);
     expect(r.text).toMatch(/not in the session web-fetch allowlist/);
     expect(r.egress).toEqual([{ host: "evil.com", decision: "deny" }]);
+  });
+
+  it("refuses an allowlisted vendor host, and a redirect to one, when the baseline lists vendor hosts", async () => {
+    const vendor = ["a-cdn.anthropic.com"];
+    const direct = await callB("https://a-cdn.anthropic.com/x", ["a-cdn.anthropic.com"], ok("X"), publicResolver, vendor);
+    expect(direct.isError).toBe(true);
+    expect(direct.text).toMatch(/outside vendor/);
+    expect(direct.egress).toEqual([{ host: "a-cdn.anthropic.com", decision: "deny" }]);
+    let n = 0;
+    const hop: RawFetch = async () =>
+      n++ === 0 ? { status: 302, location: "https://a-cdn.anthropic.com/y", text: async () => "" } : { status: 200, text: async () => "Y" };
+    const redirected = await callB("http://example.com/x", ["example.com", "a-cdn.anthropic.com"], hop, publicResolver, vendor);
+    expect(redirected.isError).toBe(true);
+    expect(redirected.text).toMatch(/Redirect to .* blocked: .*outside vendor/);
   });
 
   it("DENIES a host whose name RESOLVES to a private/loopback address (DNS-rebind SSRF)", async () => {
