@@ -576,6 +576,18 @@ describe.skipIf(!ASAR_BACKUPS)("checkPathHookFacts oracle over saved Desktop asa
   });
 });
 
+// The scheduled-session facts over saved asars: the frame-tool list, its read-only export and the host loop's spread
+// have had the same shape in every build that has the frame-tools predicate, before and after the chat arm (4.29.0).
+describe.skipIf(!ASAR_BACKUPS)("checkScheduledSessionFacts oracle over saved Desktop asars (COWORK_ASAR_BACKUP_DIR)", () => {
+  it.each(["3.6556.2", "4.29.0", "4.4212.0"])("%s: clean", (version) => {
+    const asar = join(ASAR_BACKUPS!, version, "app.asar");
+    expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
+    const files = readAsarBuildFiles(asar);
+    expect(files.size).toBeGreaterThan(100);
+    expect(checkScheduledSessionFacts(files)).toEqual([]);
+  });
+});
+
 // web_fetch Path B vendor-host refusal (Desktop 4.4212.0), presence-conditional. Shape transcribed from the 4.4212.0 main
 // chunk (normalized): the vendor list behind one alias, the normalize + host-or-subdomain matcher, the five-step refuse
 // function, and the workspace web_fetch passing it as `refuseTarget` with the session's allowed domains.
