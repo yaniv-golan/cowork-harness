@@ -48,6 +48,7 @@ import {
   partitionSpawnFlags,
   resolveConst,
   extractModelEffortConfig,
+  decodeTemplateEscapes,
   extractPromptFingerprint,
   checkPromptDrift,
   REQUIRED_SPAWN_KEYS,
@@ -3137,6 +3138,72 @@ describe("prompt fingerprints are escape-form independent", () => {
   });
 });
 
+// Desktop 4.29.0 moved the prompt constant into a lazy chunk: the consumption site names a PARAMETER of its builder,
+// and the default comes from `require("./<X>")…).DESKTOP_3P_BASE_PROMPT`. Through 3.6556.2 it named a module constant.
+describe("extractPromptFingerprint — the parameter form and the module-constant form", () => {
+  const LOADER =
+    'async function ggn(){return(await Promise.resolve().then((()=>require("./index.chunk-P.js"))).then((e=>e.n))).DESKTOP_3P_BASE_PROMPT}';
+  const BUILDER = "function _gn(e,t,n={},r){let o=n.x??{};return{system_prompts:{cowork_system_prompt:{value:{prompt:t},on:!0}}}}";
+  // The 4.x consumption chunk's own `let t=\`…\`` sits inside a function before the site: the old extractor took it.
+  const DECOY = "function hh(){let t=`Object can not safely be stringified`;return t}";
+  const PROMPT = "REAL <a> {{x}}";
+  const P_CHUNK = `var n=e.r({DESKTOP_3P_BASE_PROMPT:()=>t}),t=\`${PROMPT}\`;Object.defineProperty(exports,"n",{enumerable:!0,get:function(){return n}});`;
+  const filesOf = (main: string, chunks: Record<string, string> = { "index.chunk-P.js": P_CHUNK }) =>
+    new Map([["index.chunk-main.js", main], ...Object.entries(chunks)]);
+  const fp = (f: Map<string, string>) => extractPromptFingerprint([...f.values()].join(""), f);
+  const decoded = (body: string) => createHash("sha256").update(decodeTemplateEscapes(body), "utf8").digest("hex");
+
+  it("parameter form: reads the loader target's template, not the same-named decoy before the site (`={}` default in the list)", () => {
+    const r = fp(filesOf(DECOY + LOADER + BUILDER));
+    expect(r?.decodedSha256).toBe(decoded(PROMPT));
+    expect(r?.constantId).toBe("t");
+  });
+  it("parameter form: the loader target exports nothing → null", () => {
+    expect(fp(filesOf(DECOY + LOADER + BUILDER, { "index.chunk-P.js": "var t=`" + PROMPT + "`;" }))).toBeNull();
+  });
+  it("parameter form: another chunk exporting the name does not stand in for the loader's target → null", () => {
+    expect(fp(filesOf(DECOY + LOADER + BUILDER, { "index.chunk-P.js": '"use strict";', "index.chunk-Y.js": P_CHUNK }))).toBeNull();
+  });
+  it("parameter form: two templates for the exported local in the target → null", () => {
+    expect(fp(filesOf(DECOY + LOADER + BUILDER, { "index.chunk-P.js": P_CHUNK + "function z(){let t=`other`;return t}" }))).toBeNull();
+  });
+  it("parameter form: no loader → null (never falls back to a same-named template in the consumption chunk)", () => {
+    expect(fp(filesOf(DECOY + BUILDER))).toBeNull();
+  });
+  it("parameter form: two loaders → null", () => {
+    expect(fp(filesOf(DECOY + LOADER + LOADER.replace("ggn", "ggm") + BUILDER))).toBeNull();
+  });
+  it("module-constant form: one definition, one binding → read", () => {
+    const main = "var oon=`" + PROMPT + "`;function bld(e){return{system_prompts:{cowork_system_prompt:{value:{prompt:oon},on:!0}}}}";
+    expect(fp(filesOf(main, {}))?.decodedSha256).toBe(decoded(PROMPT));
+  });
+  it("module-constant form: a second definition of the name → null (never the first match)", () => {
+    const main =
+      "function hh(){let oon=`decoy`;return oon}var oon=`" +
+      PROMPT +
+      "`;function bld(e){return{cowork_system_prompt:{value:{prompt:oon}}}}";
+    expect(fp(filesOf(main, {}))).toBeNull();
+  });
+  it("two consumption sites → null", () => {
+    const main =
+      "var oon=`" + PROMPT + "`;var a={cowork_system_prompt:{value:{prompt:oon}}},b={cowork_system_prompt:{value:{prompt:oon}}};";
+    expect(fp(filesOf(main, {}))).toBeNull();
+  });
+});
+
+describe.skipIf(!ASAR_BACKUPS)("extractPromptFingerprint over saved Desktop asars (COWORK_ASAR_BACKUP_DIR)", () => {
+  it.each(["3.6556.2", "4.29.0", "4.4212.0"])("%s: the rendered prompt is unchanged", (version) => {
+    const asar = join(ASAR_BACKUPS!, version, "app.asar");
+    expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
+    const files = readAsarBuildFiles(asar);
+    const r = extractPromptFingerprint([...files.values()].join(""), files);
+    expect(r?.decodedSha256).toBe("a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf");
+    expect(r?.decodedCodePoints).toBe(37811);
+    expect(r?.sectionTags).toBe(43);
+    expect(r?.sha256.startsWith("e62bd9fa")).toBe(true);
+  });
+});
+
 describe("prompt drift guard (H1-H3)", () => {
   // D8: the RENDERED prompt has not moved since 1.20186.0 — but its RAW sha has, twice, purely from
   // codegen (1.32352.0 began escaping non-ASCII). Pinning the raw sha here made this oracle a VERSION pin
@@ -3150,7 +3217,7 @@ describe("prompt drift guard (H1-H3)", () => {
   it("golden oracle: the RENDERED prompt in the real asar is unchanged since 1.20186.0", () => {
     const bundle = readRealBundleOrSkip();
     if (!bundle) return;
-    const fp = extractPromptFingerprint(bundle);
+    const fp = extractPromptFingerprint(bundle, readRealBundleFilesOrSkip() ?? undefined);
     expect(fp).not.toBeNull();
     expect(fp!.decodedSha256).toBe(RENDERED_PROMPT_SHA);
     expect(fp!.decodedCodePoints).toBe(37811);
@@ -3164,7 +3231,7 @@ describe("prompt drift guard (H1-H3)", () => {
   it("checkPromptDrift is clean when fp matches the committed newest entry (real fingerprints file, real modeled/allowlisted sets)", () => {
     const bundle = readRealBundleOrSkip();
     if (!bundle) return;
-    const fp = extractPromptFingerprint(bundle);
+    const fp = extractPromptFingerprint(bundle, readRealBundleFilesOrSkip() ?? undefined);
     expect(fp).not.toBeNull();
     const fingerprintsFile = JSON.parse(
       readFileSync(join(process.cwd(), "baselines", "prompts", "cowork-system-prompt-fingerprints.json"), "utf8"),

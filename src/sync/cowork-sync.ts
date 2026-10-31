@@ -1855,7 +1855,7 @@ function extractFromAsar(
     // NOT write-blocking: the block is data no harness path reads. A failed extraction writes the baseline
     // without it (never the previous release's) and says so; check:versions then warns.
     const { cloud, notes: cloudNotes } = safeCloudBlock(rawFiles);
-    const promptFingerprint = extractPromptFingerprint(bundle);
+    const promptFingerprint = extractPromptFingerprint(bundle, bundleFiles);
     const fingerprintsFile = readPromptFingerprintsFile();
     const promptDrift = checkPromptDrift(
       promptFingerprint,
@@ -3371,6 +3371,70 @@ export interface PromptFingerprint {
   sectionTagNames: string[]; // sorted unique <name> open-tag names
 }
 
+/** The single definition `<id>=\`` of `id` in `text` (as a declaration or after `,;{(`), when it is the only binding
+ *  of that name in the text or is exported; else null. Never "the first match": a short minified name recurs. */
+function uniqueTemplateDefinition(text: string, id: string): number | null {
+  const e = reEsc(id);
+  const defs = [...text.matchAll(new RegExp(`(?:[,;{(]|\\b(?:const|let|var)\\s+)${e}=\``, "g"))];
+  if (defs.length !== 1) return null;
+  const binds = [...text.matchAll(new RegExp(`(?<![\\w$.])${e}=(?![=>])`, "g"))].length;
+  const exported = new RegExp(`(?<![\\w$])[\\w$]+:\\(\\)=>${e}(?![\\w$])|defineProperty\\(exports,"[\\w$]+",\\{[^}]*?return ${e}\\}`).test(
+    text,
+  );
+  if (binds !== 1 && !exported) return null;
+  return defs[0]!.index! + defs[0]![0].length;
+}
+
+/** The parameter names of the innermost `function …(…){…}` whose body holds `at`, or null when none is found. The
+ *  parameter list is paren-matched first (`={}` defaults sit inside it), then the body brace-matched, both literal-aware. */
+function enclosingFunctionParams(text: string, at: number): string[] | null {
+  const heads = [...text.slice(Math.max(0, at - 200000), at).matchAll(/function\s*[\w$]*\(/g)];
+  const base = Math.max(0, at - 200000);
+  for (let k = heads.length - 1; k >= 0 && k >= heads.length - 400; k--) {
+    const pOpen = base + heads[k]!.index! + heads[k]![0].length - 1;
+    const pClose = matchParen(text, pOpen);
+    if (pClose < 0 || text[pClose + 1] !== "{") continue;
+    const close = matchBrace(text, pClose + 1);
+    if (close < at) continue;
+    const params = topLevelArgs(text, pOpen) ?? [];
+    return params
+      .map((p) =>
+        p
+          .trim()
+          .replace(/^\.\.\./, "")
+          .replace(/=[\s\S]*$/, ""),
+      )
+      .filter((p) => /^[\w$]+$/.test(p));
+  }
+  return null;
+}
+
+/** Where the Cowork prompt template body starts, and in which text. Two shapes:
+ *  - through Desktop 3.6556.2 the consumption site names a module-level constant (`prompt:oon` … `var oon=\``);
+ *  - from Desktop 4.29.0 it names a PARAMETER of its builder (`function _gn(e,t,n={},…)`), and the default comes from
+ *    a lazy chunk: `require("./<X>")…).DESKTOP_3P_BASE_PROMPT`, whose `DESKTOP_3P_BASE_PROMPT:()=><L>` names `<L>=\``.
+ *  The parameter form binds through the loader's own `require` target, never "whichever chunk exports the name"; a
+ *  same-named template elsewhere in the consumption chunk (4.x has one, inside a function) is never taken. */
+function locatePromptTemplate(bundle: string, files?: Map<string, string>): { id: string; text: string; bodyStart: number } | null {
+  const chunks = files ? [...files.values()] : [bundle];
+  const sites = chunks.flatMap((c) => [...c.matchAll(/cowork_system_prompt:\{value:\{prompt:([A-Za-z_$][\w$]*)/g)].map((m) => ({ c, m })));
+  if (sites.length !== 1) return null;
+  const { c: chunk, m } = sites[0]!;
+  const id = m[1]!;
+  const params = enclosingFunctionParams(chunk, m.index!);
+  if (params?.includes(id)) {
+    const loaders = [...chunk.matchAll(/require\("\.\/([^"]+)"\)(?:(?!require\()[^;]){0,80}?\)\.DESKTOP_3P_BASE_PROMPT(?![\w$])/g)];
+    if (loaders.length !== 1 || !files) return null;
+    const target = files.get(loaders[0]![1]!.slice(loaders[0]![1]!.lastIndexOf("/") + 1));
+    const local = target === undefined ? null : exportLocalOf(target, "DESKTOP_3P_BASE_PROMPT");
+    if (!target || !local) return null;
+    const at = uniqueTemplateDefinition(target, local);
+    return at === null ? null : { id: local, text: target, bodyStart: at };
+  }
+  const at = uniqueTemplateDefinition(chunk, id);
+  return at === null ? null : { id, text: chunk, bodyStart: at };
+}
+
 /**
  * Extract the raw Cowork system-prompt constant's content fingerprint from the asar main bundle.
  * Mirrors the method documented in baselines/prompts/cowork-system-prompt-fingerprints.json
@@ -3426,22 +3490,18 @@ export function decodeTemplateEscapes(raw: string): string {
   return out;
 }
 
-export function extractPromptFingerprint(bundle: string): PromptFingerprint | null {
-  const consumptionM = bundle.match(/cowork_system_prompt:\{value:\{prompt:([A-Za-z_$][\w$]*)/);
-  if (!consumptionM) return null;
-  const id = consumptionM[1];
-  const idEsc = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const defM = bundle.match(new RegExp(`(?:[,;{(]|\\b(?:const|let|var)\\s+)${idEsc}=\``));
-  if (!defM || defM.index == null) return null;
-  const bodyStart = defM.index + defM[0].length; // index of the char right after the opening backtick
+export function extractPromptFingerprint(bundle: string, files?: Map<string, string>): PromptFingerprint | null {
+  const located = locatePromptTemplate(bundle, files);
+  if (!located) return null;
+  const { id, text, bodyStart } = located;
   let body = "";
   let i = bodyStart;
   let closed = false;
-  for (; i < bundle.length; i++) {
-    const c = bundle[i];
+  for (; i < text.length; i++) {
+    const c = text[i];
     if (c === "\\") {
       // Preserve the escape AND the escaped char intact (raw template source, not a decoded string).
-      body += c + (bundle[i + 1] ?? "");
+      body += c + (text[i + 1] ?? "");
       i++; // skip the escaped char too (loop's i++ advances past the backslash)
       continue;
     }
