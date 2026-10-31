@@ -5568,11 +5568,19 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
     // inside its own module, where no importer's guard applies, fails. The object counts as guarded only when it has at
     // least one reference and all of them are admitted (an unreferenced object fails closed: its use moved somewhere
     // this counter cannot see).
+    // MULTI-KEY OBJECT (Desktop 4.29.0): the object also carries `CLAUDE_CODE_DISABLE_FILE_MENTIONS:"1"`. Every other key in
+    // it rides the same guard, so the object is guarded as a whole — but each such key is allowlisted on that claim, and
+    // an allowlist hit is unconditional. So each extra key gets its OWN bundle-wide construction census (below): the
+    // scheduled object must be its only construction, and its registry row must say it is S6g-guarded and
+    // session-conditional. Without that, the key built anywhere else would be admitted in silence.
+    const extraKeys = new Set<string>();
     if (files) {
-      const objRe = new RegExp(`(?<![\\w$.])([\\w$]+)=\\{["']?${SCHED_KEY}["']?:"1"\\}`, "g");
+      const KEY_ITEM = `["']?[A-Z][A-Z0-9_]*["']?:"1"`;
+      const objRe = new RegExp(`(?<![\\w$.])([\\w$]+)=\\{((?:${KEY_ITEM},)*)["']?${SCHED_KEY}["']?:"1"((?:,${KEY_ITEM})*)\\}`, "g");
       for (const [name, def] of files) {
         for (const om of def.matchAll(objRe)) {
           const local = om[1];
+          for (const k of `${om[2]}${om[3]}`.matchAll(/["']?([A-Z][A-Z0-9_]*)["']?:"1"/g)) extraKeys.add(k[1]);
           // A minified module reuses one-letter names in its inner scopes: 2.37337.1 bundles an HTTP client into
           // this chunk whose method declares its own `c` and spreads it. A hit counts unless an inner
           // let/const/var declaration of the same name encloses it; a parameter or any other shape still fails.
@@ -5673,6 +5681,21 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
           else if (admitted === refs) guarded++;
         }
       }
+    }
+    for (const key of [...extraKeys].sort()) {
+      const row = classifySpawnEnvKey(key, "window");
+      if (!row || row.class !== "session-conditional" || !/\bS6g\b/.test(row.reason))
+        schedMiss(
+          `${key} is built in the ${SCHED_KEY} object but its registry row is not session-conditional and S6g-guarded — ` +
+            "classify it in src/sync/spawn-env-registry.ts before the allowlist admits it",
+        );
+      const keyCtorRe = new RegExp(`(?:"${key}"|'${key}'|(?<![\\w$"'])${key}):(?!\\(\\)=>)`, "g");
+      const keyCtors = chunks.reduce((n, c) => n + [...c.matchAll(keyCtorRe)].length, 0);
+      if (keyCtors !== 1)
+        schedMiss(
+          `${key} is constructed ${keyCtors} time(s) in the bundle; the ${SCHED_KEY} object must be its only construction, ` +
+            "so the allowlist's 'scheduled runs only' claim no longer holds; reclassify",
+        );
     }
     if (ctors === 0 && bundle.includes(SCHED_KEY))
       schedMiss(

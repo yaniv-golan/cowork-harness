@@ -621,6 +621,17 @@ the verdict by default, so the gap shows only when a scenario scripts an allow f
 `allow_permissive_auto_allow: true`. Either way the tool runs here where Cowork, in a scheduled task, would refuse it.
 To test the refusal path, script a deny for the tool.
 
+### @-mentioned files in a scheduled task — not modeled
+
+**Real Cowork behaviour (read in asar 4.29.0 and 4.4212.0):** a scheduled task's agent is started with
+`CLAUDE_CODE_DISABLE_FILE_MENTIONS=1` beside `CLAUDE_CODE_HOST_SCHEDULED_RUN=1`. With it set, a file named with `@`
+in the prompt reaches the model as a path to read, not as the file's contents inlined into the turn. Ordinary task
+sessions do not set it.
+
+**What the harness does:** it models an ordinary task session, so it never sets the variable, and the agent handles an
+`@`-mentioned file as it does in an ordinary session. A skill whose scheduled-task prompt names files with `@` can
+therefore get their contents here where, as a scheduled task under Cowork, it would get only the paths.
+
 ---
 
 ## HIPAA restriction is a process-global latch

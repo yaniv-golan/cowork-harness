@@ -146,6 +146,15 @@ const SPAWN_ENV_ALLOWLIST: Record<string, readonly [SpawnEnvClass, string]> = {
     "session-conditional",
     "scheduled-task sessionType-conditional (sessionType==='scheduled'); the modeled interactive session has no sessionType; guarded by S6g",
   ],
+  // Desktop 4.29.0 added this key to the scheduled-run object beside CLAUDE_CODE_HOST_SCHEDULED_RUN
+  // (`l={CLAUDE_CODE_HOST_SCHEDULED_RUN:"1",CLAUDE_CODE_DISABLE_FILE_MENTIONS:"1"}`). The agent then hands the model the
+  // paths of @-mentioned files to read, not their contents. Same reasoning as the row above: the modeled session has no
+  // sessionType, so pinning would bake a scheduled-only value into every spawn. S6g gives this key its own construction
+  // census — the object must stay its only construction.
+  CLAUDE_CODE_DISABLE_FILE_MENTIONS: [
+    "session-conditional",
+    "scheduled-task sessionType-conditional (built only in the scheduled-run object, Desktop 4.29.0); the modeled interactive session has no sessionType; guarded by S6g",
+  ],
   CLAUDE_CODE_ATTRIBUTION_HEADER: ["3p-only", "3p-provider-only branch; harness models 1p"],
   // Doubly conditional, and TWO traps a future reader will hit in this order:
   // (1) The managed-settings UI copy for this key names Cowork explicitly ("Raises how long Cowork, Chat

@@ -2316,6 +2316,49 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     it.each(MUT)("S6g import-form mutation %s fails loud (%#)", (_label, mutate) => {
       expect(facts(mutate())).toContain("S6g scheduled-run env key");
     });
+    // Desktop 4.29.0 put a second key in the object. Each extra key must have a session-conditional, S6g-guarded registry
+    // row, and the object must be its only construction in the bundle.
+    const FM = 'l={CLAUDE_CODE_HOST_SCHEDULED_RUN:"1",CLAUDE_CODE_DISABLE_FILE_MENTIONS:"1"}';
+    const modFM = (obj = FM) => MOD.replace('l={CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"}', obj);
+    it("4.29.0 control: the two-key object is CLEAN, and the extra key is allowlisted (never pinned) for an S6g reason", () => {
+      expect(modFM()).toContain(FM);
+      expect(facts(filesOf({ mod: modFM() }))).toBe("");
+      const { env, flags, keys } = derive(filesOf({ mod: modFM() }));
+      expect(flags.filter((f) => !f.startsWith("NOTE:"))).toEqual([]);
+      expect(env).toEqual(EXPECTED_GREEN);
+      expect(keys).toContain("CLAUDE_CODE_DISABLE_FILE_MENTIONS");
+      const row = classifySpawnEnvKey("CLAUDE_CODE_DISABLE_FILE_MENTIONS", "window");
+      expect(row?.class).toBe("session-conditional");
+      expect(row?.reason).toMatch(/\bS6g\b/);
+    });
+    it("4.29.0 control: key order and quoting inside the object do not matter", () => {
+      expect(facts(filesOf({ mod: modFM('l={"CLAUDE_CODE_DISABLE_FILE_MENTIONS":"1",CLAUDE_CODE_HOST_SCHEDULED_RUN:"1"}') }))).toBe("");
+    });
+    it("4.29.0 control: an export-table getter naming the extra key is not a construction", () => {
+      expect(facts(filesOf({ mod: modFM(), main: MAIN + "var ex={CLAUDE_CODE_DISABLE_FILE_MENTIONS:()=>q};" }))).toBe("");
+    });
+    const FM_MUT: [string, () => Map<string, string>][] = [
+      ["F1 an extra key the registry does not classify", () => filesOf({ mod: modFM(FM.replace("}", ',ZNEW_KEY:"1"}')) })],
+      [
+        "F2 an extra key whose registry row is not session-conditional",
+        () => filesOf({ mod: modFM(FM.replace("}", ',CLAUDE_CODE_ATTRIBUTION_HEADER:"1"}')) }),
+      ],
+      [
+        "F3 the extra key also constructed outside the object",
+        () => filesOf({ mod: modFM(), codetab: CODETAB + 'var z={CLAUDE_CODE_DISABLE_FILE_MENTIONS:"1"};' }),
+      ],
+      [
+        "F4 the extra key constructed outside the object under another value",
+        () => filesOf({ mod: modFM(), main: MAIN + 'var z={"CLAUDE_CODE_DISABLE_FILE_MENTIONS":"0"};' }),
+      ],
+      [
+        "F5 the two-key object spread with no guard",
+        () => filesOf({ mod: modFM(), spawn: spawn().replace(IMPORT_SPREAD, IMPORT_SPREAD + "...o.J,") }),
+      ],
+    ];
+    it.each(FM_MUT)("S6g extra-key mutation %s fails loud (%#)", (_label, mutate) => {
+      expect(facts(mutate())).toContain("S6g scheduled-run env key");
+    });
     // The count mismatch (constructions > guarded) also catches I10; this pins the dedicated reason, so dropping that
     // guard is not masked by the other.
     it("I12 names the reason: a non-getter function returns the object", () => {
