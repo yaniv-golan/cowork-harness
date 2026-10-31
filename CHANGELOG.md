@@ -34,6 +34,9 @@ All notable changes to this project are documented here. The format is based on
   - **Typed-artifact tools in chat sessions (not modeled):** from Desktop 4.29.0, Desktop's own chat-typed sessions
     also get the typed-artifact tools of its `cowork` server, and the host loop pre-approves the read-only ones.
     Desktop 4.4212.0 adds `list_typed_artifacts`. The harness serves none of these tools.
+  - **Agent 2.1.309, `onFailure: "block"` hooks:** a hook stopped after its own timeout now blocks even when the turn
+    was aborted at the same time. The harness already treated every cancelled hook frame on such an event as a
+    possible block, so its reading is unchanged.
   - **Cassettes:** see the Upgrade notes.
 - **`sync` reads the Cowork system prompt where Desktop 4.29.0 moved it.** The prompt is now a parameter of the
   function that builds the session options, with its default loaded from a separate chunk; `sync` follows that load
