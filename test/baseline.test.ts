@@ -4120,6 +4120,43 @@ describe("checkPathHookFacts — the delegate hook body and the 4.4212.0 launche
       /no longer lazily loads a chunk/,
     ],
     [
+      "the guard shadowed by the canUseTool callback's own parameter",
+      {
+        // The real 4.4212.0 shape of the rename: the 3rd parameter (the permission context, always truthy) named `ke`.
+        consuming: (c) =>
+          c
+            .replace("canUseTool=async(g,S,k)=>{", "canUseTool=async(g,S,ke)=>{")
+            .replace(/\bk\.(toolUseID|decisionReason)/g, "ke.$1")
+            .replace("await Se(g,S,k)", "await Se(g,S,ke)"),
+      },
+      /`ke` is a parameter of the canUseTool callback/,
+    ],
+    [
+      "the guard re-bound inside the canUseTool block (a hoisted var after the pre-pass)",
+      { consuming: (c) => c.replace("ss(g,S,d,i,!ke);", "ss(g,S,d,i,!ke);var ke=!0;") },
+      /`ke` appears in the canUseTool block 3 time\(s\)/,
+    ],
+    [
+      "the guard taken as an arrow parameter inside the block",
+      { consuming: (c) => c.replace("ss(g,S,d,i,!ke);", "ss(g,S,d,i,!ke);[1].map((x,ke)=>x);") },
+      /`ke` appears in the canUseTool block 3 time\(s\)/,
+    ],
+    [
+      "a hoisted var of the guard after the install",
+      { consuming: (c) => c + "var ke;" },
+      /`ke` has a hoisted `var` or `function` declaration/,
+    ],
+    [
+      "the launcher result re-pointed before the guard is bound",
+      { consuming: (c) => c.replace("let ke=Oe.viaLauncher;", "Oe={viaLauncher:!0};let ke=Oe.viaLauncher;") },
+      /launcher result `Oe` is re-bound or its `viaLauncher` written/,
+    ],
+    [
+      "the launcher result's viaLauncher written before the guard is bound",
+      { consuming: (c) => c.replace("let ke=Oe.viaLauncher;", "Oe.viaLauncher=!0;let ke=Oe.viaLauncher;") },
+      /launcher result `Oe` is re-bound or its `viaLauncher` written/,
+    ],
+    [
       "the containment call moved out of the delegate",
       { consuming: (c) => c.replace("if(!t.Po(cand,lt))return ct?", "if(!1)return ct?") + "function zc(){t.Po(cand,lt)}" },
       /containment helper anchor missing/,
@@ -4141,6 +4178,20 @@ describe("checkPathHookFacts — the delegate hook body and the 4.4212.0 launche
     expect(flags).toMatch(/a chain link is not a plain call/);
     expect(flags).toMatch(/takes 5 arguments but no chain link is conditional/);
   });
+  it.each([
+    ["a blanket allow behind the inner call", '??{behavior:"allow"}'],
+    ["a further link behind the inner call", "??Km(g,S)"],
+  ])("%s, inside the conditional → not a plain call, and the unpaired pre-pass argument flags too", (_l, tail) => {
+    const f = launcherHookFiles({
+      consuming: (c) =>
+        c.replace("(ke?void 0:await Xt(g,S,k.decisionReason,j,f))", `(ke?void 0:await Xt(g,S,k.decisionReason,j,f)${tail})`),
+    });
+    expect([...f.values()].join("")).toContain(tail);
+    const flags = checkPathHookFacts(f);
+    expect(flags, flags.join("\n")).toHaveLength(2);
+    expect(flags.join("\n")).toMatch(/a chain link is not a plain call/);
+    expect(flags.join("\n")).toMatch(/takes 5 arguments but no chain link is conditional/);
+  });
   it("a 5th pre-pass argument with no conditional link → 1 flag", () => {
     const f = launcherHookFiles({
       consuming: (c) => c.replace("(ke?void 0:await Xt(g,S,k.decisionReason,j,f))", "await Xt(g,S,k.decisionReason,j,f)"),
@@ -4153,6 +4204,9 @@ describe("checkPathHookFacts — the delegate hook body and the 4.4212.0 launche
     expect(unwrapConditionalLink("(ke?await Ch(e,n):void 0)").guard).toBeNull();
     expect(unwrapConditionalLink('(ke?void 0:{behavior:"allow"})').guard).toBeNull();
     expect(unwrapConditionalLink("await Ch(e,n)")).toEqual({ guard: null, call: "await Ch(e,n)" });
+    expect(unwrapConditionalLink('(ke?void 0:await Ch(e,n)??{behavior:"allow"})').guard).toBeNull();
+    expect(unwrapConditionalLink("(ke?void 0:await Ch(e,n)??Km(e,n))").guard).toBeNull();
+    expect(unwrapConditionalLink("(ke?void 0:Ch(e,(n)))")).toEqual({ guard: "ke", call: "Ch(e,(n))" });
   });
 });
 

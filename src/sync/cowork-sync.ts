@@ -1559,13 +1559,17 @@ function matchParen(text: string, open: number): number {
 
 /** A canUseTool chain link, with Desktop 4.4212.0's launcher-conditional form unwrapped: `(<g>?void 0:await <F>(…))`
  *  is `{ guard: g, call: "await <F>(…)" }`; any other operand is `{ guard: null, call: op }`. Only that exact shape is
- *  unwrapped — arms swapped, another alternative, or a non-call inner keeps the raw operand, which the plain-call rule
- *  then flags. */
+ *  unwrapped — arms swapped, another alternative, a non-call inner, or an inner call followed by anything (`??x`) keeps
+ *  the raw operand, which the plain-call rule then flags. */
 export function unwrapConditionalLink(op: string): { guard: string | null; call: string } {
   const m = op.match(/^\(([\w$]+)\?void 0:/);
   if (!m || matchParen(op, 0) !== op.length - 1) return { guard: null, call: op };
   const call = op.slice(m[0].length, -1);
-  return /^(?:await\s+)?[\w$]+\(/.test(call) ? { guard: m[1]!, call } : { guard: null, call: op };
+  // The inner text must be ONE call: its argument list closes at the end. `await F(…)??{behavior:"allow"}` or
+  // `F(…)??G(…)` would otherwise read as the link `F` while hiding a fall-through or a further link.
+  const head = call.match(/^(?:await\s+)?[\w$]+\(/);
+  if (!head || matchParen(call, head[0].length - 1) !== call.length - 1) return { guard: null, call: op };
+  return { guard: m[1]!, call };
 }
 
 /** The chunk exporting `spawnThroughHostCliLauncher` and the local it names, or null. */
@@ -1700,10 +1704,13 @@ function nullishChainInBlock(block: string): string | null {
  *  ONE operand ("the chain has 1 links"). Both shapes are handled; `block` is non-null only for the block
  *  form, and the caller MUST assert the wrapper facts on it — teaching the extractor the shape without
  *  that would silence three flags and leave two new decision points invisible. */
+/** The canUseTool install, `let K=e.canUseTool;K&&(e.canUseTool=async(<params>)=>`. Groups: 1 the saved original,
+ *  2 the options object, 3 the callback's parameter list. `\1` binds the guard to the SAVED ORIGINAL:
+ *  `let K=e.canUseTool;zz&&(…)` must not read as guarded. The single spelling of this shape in the file. */
+const CAN_USE_TOOL_INSTALL = /(?:const|let|var) ([\w$]+)=([\w$]+)\.canUseTool;\1&&\(\2\.canUseTool=async\(([^)]*)\)=>/;
+
 export function extractCanUseToolChain(text: string): { orig: string; operands: string[]; block: string | null } | null {
-  // `\1` binds the guard to the SAVED ORIGINAL: `let K=e.canUseTool;K&&(e.canUseTool=async(…)=>`.
-  // Without the backreference, `let K=e.canUseTool;zz&&(…)` reads as guarded while being unconditional.
-  const m = text.match(/(?:const|let|var) ([\w$]+)=([\w$]+)\.canUseTool;\1&&\(\2\.canUseTool=async\([^)]*\)=>/);
+  const m = text.match(CAN_USE_TOOL_INSTALL);
   if (!m || m.index === undefined) return null;
   const start = m.index + m[0].length;
 
@@ -2514,10 +2521,10 @@ function artifactCaptureDefects(
   // The SDK's camelCase field is the hook payload's tool_use_id; the store key is checked below.
   if (field !== "toolUseID") add("key", `the lookup reads \`${field}\`, not toolUseID — it can never find what the hook stored`);
 
-  const install = chunk.match(/(?:const|let|var) ([\w$]+)=([\w$]+)\.canUseTool;\1&&\(\2\.canUseTool=async\([^)]*\)=>\{/);
-  if (!install || install.index === undefined) return out;
+  const install = chunk.match(CAN_USE_TOOL_INSTALL);
+  if (!install || install.index === undefined || chunk[install.index + install[0].length] !== "{") return out;
   const installAt = install.index;
-  const installEnd = matchBrace(chunk, installAt + install[0].length - 1);
+  const installEnd = matchBrace(chunk, installAt + install[0].length);
   // A declaration (`let M=new Map` or `,M=new Map` in a declaration list), never a bare `M=new Map` reassignment —
   // otherwise a reassignment would become the scope start and hide itself. The NEAREST declaration is taken: a
   // same-named Map declared later inside the hook makes the real writer fall outside, and that is flagged (under
@@ -2779,6 +2786,8 @@ function bindsPathKeys(chunk: string, local: string): GateBinding {
  *  (`hooks:[async e=>{try{return await <D>(e)}…` → the single `async function <D>(…){…}`) or the inline arrow's.
  *  Literal-aware, so a brace inside a message does not end it. null when neither form resolves. */
 function pathHookBody(chunk: string, installAt: number): string | null {
+  // 600 chars is only the HEAD the two forms are recognised in (the delegate call sits ~32 chars in on 4.4212.0); the
+  // body itself is read whole, below.
   const head = chunk.slice(installAt, installAt + 600);
   const pre = /^\[\.\.\.[\w$]+(?:\.[\w$]+)?,"MultiEdit"\]\.join\("\|"\),hooks:\[async \(?([\w$]+)\)?=>\{/;
   const del = head.match(new RegExp(pre.source + String.raw`try\{return await ([\w$]+)\(\1\)`));
@@ -2795,10 +2804,11 @@ function pathHookBody(chunk: string, installAt: number): string | null {
 
 /** Why the launcher guard `<g>` of a conditional canUseTool link is not `<o>.viaLauncher` read from the launcher call
  *  in the install's own function, or null. See checkPathHookFacts (6). */
-function launcherGuardDefect(chunk: string, files: Map<string, string>, g: string): string | null {
+function launcherGuardDefect(chunk: string, files: Map<string, string>, g: string, conditionalLinks: number): string | null {
   const L = hostCliLauncherExport(files);
   if (!L) return `a chain link is skipped under \`${g}\`, but no single chunk exports spawnThroughHostCliLauncher`;
-  const installAt = chunk.search(/(?:const|let|var) ([\w$]+)=([\w$]+)\.canUseTool;\1&&\(\2\.canUseTool=async\(/);
+  const install = chunk.match(CAN_USE_TOOL_INSTALL);
+  const installAt = install?.index ?? -1;
   const calls = [...chunk.slice(0, Math.max(0, installAt)).matchAll(/(?<![\w$.])([\w$]+)=await ([\w$]+\.[\w$]+)\(/g)].filter((m) => {
     const r = resolveNamespaceRef(m[2]!, chunk, files);
     return !!r && r.chunk === L.chunk && r.local === L.local;
@@ -2816,16 +2826,54 @@ function launcherGuardDefect(chunk: string, files: Map<string, string>, g: strin
     }
     if (chunk[i] === "{") depth++;
     else if (chunk[i] === "}" && --depth < 0)
-      return `the host CLI launcher call (\`${call[1]}\`) is not in the canUseTool install's function`;
+      return (
+        `the host CLI launcher call (\`${call[1]}\`) is not in the canUseTool install's function ` +
+        "(or a string or regex literal between them could not be read, which desyncs this walk)"
+      );
     i++;
   }
+  const assignRe = (name: string) => new RegExp(`(?<![\\w$.])${reEsc(name)}(?:=(?!=)|\\?\\?=|\\|\\|=|&&=)`, "g");
   const window = chunk.slice(call.index!, installAt);
-  const binds = [...window.matchAll(new RegExp(`(?<![\\w$.])${reEsc(g)}(?:=(?!=)|\\?\\?=|\\|\\|=|&&=)`, "g"))];
+  // The launcher result itself: bound once (the call), and its `viaLauncher` never written in between.
+  const oBinds = [...window.matchAll(assignRe(call[1]!))].length;
+  if (oBinds !== 1 || new RegExp(`(?<![\\w$.])${reEsc(call[1]!)}\\.viaLauncher(?:=(?!=)|\\?\\?=|\\|\\|=|&&=)`).test(window))
+    return `the host CLI launcher result \`${call[1]}\` is re-bound or its \`viaLauncher\` written between the call and the canUseTool install`;
+  const binds = [...window.matchAll(assignRe(g))];
   if (binds.length !== 1)
     return `\`${g}\` is bound ${binds.length} times between the host CLI launcher call and the canUseTool install (expected exactly once)`;
   const rhs = window.slice(binds[0]!.index! + binds[0]![0].length);
   if (!new RegExp(`^${reEsc(call[1]!)}\\.viaLauncher(?![\\w$])`).test(rhs))
     return `\`${g}\` is not bound to the host CLI launcher result's \`viaLauncher\` (\`${call[1]}.viaLauncher\`)`;
+  // Shadowing. The callback's own parameter, a binding inside the block, or a hoisted `var`/`function` of the same name
+  // anywhere in the function would make the links read something other than the flag bound above.
+  const idRe = (name: string) => new RegExp(`(?<![\\w$.])${reEsc(name)}(?![\\w$])`);
+  if (idRe(g).test(install![3]!)) return `\`${g}\` is a parameter of the canUseTool callback, which shadows the launcher flag`;
+  const open = installAt + install![0].length;
+  if (chunk[open] === "{") {
+    const close = matchBrace(chunk, open);
+    const block = close < 0 ? "" : chunk.slice(open + 1, close);
+    // Inside the block the flag may appear only as each conditional link's `(<g>?void 0:` and as ONE call argument (the
+    // pre-pass's `!<g>`; whether that argument is right is the pairing rule's to say, not this one's). An arrow
+    // parameter `(…,<g>)=>` is a binding, not an argument.
+    const uses = [...block.matchAll(new RegExp(idRe(g).source, "g"))].length;
+    const arg = [...block.matchAll(new RegExp(`[,(]!?${reEsc(g)}(?=,|\\)(?!=>))`, "g"))].length;
+    const cond = [...block.matchAll(new RegExp(`\\(${reEsc(g)}\\?void 0:`, "g"))].length;
+    if (close < 0 || arg > 1 || cond !== conditionalLinks || uses !== arg + cond)
+      return `\`${g}\` appears in the canUseTool block ${uses} time(s), not only as one pre-pass argument and the ${conditionalLinks} skipped link(s) — it may be re-bound there`;
+  }
+  // The rest of the function, for a hoisted declaration (`var <g>` or `function <g>` after the install still rebinds it).
+  let end = installAt;
+  for (let d = depth; end < chunk.length; end++) {
+    const lit = skipLiteralAt(chunk, end);
+    if (lit >= 0) {
+      end = lit - 1;
+      continue;
+    }
+    if (chunk[end] === "{") d++;
+    else if (chunk[end] === "}" && --d < 0) break;
+  }
+  if (new RegExp(`(?:\\bvar\\s+|\\bfunction\\s*)${reEsc(g)}(?![\\w$])`).test(chunk.slice(call.index!, end)))
+    return `\`${g}\` has a hoisted \`var\` or \`function\` declaration in the canUseTool install's function`;
   return null;
 }
 
@@ -3136,9 +3184,7 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
     if (block !== null) {
       // Desktop 3.6556.1: the block may open with a per-call capture lookup ahead of the pre-pass (see
       // artifactCaptureDefects). The pre-pass binding is then read from what follows it.
-      const p3 = consuming
-        .match(/(?:const|let|var) ([\w$]+)=([\w$]+)\.canUseTool;\1&&\(\2\.canUseTool=async\(([^)]*)\)=>\{/)?.[3]
-        .split(",")[2];
+      const p3 = consuming.match(CAN_USE_TOOL_INSTALL)?.[3].split(",")[2];
       const prelude = p3
         ? block.match(
             new RegExp(`^(?:const|let|var) ([\\w$]+)=([\\w$]+)\\.get\\(${reEsc(p3)}\\.([\\w$]+)\\);\\2\\.delete\\(${reEsc(p3)}\\.\\3\\);`),
@@ -3276,7 +3322,7 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
         `chain links are skipped under ${guards.length} different flags (${guards.join(", ")}) — read each`,
       );
     if (guard !== null) {
-      const why = launcherGuardDefect(consuming, files, guard);
+      const why = launcherGuardDefect(consuming, files, guard, links.filter((l) => l.guard !== null).length);
       if (why) miss("canUseTool launcher guard", why);
     }
   }
