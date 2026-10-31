@@ -2175,8 +2175,9 @@ export function checkWebFetchFacts(bundle: string): string[] {
  *  the diff note cannot disagree. `list_typed_artifacts` is new in Desktop 4.4212.0. */
 export const KNOWN_COWORK_FRAME_TOOLS: readonly string[] = SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS.cowork ?? [];
 
-/** The vendor hosts Desktop 4.4212.0's web_fetch refuse function lists. A different list flags, so a change is read
- *  before it reaches a baseline. */
+/** The vendor hosts Desktop 4.4212.0's web_fetch refuse function lists. Sync reads only whether the build has the
+ *  vendor step; the value it records is this constant. A build whose list differs flags and records no field, so the
+ *  baseline follows a changed list only after this constant is edited, by someone who has read the change. */
 export const KNOWN_WEBFETCH_VENDOR_DENY: readonly string[] = [
   "a-api.anthropic.com",
   "a-cdn.anthropic.com",
@@ -2214,6 +2215,10 @@ export function checkWebFetchVendorFacts(files: Map<string, string>): { flags: s
   const [, fn, url, list] = fns[0].m;
   const body = fns[0].body!;
   const step = (re: RegExp) => body.search(re);
+  // The vendor-step locator `if(<f>(<url>.hostname))return` takes a BARE callee, and so does not match the
+  // private-address check only because that one is a namespaced call (`t.GQ(<url>.hostname)` on 4.4212.0). If Desktop
+  // made it a bare local, the locator would land on it, and the ordering rule would flag (fail closed) but name the
+  // vendor check as the step out of order.
   const order = [
     step(new RegExp(`if\\(${reEsc(url)}\\.protocol!=="http:"&&${reEsc(url)}\\.protocol!=="https:"\\)return`)),
     step(/is a local or private address/),

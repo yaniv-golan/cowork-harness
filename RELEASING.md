@@ -530,9 +530,11 @@ Finish it by hand instead:
    moves an alias only when this release is the highest on that line.
 
 Steps 2 and 3 create a release and push tags, so they need the same explicit decision as any other release step.
-`publish-image.yml` has its own 45-minute cap. Before re-running a timed-out image run, check whether it already
-pushed `:2-r<N>` for either image: if it did, the re-run stops at "Refuse to repoint an existing immutable revision
-tag" by design, and the fix is a `revision` bump in `docker/agent-image.json`, not a re-run.
+`publish-image.yml` has its own 45-minute cap. A timed-out run started by the release tag pushes only the
+`:2-<version>` co-tag and never meets the immutable-tag guard, so it can simply be re-run. A timed-out **manual**
+(`workflow_dispatch`) run is different: check whether it already pushed `:2-r<N>` for either image. If it did, a re-run
+stops at "Refuse to repoint an existing immutable revision tag" by design, and the fix is a `revision` bump in
+`docker/agent-image.json`, not a re-run.
 
 ## Notes
 

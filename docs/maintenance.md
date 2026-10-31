@@ -16,7 +16,9 @@ STABLE (in code, rarely changes)        VOLATILE (in baselines/, sync-regenerate
                                           - spawn.env
                                           - spawn.effortByModel + spawn.effortRegexDefault
                                           - network.webFetchVendorDeny (Desktop 4.4212.0+;
-                                            absent when the build has none)
+                                            presence is read from the asar; the value is
+                                            the pinned KNOWN_WEBFETCH_VENDOR_DENY, and a
+                                            build with any other list stops the sync)
 
 HAND-AUTHORED (in baselines/, drift-guarded — sync does NOT extract these; they carry
 forward from the previous baseline untouched)
