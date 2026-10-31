@@ -1871,6 +1871,7 @@ function extractFromAsar(
     // without it (never the previous release's) and says so; check:versions then warns.
     const { cloud, notes: cloudNotes } = safeCloudBlock(rawFiles);
     const promptFingerprint = extractPromptFingerprint(bundle, bundleFiles);
+    for (const f of checkPromptReaderFacts(bundleFiles)) flag(unknown, f);
     const fingerprintsFile = readPromptFingerprintsFile();
     const promptDrift = checkPromptDrift(
       promptFingerprint,
@@ -3473,6 +3474,45 @@ function enclosingFunctionParams(text: string, at: number): string[] | null {
   return null;
 }
 
+/** The lazy loader of the prompt chunk (Desktop 4.29.0+): `require("./<X>")…).DESKTOP_3P_BASE_PROMPT`; group 1 the path. */
+const PROMPT_LOADER = /require\("\.\/([^"]+)"\)(?:(?!require\()[^;]){0,80}?\)\.DESKTOP_3P_BASE_PROMPT(?![\w$])/g;
+
+/** Desktop 4.29.0+ also requires the prompt chunk EAGERLY, in the hook chunk, and reads its template for a third-party
+ *  session (`type==="3p"?ff(E.t,n):e` on 4.4212.0, `uf(w.t` on 4.29.0). The fingerprint covers the template the lazy
+ *  loader reaches; this pins that every eager read of that chunk's exports reaches the same template, and that one
+ *  does. Only reads of the chunk's own export names count: a minified binding name is reused as a local elsewhere in
+ *  the same chunk (`E.map`, `E.behavior`). Presence-conditional on the loader form; a missing or doubled loader is the
+ *  fingerprint's to report. */
+export function checkPromptReaderFacts(files: Map<string, string>): string[] {
+  const loaders = [...files.values()].flatMap((c) => [...c.matchAll(PROMPT_LOADER)]);
+  if (loaders.length !== 1) return [];
+  const name = loaders[0]![1]!.slice(loaders[0]![1]!.lastIndexOf("/") + 1);
+  const target = files.get(name);
+  const local = target === undefined ? null : exportLocalOf(target, "DESKTOP_3P_BASE_PROMPT");
+  if (!target || !local) return [];
+  const exported = new Map(
+    [...target.matchAll(/defineProperty\(exports,"([\w$]+)",\{[^}]*?return ([\w$]+)\}/g)].map((m) => [m[1]!, m[2]!]),
+  );
+  const flags = new Set<string>();
+  let toTemplate = 0;
+  for (const c of files.values())
+    for (const b of c.matchAll(new RegExp(`(?<![\\w$.])([\\w$]+)=require\\("\\./${reEsc(name)}"\\)`, "g")))
+      for (const r of c.matchAll(new RegExp(`(?<![\\w$.])${reEsc(b[1]!)}\\.([\\w$]+)(?![\\w$])`, "g"))) {
+        const to = exported.get(r[1]!);
+        if (to === undefined) continue;
+        if (to === local) toTemplate++;
+        else
+          flags.add(
+            `prompt: eager reader anchor missing — \`${b[1]}.${r[1]}\` reads the prompt chunk's \`${to}\`, not the fingerprinted template \`${local}\` — read what a third-party session is now sent`,
+          );
+      }
+  if (toTemplate === 0)
+    flags.add(
+      "prompt: eager reader anchor missing — no eager require of the prompt chunk reads the fingerprinted template — the third-party prompt path moved; read where it comes from now",
+    );
+  return [...flags];
+}
+
 /** Where the Cowork prompt template body starts, and in which text. Two shapes:
  *  - through Desktop 3.6556.2 the consumption site names a module-level constant (`prompt:oon` … `var oon=\``);
  *  - from Desktop 4.29.0 it names a PARAMETER of its builder (`function _gn(e,t,n={},…)`), and the default comes from
@@ -3487,7 +3527,7 @@ function locatePromptTemplate(bundle: string, files?: Map<string, string>): { id
   const id = m[1]!;
   const params = enclosingFunctionParams(chunk, m.index!);
   if (params?.includes(id)) {
-    const loaders = [...chunk.matchAll(/require\("\.\/([^"]+)"\)(?:(?!require\()[^;]){0,80}?\)\.DESKTOP_3P_BASE_PROMPT(?![\w$])/g)];
+    const loaders = [...chunk.matchAll(PROMPT_LOADER)];
     if (loaders.length !== 1 || !files) return null;
     const target = files.get(loaders[0]![1]!.slice(loaders[0]![1]!.lastIndexOf("/") + 1));
     const local = target === undefined ? null : exportLocalOf(target, "DESKTOP_3P_BASE_PROMPT");

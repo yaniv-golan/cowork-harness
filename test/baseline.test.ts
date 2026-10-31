@@ -71,6 +71,7 @@ import {
   checkScheduledSessionFacts,
   checkVmAgentStagingFacts,
   unwrapConditionalLink,
+  checkPromptReaderFacts,
 } from "../src/sync/cowork-sync.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../src/prompt.js";
 import { readFileSync } from "node:fs";
@@ -3205,6 +3206,30 @@ describe("extractPromptFingerprint — the parameter form and the module-constan
     const r = fp(filesOf(DECOY + LOADER + BUILDER.replace("n={}", "n=g(1)")));
     expect(r?.decodedSha256).toBe(decoded(PROMPT));
   });
+  // 4.29.0+: the hook chunk also requires the prompt chunk eagerly and reads its template (`E.t`) for a third-party
+  // session. That second `require` is not a second loader: the fingerprint is unchanged and the reader pin is clean.
+  const P_WITH_T = P_CHUNK + 'Object.defineProperty(exports,"t",{enumerable:!0,get:function(){return t}});';
+  const HOOK = (read: string) =>
+    `var E=require("./index.chunk-P.js");function df(e,n){return G.type==="3p"?ff(${read},n):e}function zz(E){return E.map(x=>x)}`;
+  const withReader = (read: string) =>
+    filesOf(DECOY + LOADER + BUILDER, { "index.chunk-P.js": P_WITH_T, "index.chunk-hook.js": HOOK(read) });
+  it("parameter form: an eager second require of the prompt chunk reading the template → fingerprint read, 0 reader flags", () => {
+    const f = withReader("E.t");
+    expect(fp(f)?.decodedSha256).toBe(decoded(PROMPT));
+    expect(checkPromptReaderFacts(f)).toEqual([]);
+  });
+  it("the eager reader reading another export of the prompt chunk → flags", () => {
+    const flags = checkPromptReaderFacts(withReader("E.n"));
+    expect(flags.join("\n")).toMatch(/`E\.n` reads the prompt chunk's `n`, not the fingerprinted template `t`/);
+    expect(flags.join("\n")).toMatch(/no eager require of the prompt chunk reads the fingerprinted template/);
+  });
+  it("no eager reader of the prompt chunk → 1 flag; the module-constant form (no loader) → none", () => {
+    expect(checkPromptReaderFacts(filesOf(DECOY + LOADER + BUILDER))).toEqual([
+      expect.stringMatching(/no eager require of the prompt chunk reads the fingerprinted template/),
+    ]);
+    const main = "var oon=`" + PROMPT + "`;function bld(e){return{cowork_system_prompt:{value:{prompt:oon}}}}";
+    expect(checkPromptReaderFacts(filesOf(main, {}))).toEqual([]);
+  });
   it("two consumption sites → null", () => {
     const main =
       "var oon=`" + PROMPT + "`;var a={cowork_system_prompt:{value:{prompt:oon}}},b={cowork_system_prompt:{value:{prompt:oon}}};";
@@ -3222,6 +3247,7 @@ describe.skipIf(!ASAR_BACKUPS)("extractPromptFingerprint over saved Desktop asar
     expect(r?.decodedCodePoints).toBe(37811);
     expect(r?.sectionTags).toBe(43);
     expect(r?.sha256.startsWith("e62bd9fa")).toBe(true);
+    expect(checkPromptReaderFacts(files)).toEqual([]);
   });
 });
 
