@@ -323,6 +323,26 @@ export const SCHEDULED_SESSION_WITHHELD_TOOLS: Readonly<Record<string, readonly 
   cowork: ["send_user_message"],
 };
 
+/** Tools Desktop withholds from a scheduled-task session that an ordinary session MAY get, on a condition no baseline
+ *  records: the typed-artifact tools of Desktop's own `cowork` server reach an untyped or chat session with no
+ *  scheduled task only on the host-loop lane, and only when the account has typed-artifact types. So a scheduled
+ *  read's missing tool is never attributed to the session kind; baseline-diff names it as not attributable instead.
+ *  `checkScheduledSessionFacts` (src/sync/cowork-sync.ts) pins the predicate and the list (KNOWN_COWORK_FRAME_TOOLS). */
+export const SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS: Readonly<Record<string, readonly string[]>> = {
+  cowork: [
+    "create_from_type",
+    "db_get",
+    "db_list",
+    "db_write",
+    "describe_type",
+    "list_files",
+    "list_typed_artifacts",
+    "list_types",
+    "publish_files",
+    "read_file",
+  ],
+};
+
 /** The gate a withheld tool ALSO needs before an ordinary session gets it, keyed `<server>.<tool>`, as its
  *  `provenance.gates` row. The static check proves only the code path (`!sessionType && <gate config>`); whether the
  *  gate is on is that row, so a scheduled read's missing tool reads as the session kind only while the row is on. */

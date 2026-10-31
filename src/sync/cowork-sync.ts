@@ -14,6 +14,7 @@ import {
   type CloudBlock,
   type DesktopInitSurface,
   type ObservedSpawnEnvDeclaration,
+  SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS,
 } from "../types.js";
 import { safeCloudBlock } from "./remote-devices.js";
 import { readDesktopInitSurface, desktopInstalledAtMs } from "./desktop-init-surface.js";
@@ -2087,6 +2088,11 @@ export function checkWebFetchFacts(bundle: string): string[] {
   return flags;
 }
 
+/** The typed-artifact tools Desktop's own `cowork` SDK server builds (checkScheduledSessionFacts (6)). A name outside
+ *  this list fails the sync until it is read. One list with the one baseline-diff reads (types.ts), so the guard and
+ *  the diff note cannot disagree. `list_typed_artifacts` is new in Desktop 4.4212.0. */
+export const KNOWN_COWORK_FRAME_TOOLS: readonly string[] = SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS.cowork ?? [];
+
 /** The vendor hosts Desktop 4.4212.0's web_fetch refuse function lists. A different list flags, so a change is read
  *  before it reaches a baseline. */
 export const KNOWN_WEBFETCH_VENDOR_DENY: readonly string[] = [
@@ -3776,20 +3782,89 @@ export function checkScheduledSessionFacts(files: Map<string, string>): string[]
     )
       miss("scheduled frame artifacts", `the gate ${fa.m[2]} is no longer scheduledRunFrameArtifacts (1978029737, default on)`);
 
-  // (5) Desktop 3.6556.1: the typed-artifact tools and the prompt's frame-tools section go only to an untyped session
-  // with no scheduled task. They are served by a remote MCP server the init surface never reads, so this predicate is
-  // the only place the difference can be seen. Required once the bundle builds a frame-tools section OR names the
-  // claude-artifacts server: two independent dating signals (0 in every bundle before 3.6556.1), so renaming the
-  // prompt key alone cannot switch the check off.
-  if ([...files.values()].some((m) => m.includes("frameToolsSection:") || m.includes('"claude-artifacts"'))) {
-    const frame = all(
-      /([\w$]+)=[\w$]+&&([\w$]+)\.sessionType===void 0&&\(\2\.scheduledTaskId\?\?[\w$]+\.getActiveSession\([\w$]+\)\?\.scheduledTaskId\)===void 0,[\w$]+=\1\?/g,
+  // (5) Desktop 3.6556.1: the typed-artifact tools and the prompt's frame-tools section go only to a session with no
+  // scheduled task that is untyped — or, from Desktop 4.29.0, typed "chat". The tools are built by Desktop's own `cowork`
+  // SDK server (pinned in (6)), so an init frame of an ordinary session would show them, but a scheduled read never
+  // can: this predicate is what tells a scheduled observation apart from what an ordinary session gets. Required once
+  // the bundle builds a frame-tools section OR names the claude-artifacts server: two independent dating signals (0 in
+  // every bundle before 3.6556.1), so renaming the prompt key alone cannot switch the check off.
+  //   3.6556.x: `<P>=<f>&&<s>.sessionType===void 0&&(<s>.scheduledTaskId??…)===void 0,<x>=<P>?`
+  //   4.29.0+:  `let <C>=<s>.sessionType===<"chat">,<P>=<f>&&(<s>.sessionType===void 0||<C>)&&(…)===void 0,<x>=<P>?`
+  // `<C>` is the binding declared in the SAME let-list, right before `<P>` — never a chunk-wide lookup of the name: the
+  // minifier reuses these names (4.29.0's chat flag is `I` and its artifacts gate `F`; 4.4212.0 swaps them).
+  const framesDated = [...files.values()].some((m) => m.includes("frameToolsSection:") || m.includes('"claude-artifacts"'));
+  if (framesDated) {
+    const TAIL = String.raw`\(\2\.scheduledTaskId\?\?[\w$]+\.getActiveSession\([\w$]+\)\?\.scheduledTaskId\)===void 0,[\w$]+=\1\?`;
+    const frameOld = all(new RegExp(String.raw`([\w$]+)=[\w$]+&&([\w$]+)\.sessionType===void 0&&` + TAIL, "g"));
+    const frameChat = all(
+      new RegExp(
+        String.raw`(?<![\w$.])([\w$]+)=([\w$]+)\.sessionType===([\w$]+\.[\w$]+|"[^"]*"),([\w$]+)=[\w$]+&&\(\2\.sessionType===void 0\|\|\1\)&&\(\2\.scheduledTaskId\?\?[\w$]+\.getActiveSession\([\w$]+\)\?\.scheduledTaskId\)===void 0,[\w$]+=\4\?`,
+        "g",
+      ),
     );
-    if (frame.length !== 1)
+    if (frameOld.length + frameChat.length !== 1)
       miss(
         "scheduled frame tools",
-        `the typed-artifact tools are gated by ${frame.length} pinned \`sessionType===void 0 && scheduledTaskId===void 0\` predicates (expected exactly one) — a scheduled observation can no longer tell what an ordinary session gets`,
+        `the typed-artifact tools are gated by ${frameOld.length + frameChat.length} pinned \`sessionType===void 0 && scheduledTaskId===void 0\` predicates (expected exactly one) — a scheduled observation can no longer tell what an ordinary session gets`,
       );
+    for (const c of frameChat) {
+      const kind = literal(c.m[3]!, c.module);
+      if (kind !== "chat")
+        miss(
+          "scheduled frame tools",
+          `the session type admitted beside an untyped session resolves to ${kind === null ? "nothing readable" : `"${kind}"`}, not "chat" — read which sessions now get the typed-artifact tools`,
+        );
+    }
+  }
+
+  // (6) The typed-artifact tool list on Desktop's own `cowork` server, and its read-only subset. The list is
+  // `<L>=[<ns>.<k>,…]`, the subset `<R>=<L>.filter(e=><T>[e].annotations?.readOnlyHint===!0).map(e=>\`mcp__${<srv>}__${e}\`)`.
+  // Every name must be one this sync has read (KNOWN_COWORK_FRAME_TOOLS), and `<srv>` must be "cowork". From Desktop
+  // 4.29.0 the host loop's allowed-tools list spreads `<R>` (`...<f>(<G>.<export of R>)`), pre-approving the read-only
+  // tools; any spread of this module into that list must be exactly `<R>`, never the whole list. Required under the same
+  // dating signals as (5): every bundle that has the predicate has had this list (3.6556.2, 4.29.0, 4.4212.0).
+  const roSites = all(
+    /(?<![\w$.])([\w$]+)=\[((?:[\w$]+\.[\w$]+,)*[\w$]+\.[\w$]+)\],([\w$]+)=\1\.filter\(\(e=>[\w$]+\[e\]\.annotations\?\.readOnlyHint===!0\)\)\.map\(\(e=>`mcp__\$\{([\w$]+\.[\w$]+)\}__\$\{e\}`\)\)/g,
+  );
+  if (roSites.length > 1 || (framesDated && roSites.length === 0))
+    miss(
+      "cowork frame-tool list",
+      `${roSites.length} typed-artifact tool list(s) with a read-only subset (expected exactly one) — the tools Desktop's cowork server builds can no longer be read`,
+    );
+  const ro = roSites.length === 1 ? roSites[0]! : null;
+  if (ro) {
+    const server = literal(ro.m[4]!, ro.module);
+    if (server !== "cowork")
+      miss(
+        "cowork frame-tool list",
+        `the typed-artifact tools are served under ${server === null ? "an unreadable server name" : `"${server}"`}, not "cowork"`,
+      );
+    const names = ro.m[2]!.split(",").map((r) => literal(r, ro.module));
+    const unread = names.filter((n) => n === null || !KNOWN_COWORK_FRAME_TOOLS.includes(n));
+    if (unread.length)
+      miss(
+        "cowork frame-tool list",
+        `${unread.length} typed-artifact tool name(s) this sync has not read (${unread.map((n) => (n === null ? "unresolved" : `\`${n}\``)).join(", ")}) — read the tool, then add it to KNOWN_COWORK_FRAME_TOOLS`,
+      );
+    const roExport = [...ro.module.matchAll(/exports,"([\w$]+)",\{enumerable:!0,get:function\(\)\{return ([\w$]+)\}\}/g)];
+    const roName = roExport.find((e) => e[2] === ro.m[3])?.[1];
+    const allowLists = all(/\["WebSearch","AskUserQuestion","ToolSearch",([^\]]*(?:\][^\]]*)*?)\];/g);
+    if (allowLists.length !== 1)
+      miss(
+        "cowork frame-tool pre-approval",
+        `the host loop's allowed-tools list appears ${allowLists.length} times (expected exactly one) — which typed-artifact tools it pre-approves can no longer be read`,
+      );
+    for (const a of allowLists) {
+      for (const sp of a.m[1]!.matchAll(/\.\.\.(?:[\w$]+\()?([\w$]+)\.([\w$]+)(?![\w$.])/g)) {
+        const r = resolveNamespaceRef(`${sp[1]}.${sp[2]}`, a.module, files);
+        if (!r || r.chunk !== ro.module) continue;
+        if (r.local !== ro.m[3] || sp[2] !== roName)
+          miss(
+            "cowork frame-tool pre-approval",
+            `the host loop's allowed-tools list spreads \`${sp[1]}.${sp[2]}\` from the cowork frame-tool module, which is not its read-only subset — read which typed-artifact tools are now pre-approved`,
+          );
+      }
+    }
   }
   return flags;
 }

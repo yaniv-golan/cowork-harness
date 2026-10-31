@@ -488,6 +488,16 @@ missing `Artifact` tool instead. Revisit trigger: a real session showing `Artifa
 this has already happened (host-loop sessions since 2026-08-21, and a scheduled run on Desktop 2.16120.0),
 and the decision has not been revisited yet.
 
+**Typed-artifact tools (not modeled).** Separately from the `Artifact` tool, Desktop's own `cowork` server builds a
+set of typed-artifact tools (`list_types`, `describe_type`, `create_from_type`, `list_files`, `read_file`,
+`publish_files`, `db_get`, `db_list`, `db_write`, and from Desktop 4.4212.0 `list_typed_artifacts`) with a matching
+section in the system prompt. Desktop offers them only to a session with no scheduled task that is untyped (an
+ordinary task session) or, from Desktop 4.29.0, typed as a chat session, on the host-loop lane, and only when the
+account has typed-artifact types. From 4.29.0 the host loop also pre-approves the read-only ones (`list_types`,
+`describe_type`, `list_files`, `read_file`, `db_get`, `db_list`, and `list_typed_artifacts` where it exists), so they
+skip the permission flow. The harness serves
+none of them; `sync` asserts the code that offers them, since a scheduled-task observation can never show them.
+
 The two mechanisms are mutually exclusive but not exhaustive — there is a third state. The tool
 additionally requires an **attended** turn, while the mount suppression does not check that, so a
 session with the flag on whose turn is unattended gets **neither** the artifact mounts nor the
@@ -1119,6 +1129,10 @@ absent from chat roots entirely.
 writes are gated by `allow_host_writes` consent instead of scratch containment; spooled-projects
 read-roots exist only as the task-lane spool dir; connected-folder scope differs. The task-lane
 read-only categories (uploads hardlink write-block, spool, plugin) ARE modeled.
+
+From Desktop 4.29.0, Desktop's own chat-typed sessions also get the typed-artifact tools of its `cowork` server (see
+the frame-artifacts section above). The harness models neither those sessions nor those tools, in the `chat` command
+or anywhere else.
 
 ---
 

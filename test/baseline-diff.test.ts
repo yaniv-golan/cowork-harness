@@ -293,6 +293,15 @@ describe("renderChangelog / formatDiffLines — Desktop init surface", () => {
       ),
     ).toContain("`send_user_message` not observed");
   });
+  it("a typed-artifact tool missing from a scheduled-only read is named as not attributable, never as the session kind", () => {
+    const withTyped = block({ cowork: srv(["present_files", "list_types", "db_get"]) });
+    const out = mdNext(withKinds(withTyped), withKinds(scheduledRead, kinds(1)));
+    expect(out).toContain("- Desktop server `cowork`: `db_get`, `list_types` not observed: every session read was a scheduled task");
+    expect(out).toContain("not attributable from this data");
+    expect(out).not.toContain("DISAPPEARED");
+    // with an ordinary session among those read, the same drop is a removal
+    expect(mdNext(withKinds(withTyped), withKinds(scheduledRead, kinds(1, 1)))).toContain("tool(s) DISAPPEARED: `db_get`, `list_types`");
+  });
   it("the same drop with no kinds shown is still DISAPPEARED", () => {
     expect(md(ordinary, scheduledRead)).toContain("- Desktop server `cowork`: tool(s) DISAPPEARED: `send_user_message`");
   });

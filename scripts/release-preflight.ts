@@ -44,6 +44,7 @@ import { compareBaselineVersions } from "../src/baseline.js";
 import {
   ObservedSpawnEnv,
   SCHEDULED_SESSION_WITHHELD_TOOL_GATES,
+  SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS,
   SCHEDULED_SESSION_WITHHELD_TOOLS,
   SearchAnchors,
   withheldToolGateOn,
@@ -220,6 +221,10 @@ export function checkInitSurfaceObserved(newest: { name: string; json: unknown }
     const parts = [
       `${[...gated, "AskUserQuestion and the onboarding role picker"].join(", ")}: sync's static check asserts the code path, not observed`,
       ...(gateOff.length ? [`${gateOff.join(", ")}: nothing says an ordinary session gets it`] : []),
+      ...Object.entries(SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS).map(
+        ([srv, ts]) =>
+          `${srv}'s ${ts.length} typed-artifact tools: offered to an ordinary session only when the account has typed-artifact types, which no baseline records — not observable from this read`,
+      ),
     ];
     // The two observations classify sessions independently (the session record vs the scheduled-run spawn key); if
     // they disagree on whether a scheduled task was read, one reader has drifted.
