@@ -207,6 +207,8 @@ export function renderInitSurfaceEntries(entries: BaselineDiffEntry[], next?: un
     const withheld = withheldByKind
       ? gone.filter((t) => (SCHEDULED_SESSION_WITHHELD_TOOLS[server] ?? []).includes(t) && withheldToolGateOn(next, server, t))
       : [];
+    // Only a tool that GOES is attributed. The reverse is not: an interactive read on an account with typed-artifact
+    // types shows the cowork tools as ten plain APPEARED rows, since their arrival is real evidence about that read.
     const conditional = withheldByKind
       ? gone.filter((t) => !withheld.includes(t) && (SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS[server] ?? []).includes(t))
       : [];

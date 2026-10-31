@@ -41,12 +41,18 @@ All notable changes to this project are documented here. The format is based on
 - **`sync` reads the Cowork system prompt where Desktop 4.29.0 moved it.** The prompt is now a parameter of the
   function that builds the session options, with its default loaded from a separate chunk; `sync` follows that load
   to the one definition it names instead of matching a constant by name, and refuses when there is not exactly one.
-  Its fingerprint is unchanged.
+  Its fingerprint is unchanged. `sync` also checks that the code reading the same template for a third-party session
+  reads that template and no other.
 - **`sync` checks each extra key of the scheduled-task env object.** Every key beside the scheduled-run marker must
   have a registry row that names it as scheduled-only, and must be built nowhere else in the bundle.
 - **`sync` checks the typed-artifact tool predicate and the host loop's pre-approved list** in builds that date the
-  chat-session change: the tools must come from the `cowork` server, be ones the harness knows, and reach the
-  pre-approved list only through its read-only export.
+  chat-session change: the tools must come from the `cowork` server, be exactly the ones the harness knows (a tool
+  added or dropped flags), and reach the pre-approved list only through its read-only export.
+- **`sync --diff` no longer reports the typed-artifact tools as DISAPPEARED when every session read was a scheduled
+  task.** Desktop never offers them to one, and offers them to an ordinary session only when the account has
+  typed-artifact types, so such a read can neither show nor rule them out; `sync --diff` lists them as not observed,
+  with that reason. A tool that appears is still reported as APPEARED. `npm run preflight`'s check of the newest
+  baseline's observed tool list names them the same way.
 - **`sync` follows the path hook's pre-pass when it is skipped for launched agents.** In Desktop 4.4212.0 the hook
   that checks file paths delegates to a larger function, and one link of its check is skipped when the agent was
   started through Desktop's CLI launcher. `sync` now reads the delegate's whole body, pairs that skip with the

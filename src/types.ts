@@ -327,6 +327,7 @@ export const SCHEDULED_SESSION_WITHHELD_TOOLS: Readonly<Record<string, readonly 
  *  records: the typed-artifact tools of Desktop's own `cowork` server reach an untyped or chat session with no
  *  scheduled task only on the host-loop lane, and only when the account has typed-artifact types. So a scheduled
  *  read's missing tool is never attributed to the session kind; baseline-diff names it as not attributable instead.
+ *  That note covers only a tool that goes: a tool that appears is reported as APPEARED.
  *  `checkScheduledSessionFacts` (src/sync/cowork-sync.ts) pins the predicate and the list (KNOWN_COWORK_FRAME_TOOLS). */
 export const SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS: Readonly<Record<string, readonly string[]>> = {
   cowork: [
