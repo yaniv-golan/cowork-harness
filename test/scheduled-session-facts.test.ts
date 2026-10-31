@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { checkScheduledSessionFacts } from "../src/sync/cowork-sync.js";
+import { SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS } from "../src/types.js";
 
 // The four sites, in the real bundle's shape with the minified names replaced. Each constant is exported the way
 // the real bundle exports it, so the check has to resolve it to its value rather than trust the name.
@@ -24,9 +25,13 @@ const MAIN = "index.chunk-sched.js";
 const OTHER = "index.chunk-code.js";
 // Desktop's own `cowork` SDK server module: the typed-artifact tool list, its read-only subset (exported as `m`), and
 // the host loop that pre-approves that subset (Desktop 4.29.0+). Names resolve through MAIN's exports.
+// The frame-tool list carries every known name: `list_types` and `db_write` under k1/k2 (the edits below name them),
+// the rest under x0…xN.
+const OTHER_FRAME_TOOLS = (SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS.cowork ?? []).filter((n) => n !== "list_types" && n !== "db_write");
 const FRAMEMOD_NAME = "index.chunk-frame.js";
 const FRAMEMOD =
-  'var NS=require("./index.chunk-sched.js");var W={},q=[NS.k1,NS.k2],mt=q.filter((e=>W[e].annotations?.readOnlyHint===!0)).map((e=>`mcp__${NS.u2}__${e}`)),ht=new Map(q.map((e=>[e,e])));' +
+  `var NS=require("./index.chunk-sched.js");var W={},q=[NS.k1,NS.k2${OTHER_FRAME_TOOLS.map((_, i) => `,NS.x${i}`).join("")}],` +
+  "mt=q.filter((e=>W[e].annotations?.readOnlyHint===!0)).map((e=>`mcp__${NS.u2}__${e}`)),ht=new Map(q.map((e=>[e,e])));" +
   'Object.defineProperty(exports,"m",{enumerable:!0,get:function(){return mt}});Object.defineProperty(exports,"n",{enumerable:!0,get:function(){return q}});';
 const HOST_NAME = "index.chunk-host.js";
 const HOST =
@@ -35,7 +40,10 @@ const FRAME_EXPORTS =
   'Object.defineProperty(exports,"k1",{enumerable:!0,get:function(){return K1}});var K1="list_types";' +
   'Object.defineProperty(exports,"k2",{enumerable:!0,get:function(){return K2}});var K2="db_write";' +
   'Object.defineProperty(exports,"u2",{enumerable:!0,get:function(){return U2}});var U2="cowork";' +
-  'Object.defineProperty(exports,"r3",{enumerable:!0,get:function(){return R3}});var R3="chat";';
+  'Object.defineProperty(exports,"r3",{enumerable:!0,get:function(){return R3}});var R3="chat";' +
+  OTHER_FRAME_TOOLS.map(
+    (n, i) => `Object.defineProperty(exports,"x${i}",{enumerable:!0,get:function(){return X${i}}});var X${i}="${n}";`,
+  ).join("");
 const files = (
   edit: (s: string) => string = (s) => s,
   editOther: (s: string) => string = (s) => s,
@@ -199,6 +207,25 @@ describe("checkScheduledSessionFacts — 4.29.0 chat arm and the cowork frame-to
   });
   it("a frame-tool name this sync has not read flags", () => {
     expect(run(CHAT, undefined, undefined, (s) => s.replace('K2="db_write"', 'K2="db_drop"'))).toMatch(/not read \(`db_drop`\)/);
+  });
+  it("a known tool dropped from the list flags (the list must be exactly the known set)", () => {
+    const f = run(CHAT, (s) => s.replace("NS.k1,NS.k2,", "NS.k1,"));
+    expect(f.split("\n")).toHaveLength(1);
+    expect(f).toMatch(/1 known typed-artifact tool\(s\) no longer in the list \(`db_write`\)/);
+  });
+  it("list_typed_artifacts missing: excused by an older build's version, flagged from 4.4212.0", () => {
+    const i = OTHER_FRAME_TOOLS.indexOf("list_typed_artifacts");
+    const drop = (s: string) => s.replace(`,NS.x${i}`, "");
+    const at = (v: string) =>
+      checkScheduledSessionFacts(
+        files((s) => s + CHAT, undefined, drop),
+        v,
+      );
+    expect(at("4.29.0")).toEqual([]);
+    expect(at("4.4212.0").join("\n")).toMatch(/no longer in the list \(`list_typed_artifacts`\)/);
+    // No version (a saved asar read by a test): excused only when the build has no trace of the name. The fixture still
+    // exports it, so it flags.
+    expect(run(CHAT, drop)).toMatch(/no longer in the list \(`list_typed_artifacts`\)/);
   });
   it("the tools served under another server name flags", () => {
     expect(run(CHAT, undefined, undefined, (s) => s.replace('U2="cowork"', 'U2="claude-artifacts"'))).toMatch(

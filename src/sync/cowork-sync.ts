@@ -960,7 +960,7 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
     cloud,
     webFetchVendorDeny,
     notes,
-  } = extractFromAsar(unknown, gates);
+  } = extractFromAsar(unknown, gates, appVersion);
 
   // 6. Desktop's own server tool surface, from real Desktop init frames of THIS release (see
   // desktop-init-surface.ts). An unobserved surface is a WARNING, never an unknown delta: every Desktop
@@ -1751,6 +1751,7 @@ export function extractCanUseToolChain(text: string): { orig: string; operands: 
 function extractFromAsar(
   unknown: string[],
   gates: Record<string, GateState> | null,
+  appVersion: string, // the same installed app's Info.plist version; "" when unreadable (already flagged)
 ): {
   fingerprint: string;
   asarGateIds: string[];
@@ -1833,7 +1834,7 @@ function extractFromAsar(
     for (const f of checkVmAgentStagingFacts(bundleFiles)) flag(unknown, f);
     const subagentFps = readSubagentFingerprints();
     for (const f of checkSubagentPromptFacts(bundleFiles, subagentFps)) flag(unknown, f);
-    for (const f of checkScheduledSessionFacts(bundleFiles)) flag(unknown, f);
+    for (const f of checkScheduledSessionFacts(bundleFiles, appVersion || undefined)) flag(unknown, f);
     const spawn = deriveSpawnEnv(bundle, gates, bundleFiles);
     const { deltas: spawnDeltas, notes } = partitionSpawnFlags(spawn.flags);
     for (const f of spawnDeltas) flag(unknown, f);
@@ -2174,6 +2175,10 @@ export function checkWebFetchFacts(bundle: string): string[] {
  *  this list fails the sync until it is read. One list with the one baseline-diff reads (types.ts), so the guard and
  *  the diff note cannot disagree. `list_typed_artifacts` is new in Desktop 4.4212.0. */
 export const KNOWN_COWORK_FRAME_TOOLS: readonly string[] = SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS.cowork ?? [];
+
+/** The KNOWN_COWORK_FRAME_TOOLS names Desktop added after the frame-tool list first appeared, each with the Desktop version
+ *  that added it. Every other known name must be in the list; one of these may be missing only from an older build. */
+export const COWORK_FRAME_TOOLS_SINCE: Readonly<Record<string, string>> = { list_typed_artifacts: "4.4212.0" };
 
 /** The vendor hosts Desktop 4.4212.0's web_fetch refuse function lists. Sync reads only whether the build has the
  *  vendor step; the value it records is this constant. A build whose list differs flags and records no field, so the
@@ -3980,7 +3985,7 @@ export function extractSubagentComposition(files: Map<string, string>): {
  *  chunk is the residual (S6g's comment names the same class).
  *  The scheduled-run spawn env key has its own guard (S6g). SCHEDULED_SESSION_WITHHELD_TOOLS (types.ts) lists the tools
  *  (2) and (3) withhold that a Desktop server of its own declares. */
-export function checkScheduledSessionFacts(files: Map<string, string>): string[] {
+export function checkScheduledSessionFacts(files: Map<string, string>, appVersion?: string): string[] {
   const flags: string[] = [];
   const miss = (what: string, why: string) => flags.push(`scheduled-session: ${what} anchor missing — ${why}`);
   const literal = (ref: string, module: string): string | null => {
@@ -4137,6 +4142,23 @@ export function checkScheduledSessionFacts(files: Map<string, string>): string[]
       miss(
         "cowork frame-tool list",
         `${unread.length} typed-artifact tool name(s) this sync has not read (${unread.map((n) => (n === null ? "unresolved" : `\`${n}\``)).join(", ")}) — read the tool, then add it to KNOWN_COWORK_FRAME_TOOLS`,
+      );
+    // The list must be EXACTLY the known set: a tool Desktop drops would otherwise stay in the withheld list, the fidelity
+    // notes and check 7, and baseline-diff would call its real disappearance "not attributable". A name dated in
+    // COWORK_FRAME_TOOLS_SINCE is excused on an older build: by the build's version when sync passes one, else (a saved
+    // asar read by a test) only when the build carries no trace of the name at all.
+    const read = new Set(names);
+    const addedLater = (k: string) => {
+      const since = COWORK_FRAME_TOOLS_SINCE[k];
+      if (since === undefined) return false;
+      if (appVersion !== undefined) return cmpVersionStrings(appVersion, since) < 0;
+      return ![...files.values()].some((c) => c.includes(k));
+    };
+    const dropped = KNOWN_COWORK_FRAME_TOOLS.filter((k) => !read.has(k) && !addedLater(k));
+    if (dropped.length)
+      miss(
+        "cowork frame-tool list",
+        `${dropped.length} known typed-artifact tool(s) no longer in the list (${dropped.map((n) => `\`${n}\``).join(", ")}) — read the change, then drop the name from SCHEDULED_SESSION_WITHHELD_CONDITIONAL_TOOLS`,
       );
     const roExport = [...ro.module.matchAll(/exports,"([\w$]+)",\{enumerable:!0,get:function\(\)\{return ([\w$]+)\}\}/g)];
     const roName = roExport.find((e) => e[2] === ro.m[3])?.[1];
