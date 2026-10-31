@@ -478,6 +478,30 @@ describe("readPreviousObservedSpawnEnv", () => {
   });
 });
 
+describe("observed spawn-env oracle — keys of the scheduled-run object in a scheduled-only read", () => {
+  const block = (sessionKinds: { interactive: number; scheduled: number; other: number; unknown: number }, sessions: number) =>
+    ObservedSpawnEnv.parse({
+      observed: true,
+      appVersion: "4.4212.0",
+      nativeAgentVersions: ["2.1.309"],
+      withheld: 0,
+      sessions,
+      sessionKinds,
+      keysAll: ["CLAUDE_CODE_DISABLE_FILE_MENTIONS", "CLAUDE_CODE_HOST_SCHEDULED_RUN"],
+      keysSome: [],
+    });
+  it("prints no default-absent note for an S6g-guarded key when every dump was a scheduled task", () => {
+    const r = checkObservedAgainstHarness(block({ interactive: 0, scheduled: 1, other: 0, unknown: 0 }, 1), new Set());
+    expect(r.notes.join("\n")).not.toMatch(/absent by default/);
+  });
+  it("still notes both when a dump was not a scheduled task", () => {
+    const r = checkObservedAgainstHarness(block({ interactive: 0, scheduled: 1, other: 0, unknown: 1 }, 2), new Set());
+    const notes = r.notes.join("\n");
+    expect(notes).toMatch(/CLAUDE_CODE_DISABLE_FILE_MENTIONS is classed session-conditional \(absent by default\)/);
+    expect(notes).toMatch(/CLAUDE_CODE_HOST_SCHEDULED_RUN is classed session-conditional \(absent by default\)/);
+  });
+});
+
 describe("observed spawn-env oracle — the committed 2.31226.1 observation", () => {
   // A note should mean something new. Both keys below are in every observed session and are left unset on purpose,
   // so comparing the committed observation with the harness must print nothing about them, and no default-absent note.
