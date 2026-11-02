@@ -6,6 +6,23 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.13.1] - 2026-11-02
+
+A dependency-only patch: no code, baseline, result field or cassette changes.
+
+### Security
+
+- **The lockfile moves two runtime dependencies past known advisories:** `zod` 4.6.5 → 4.6.7, and `fast-uri`
+  3.1.8 → 3.1.9 (reached through `ajv`). The package ships no shrinkwrap, so an npm install already resolved the
+  newest versions its ranges allow; this changes what a source checkout and this repository's CI install.
+- **Development dependencies:** `undici` 8.11.2 → 8.12.3 (past a known advisory), `vitest` 5.0.3 → 5.0.5 and
+  `jsdom` 30.1.2 → 30.1.3, with their transitive updates. None is in the published package.
+
+### Changed
+
+- **CI action pins:** `actions/setup-python` v7.0.0 → v7.1.0 and `docker/login-action` v4.6.0 → v4.7.0, each pinned
+  by commit SHA.
+
 ## [4.13.0] - 2026-11-01
 
 ### Upgrade notes
