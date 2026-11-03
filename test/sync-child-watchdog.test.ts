@@ -169,10 +169,30 @@ describe("the sync-child watchdog", () => {
   }, 180_000);
 
   it("does nothing when turned off", async () => {
-    const r = await runFixture(`${IMPORTS}it("spins", () => { const end = Date.now() + 4000; while (Date.now() < end); });\n`, {
-      env: { COWORK_TEST_WATCHDOG: "0" },
-      testTimeoutMs: 10_000,
-    });
+    // A 4 s block in a hook: with the watchdog on, past T (1.5 s) with no test floor, so it WOULD fire.
+    const body = `${IMPORTS}beforeAll(() => { const end = Date.now() + 4000; while (Date.now() < end); }, 20_000);\nit("passes", () => { expect(1).toBe(1); });\n`;
+    const on = await runFixture(body);
+    expect(on.events, on.out).toHaveLength(1);
+    const off = await runFixture(body, { env: { COWORK_TEST_WATCHDOG: "0" } });
+    expect(off.code, off.out).toBe(0);
+    expect(off.events).toEqual([]);
+  }, 180_000);
+
+  it("does not report a long call that returned normally, once the code after it runs on", async () => {
+    // The call takes 2.5 s (its declared 4 s covers it); then 1 s of synchronous work with no chance for a heartbeat.
+    // Measured from the last beat before the call, that would be 3.5 s of silence against T = 1.5 s.
+    const r = await runFixture(
+      `${IMPORTS}beforeAll(() => { spawnSync("sleep", ["2.5"], { timeout: 4000 }); const end = Date.now() + 1000; while (Date.now() < end); }, 20_000);\nit("passes", () => { expect(1).toBe(1); });\n`,
+    );
+    expect(r.code, r.out).toBe(0);
+    expect(r.events).toEqual([]);
+  }, 180_000);
+
+  it("is not fooled by a test that fakes the clock", async () => {
+    // A fake Date months in the past must not read as months of silence. Async, so the heartbeat keeps running.
+    const r = await runFixture(
+      `import { expect, it, vi } from "vitest";\nit("fakes Date", async () => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2020-01-01")); await new Promise((ok) => setTimeout(ok, 2500)); vi.useRealTimers(); expect(1).toBe(1); }, 20_000);\n`,
+    );
     expect(r.code, r.out).toBe(0);
     expect(r.events).toEqual([]);
   }, 180_000);

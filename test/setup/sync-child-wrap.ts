@@ -5,6 +5,15 @@
 export const CALL_TIMEOUT = 1;
 /** Slot holding when the running sync call started (epoch ms; 0 = no call running). */
 export const CALL_START = 5;
+/** Slot of the main thread's heartbeat (epoch ms). */
+export const BEAT = 0;
+
+/**
+ * The real clock, captured at load. A test may fake `Date` (vi.useFakeTimers, vi.setSystemTime); the watchdog's
+ * worker thread compares against its own real clock, so a faked time here would read as a huge silence (a false
+ * kill) or as none (a blind watchdog).
+ */
+export const realNow: () => number = Date.now.bind(Date);
 
 /** The options object of a child_process sync call: the last plain-object argument after the command. */
 export function optionsOf(args: unknown[]): { timeout?: unknown } | undefined {
@@ -24,10 +33,13 @@ export function wrapSync<F extends (...args: never[]) => unknown>(orig: F, slots
   const wrapped = function (this: unknown, ...args: unknown[]) {
     const t = optionsOf(args)?.timeout;
     Atomics.store(slots, CALL_TIMEOUT, typeof t === "number" && Number.isFinite(t) && t > 0 ? BigInt(Math.ceil(t)) : 0n);
-    Atomics.store(slots, CALL_START, BigInt(Date.now()));
+    Atomics.store(slots, CALL_START, BigInt(realNow()));
     try {
       return (orig as unknown as (...a: unknown[]) => unknown).apply(this, args);
     } finally {
+      // A beat first: the thread is alive again. Without it, once CALL_START clears, silence would be measured from
+      // the last beat BEFORE the call, and a long call that returned normally would read as a hang.
+      Atomics.store(slots, BEAT, BigInt(realNow()));
       Atomics.store(slots, CALL_START, 0n);
       Atomics.store(slots, CALL_TIMEOUT, 0n);
     }

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, beforeEach, expect } from "vitest";
-import { wrapSync } from "./sync-child-wrap.js";
+import { BEAT, realNow, wrapSync } from "./sync-child-wrap.js";
 
 // The sync-child watchdog. A test that calls spawnSync / execFileSync / execSync blocks its whole vitest fork until
 // the child exits; vitest's testTimeout is a timer on that same blocked event loop, so it can never fire. A child
@@ -31,8 +31,7 @@ import { wrapSync } from "./sync-child-wrap.js";
 // result or rethrows its error unchanged. It must be the first setup file, so a module that binds these functions
 // at import time binds the wrapped ones. COWORK_TEST_WATCHDOG=0 turns it off.
 
-const BEAT = 0,
-  TEST_FLOOR = 2,
+const TEST_FLOOR = 2,
   EVENTS = 3,
   FILE_LEN = 4;
 const SLOTS = 6; // 5 = CALL_START, written by sync-child-wrap.ts
@@ -67,8 +66,8 @@ function start(): Watchdog {
   const sab = new SharedArrayBuffer(SLOTS * 8);
   const fileSab = new SharedArrayBuffer(FILE_BYTES);
   const slots = new BigInt64Array(sab);
-  Atomics.store(slots, BEAT, BigInt(Date.now()));
-  setInterval(() => Atomics.store(slots, BEAT, BigInt(Date.now())), 250).unref();
+  Atomics.store(slots, BEAT, BigInt(realNow()));
+  setInterval(() => Atomics.store(slots, BEAT, BigInt(realNow())), 250).unref();
   const worker = new Worker(new URL("./sync-child-watchdog-worker.mjs", import.meta.url), {
     workerData: { sab, fileSab, pid: process.pid, runDir, baseMs, pollMs: Math.min(1000, Math.max(100, baseMs / 10)), graceMs: GRACE_MS },
   });

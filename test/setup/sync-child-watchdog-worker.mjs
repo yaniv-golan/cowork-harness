@@ -135,8 +135,6 @@ async function check() {
     const dir = join(runDir, `pid${pid}-ev${n}`);
     mkdirSync(dir, { recursive: true });
     const kids = await descendants(pid);
-    for (const k of kids) writeFileSync(join(dir, `stacks-${k.pid}.txt`), `${k.command}\n\n${await stacks(k.pid)}`);
-    writeFileSync(join(dir, `stacks-${pid}-fork.txt`), await stacks(pid));
     const len = Number(Atomics.load(slots, FILE_LEN));
     const summary = {
       file: len > 0 ? new TextDecoder().decode(fileBytes.slice(0, len)) : "(before the first test file's hooks)",
@@ -145,10 +143,19 @@ async function check() {
       limitMs: Number(limit),
       children: kids.map(({ pid: p, ppid, command, depth }) => ({ pid: p, ppid, command, depth })),
       killed: kids.length > 0,
+      stacks: "pending",
       note: "a re-parented (orphaned) descendant is not under this fork and is not listed; the CI job-level dump covers it",
       at: new Date().toISOString(),
     };
+    // The summary and the event count come BEFORE the slow stack dumps. With no child to kill, the main thread is
+    // running again and its afterEach may come next: it must already see the event (and the summary) to blame the
+    // right test. If the fork exits mid-dump, the summary still says what hung.
     writeFileSync(join(dir, "summary.json"), JSON.stringify(summary, null, 2));
+    Atomics.store(slots, EVENTS, BigInt(n));
+    for (const k of kids) writeFileSync(join(dir, `stacks-${k.pid}.txt`), `${k.command}\n\n${await stacks(k.pid)}`);
+    writeFileSync(join(dir, `stacks-${pid}-fork.txt`), await stacks(pid));
+    writeFileSync(join(dir, "summary.json"), JSON.stringify({ ...summary, stacks: "written" }, null, 2));
+    // Kill only after the dumps, so the stacks show the child as it hung.
     for (const k of [...kids].sort((a, b) => b.depth - a.depth)) {
       try {
         process.kill(k.pid, "SIGKILL");
@@ -156,7 +163,6 @@ async function check() {
         /* already gone */
       }
     }
-    Atomics.store(slots, EVENTS, BigInt(n));
   } finally {
     busy = false;
   }
