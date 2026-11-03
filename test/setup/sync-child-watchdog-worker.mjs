@@ -70,8 +70,22 @@ async function stacks(target) {
   if (process.platform !== "linux") return "(no stack sampler on this platform)";
   const parts = [];
   const gdbArgs = ["-batch", "-p", String(target), "-ex", "thread apply all bt"];
-  let g = await run("gdb", gdbArgs, 20_000);
-  if (!g.ok && process.getuid && process.getuid() !== 0) g = await run("sudo", ["-n", "gdb", ...gdbArgs], 20_000);
+  // gdb exits 0 even when it cannot attach, so success is judged by its output. A non-root runner (GitHub's) needs
+  // sudo to attach to a process that is not its own descendant (Yama ptrace_scope 1); try that first, then plain gdb.
+  const attached = (r) => /^Thread \d|^#0 /m.test(r.text);
+  const tries =
+    process.getuid && process.getuid() !== 0
+      ? [
+          ["sudo", ["-n", "gdb", ...gdbArgs]],
+          ["gdb", gdbArgs],
+        ]
+      : [["gdb", gdbArgs]];
+  let g = { ok: false, text: "" };
+  for (const [cmd, args] of tries) {
+    const r = await run(cmd, args, 20_000);
+    g = { ok: r.ok, text: `${g.text}${g.text ? "\n" : ""}[${cmd}] ${r.text}` };
+    if (attached(r)) break;
+  }
   parts.push(`=== gdb\n${g.text}`);
   for (const f of ["status", "wchan", "syscall", "stack"]) {
     try {

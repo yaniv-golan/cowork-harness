@@ -108,16 +108,17 @@ describe("the sync-child watchdog", () => {
     expect(ev.summary.children.map((c) => c.command).join("\n")).not.toMatch(/^ps |\/sample /m);
     const stacks = readdirSync(ev.dir).filter((f) => f.startsWith("stacks-"));
     expect(stacks.length).toBeGreaterThanOrEqual(2); // the child and the fork itself
-    if (process.platform === "darwin")
-      expect(
-        readFileSync(
-          join(
-            ev.dir,
-            stacks.find((f) => f.endsWith("-fork.txt"))!,
-          ),
-          "utf8",
-        ),
-      ).toMatch(/Call graph/);
+    const forkStacks = readFileSync(
+      join(
+        ev.dir,
+        stacks.find((f) => f.endsWith("-fork.txt"))!,
+      ),
+      "utf8",
+    );
+    if (process.platform === "darwin") expect(forkStacks).toMatch(/Call graph/);
+    // Where gdb can attach (CI installs it; GitHub's runner user has passwordless sudo), the dump has real backtraces.
+    // gdb exits 0 even when it cannot attach, so this checks for frames, not the exit code.
+    if (process.platform === "linux" && existsSync("/usr/bin/gdb") && process.env.CI) expect(forkStacks).toMatch(/^Thread \d+ \(/m);
     // Well before the 600 s the child would have taken.
     expect(r.ms).toBeLessThan(150_000);
   }, 180_000);

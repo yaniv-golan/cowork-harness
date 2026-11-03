@@ -78,7 +78,7 @@ jobs:
           cat "$RUNNER_TEMP/probe.log"
           grep -qE "watchdog's limit: .*sleep 600" "$RUNNER_TEMP/probe.log"
           ls -R "$RUNNER_TEMP/hangs"
-          grep -l "Thread" "$RUNNER_TEMP"/hangs/run-*/*/stacks-*-fork.txt
+          grep -lE "^Thread [0-9]+ \(" "$RUNNER_TEMP"/hangs/run-*/*/stacks-*-fork.txt
       - name: The watchdog guard tests
         run: npx vitest run test/sync-child-watchdog.test.ts test/sync-child-wrap.test.ts test/ci-hang-dump.test.ts
       - name: Upload
