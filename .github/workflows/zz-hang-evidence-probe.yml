@@ -19,11 +19,17 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/hangs"
           nohup scripts/ci/hang-dump.sh 30 "$RUNNER_TEMP/hangs" >"$RUNNER_TEMP/hangs/hang-dump.out" 2>&1 &
+          echo $! >"$RUNNER_TEMP/hang-dump.pid"
       - name: A step that hangs past its own limit
         timeout-minutes: 1
         run: |
           set -o pipefail
           node -e "setTimeout(() => {}, 600000)" 2>&1 | tee "$RUNNER_TEMP/hangs/vitest.log"
+      - name: Disarm (a dump already under way finishes)
+        if: always()
+        run: |
+          pid=$(cat "$RUNNER_TEMP/hang-dump.pid" 2>/dev/null) || exit 0
+          if [ -e "$RUNNER_TEMP/hangs/.dump-started" ]; then timeout 150 tail --pid="$pid" -f /dev/null || true; else kill "$pid" 2>/dev/null || true; fi
       - name: Upload
         if: ${{ always() && !success() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -32,6 +38,29 @@ jobs:
           path: ${{ runner.temp }}/hangs
           if-no-files-found: ignore
           retention-days: 3
+
+  disarm-before-fire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Arm with a 40 s delay
+        run: |
+          mkdir -p "$RUNNER_TEMP/hangs"
+          nohup scripts/ci/hang-dump.sh 40 "$RUNNER_TEMP/hangs" >"$RUNNER_TEMP/hangs/hang-dump.out" 2>&1 &
+          echo $! >"$RUNNER_TEMP/hang-dump.pid"
+      - name: A quick test step
+        run: "true"
+      - name: Disarm
+        if: always()
+        run: |
+          pid=$(cat "$RUNNER_TEMP/hang-dump.pid" 2>/dev/null) || exit 0
+          if [ -e "$RUNNER_TEMP/hangs/.dump-started" ]; then timeout 150 tail --pid="$pid" -f /dev/null || true; else kill "$pid" 2>/dev/null || true; fi
+      - name: Nothing fires later
+        run: |
+          sleep 60
+          ls -la "$RUNNER_TEMP/hangs"
+          if ls -d "$RUNNER_TEMP"/hangs/job-* 2>/dev/null; then echo "::error::the disarmed dumper fired"; exit 1; fi
 
   job-timeout:
     runs-on: ubuntu-latest
