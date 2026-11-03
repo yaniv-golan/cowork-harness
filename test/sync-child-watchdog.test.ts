@@ -58,6 +58,8 @@ function runFixture(body: string, opts: { tMs?: number; testTimeoutMs?: number; 
     ...opts.env,
   };
   delete env.COWORK_TEST_HANG_RUN_DIR;
+  // The fixtures test the watchdog ON unless a case says otherwise, whatever this run's own setting is.
+  if (!opts.env || !("COWORK_TEST_WATCHDOG" in opts.env)) delete env.COWORK_TEST_WATCHDOG;
   const t0 = Date.now();
   return new Promise((done, fail) => {
     // Async on purpose: this test's own heartbeat keeps running while the fixture is stuck.
