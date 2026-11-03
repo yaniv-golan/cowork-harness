@@ -3132,7 +3132,9 @@ function extractRealBundle(): string | null {
   if (!existsSync(LIVE_ASAR)) return skipRealBundle(`no Claude Desktop install (${LIVE_ASAR} missing)`);
   try {
     realBundleTmpDir = mkdtempSync(join(tmpdir(), "cowork-asar-test-"));
-    execFileSync("npx", ["--yes", "@electron/asar", "extract", LIVE_ASAR, realBundleTmpDir], { stdio: "ignore" });
+    // Bounded: an npx fetch that stalls must fail (and skip) rather than block this test's process; the declared
+    // timeout also tells the hang watchdog this call may legitimately take that long.
+    execFileSync("npx", ["--yes", "@electron/asar", "extract", LIVE_ASAR, realBundleTmpDir], { stdio: "ignore", timeout: 300_000 });
     realFilesMemo = readMainBundleFiles(realBundleTmpDir);
     return [...realFilesMemo.values()].join("");
   } catch (e) {

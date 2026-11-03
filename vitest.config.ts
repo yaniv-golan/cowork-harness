@@ -17,9 +17,18 @@ export default defineConfig({
   test: {
     // Give every test process its own runs root so nothing writes into the developer's real
     // ~/.cowork-harness/runs. See test/setup/runs-root.ts for why this is structural rather than per-file.
-    setupFiles: ["test/setup/runs-root.ts", "test/setup/forbid-spawn.ts", "test/setup/no-lane-notice.ts"],
-    // Fails the run when a test leaves a shared $TMPDIR/scrubset.key (see the file).
-    globalSetup: ["test/setup/no-shared-scrub-key.ts"],
+    // The sync-child watchdog goes FIRST, so its child_process wrapping is in place before any other module binds
+    // spawnSync/execFileSync/execSync (test/setup/sync-child-watchdog.ts; test/sync-child-watchdog.test.ts guards
+    // the order).
+    setupFiles: [
+      "test/setup/sync-child-watchdog.ts",
+      "test/setup/runs-root.ts",
+      "test/setup/forbid-spawn.ts",
+      "test/setup/no-lane-notice.ts",
+    ],
+    // Fails the run when a test leaves a shared $TMPDIR/scrubset.key (see the file). hang-dir.ts gives the watchdog
+    // its per-run dump directory, and fails the run if any dump was written.
+    globalSetup: ["test/setup/no-shared-scrub-key.ts", "test/setup/hang-dir.ts"],
     // 93 test files spawn a subprocess (the built CLI, `claude`, git); only a handful declare a timeout,
     // so the rest inherited vitest's 5s default. They measure 167-888ms locally — a comfortable margin
     // until you remember this lane runs 344 files in parallel across every core, and a CI runner is ~3x
