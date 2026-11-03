@@ -4,8 +4,8 @@
 # Armed in the background just before a long test step, with a delay that ends a couple of minutes before that
 # step's own time limit. If the step is still running then, it is almost certainly hung: this records the state of
 # every node/npm/vitest process on the runner into <out-dir>/job-<utc>/, for the always-run artifact upload after the
-# step. It never kills anything; the step's time limit does that. A step that finishes first leaves nothing behind,
-# because the job ends and the runner reaps this process with it.
+# step. It never kills anything; the step's time limit does that. The workflow's disarm step, after the test step,
+# kills it while it is still sleeping, so it can never fire into a later step (a release's publish).
 #
 # The test suite's own watchdog (test/setup/sync-child-watchdog.ts) covers a test fork blocked on a synchronous
 # child. This covers what it cannot see: the vitest main process, a fork that is idle or stuck in its own exit, and
@@ -17,6 +17,8 @@ set -u
 delay=$1
 base=$2
 sleep "$delay"
+# Tells the disarm step a dump is under way: it waits for this one instead of killing it.
+touch "$base/.dump-started"
 
 out="$base/job-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$out"

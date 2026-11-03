@@ -82,6 +82,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/hangs"
           nohup scripts/ci/hang-dump.sh 1380 "$RUNNER_TEMP/hangs" >"$RUNNER_TEMP/hangs/hang-dump.out" 2>&1 &
+          echo $! >"$RUNNER_TEMP/hang-dump.pid"
       - name: Build + test (also runs via prepublishOnly)
         timeout-minutes: 25
         # The hillclimb lite-contract test fetches pinned upstream files; on CI a fetch failure must fail, not skip.
@@ -91,6 +92,11 @@ jobs:
         run: |
           set -o pipefail
           npm run ci 2>&1 | tee "$RUNNER_TEMP/hangs/vitest.log"
+      - name: Disarm the job-level hang dump (let a dump already under way finish)
+        if: always()
+        run: |
+          pid=$(cat "$RUNNER_TEMP/hang-dump.pid" 2>/dev/null) || exit 0
+          if [ -e "$RUNNER_TEMP/hangs/.dump-started" ]; then timeout 150 tail --pid="$pid" -f /dev/null || true; else kill "$pid" 2>/dev/null || true; fi
       - name: Upload hang evidence and the test log (only when the test step did not pass)
         if: ${{ always() && !success() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
