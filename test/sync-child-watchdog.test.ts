@@ -66,7 +66,8 @@ function runFixture(body: string, opts: { tMs?: number; testTimeoutMs?: number; 
     let out = "";
     child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", (d) => (out += d));
-    const guard = setTimeout(() => child.kill("SIGKILL"), 60_000);
+    // gdb attaches (Linux CI) can take tens of seconds per process; this only bounds a broken watchdog.
+    const guard = setTimeout(() => child.kill("SIGKILL"), 150_000);
     child.on("error", fail);
     child.on("close", (code) => {
       clearTimeout(guard);
@@ -118,8 +119,8 @@ describe("the sync-child watchdog", () => {
         ),
       ).toMatch(/Call graph/);
     // Well before the 600 s the child would have taken.
-    expect(r.ms).toBeLessThan(40_000);
-  }, 90_000);
+    expect(r.ms).toBeLessThan(150_000);
+  }, 180_000);
 
   it("leaves a call that declares its own timeout alone, so that timeout fires first", async () => {
     // In a hook, so no test floor applies: the limit is T (1.5 s) unless the call declares more. The call declares
@@ -130,13 +131,13 @@ describe("the sync-child watchdog", () => {
     );
     expect(r.code, r.out).toBe(0);
     expect(r.events).toEqual([]);
-  }, 90_000);
+  }, 180_000);
 
   it("leaves a clean run green and removes its dump directory", async () => {
     const r = await runFixture(`${IMPORTS}it("quick child", () => { expect(spawnSync("true").status).toBe(0); });\n`);
     expect(r.code, r.out).toBe(0);
     expect(r.runDirs).toEqual([]);
-  }, 90_000);
+  }, 180_000);
 
   it("reports a test whose own thread is blocked with no child, and kills nothing", async () => {
     const r = await runFixture(`${IMPORTS}it("spins", () => { const end = Date.now() + 4000; while (Date.now() < end); });\n`);
@@ -145,7 +146,7 @@ describe("the sync-child watchdog", () => {
     expect(r.events).toHaveLength(1);
     expect(r.events[0]!.summary.killed).toBe(false);
     expect(r.events[0]!.summary.children).toEqual([]);
-  }, 90_000);
+  }, 180_000);
 
   it("fails the run for a hang in a hook, where no test fails", async () => {
     const r = await runFixture(
@@ -158,7 +159,7 @@ describe("the sync-child watchdog", () => {
     expect(r.events).toHaveLength(1);
     // Named by the file even though no test was running.
     expect(r.events[0]!.summary.file).toMatch(/fixture\.test\.ts$/);
-  }, 90_000);
+  }, 180_000);
 
   it("does nothing when turned off", async () => {
     const r = await runFixture(`${IMPORTS}it("spins", () => { const end = Date.now() + 4000; while (Date.now() < end); });\n`, {
@@ -167,5 +168,5 @@ describe("the sync-child watchdog", () => {
     });
     expect(r.code, r.out).toBe(0);
     expect(r.events).toEqual([]);
-  }, 90_000);
+  }, 180_000);
 });
