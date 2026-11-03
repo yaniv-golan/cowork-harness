@@ -86,6 +86,13 @@ Paths inside a scenario/session resolve relative to that file (see [docs/session
 - **Consumer-visible workflow changes update the skill.** A change a scenario author would act on — a new assertion key, cassette field, CLI command, or a changed record/replay/verify workflow — must land with a matching update to `.claude/skills/cowork-harness/` (SKILL.md or `references/`). The machine-checkable slices are enforced (`test/skill-docs-sync.test.ts` pins the skill against the assertion-key catalog and the cassette schema's field list; `test/cli-help.test.ts` pins the `docs/cli.md` command table); prose workflows are on you — this checklist line exists because `effectiveFidelity` shipped consumer-visible and stayed undocumented in the skill until an external consumer flagged it.
 - **Typecheck.** `npm test` is `vitest run` — it strips types and does **not** typecheck. `tsconfig.json` covers only `src`; test files are typechecked solely by `tsconfig.test.json`, i.e. only via `npm run typecheck` (which `npm run ci` runs). After editing `src/`, run `npm run typecheck`, not just `npm test`.
 - **Format.** `npm run format:check` must pass (`npm run format:write` to fix).
+- **A test that hangs fails instead.** A synchronous child call (`spawnSync`, `execFileSync`, `execSync`) blocks its
+  vitest process, so `testTimeout` cannot fire on it. The unit lane's first setup file, `test/setup/sync-child-watchdog.ts`,
+  watches for that: past the limit it saves stack dumps, kills the stuck children, and fails the test (or the run,
+  for a hang in a hook) with the dump directory. The limit is the largest of 90 s, the test's timeout + 30 s, and the
+  call's own `timeout` + 30 s, so give a sync call that can legitimately run longer than 90 s an explicit `timeout`.
+  Dumps go under `COWORK_TEST_HANG_DIR` (default `<tmpdir>/cowork-test-hangs`); `COWORK_TEST_HANG_T_MS` changes the
+  90 s; `COWORK_TEST_WATCHDOG=0` turns it off.
 
 ## Validating a companion-skill edit (answer quality)
 
@@ -131,7 +138,7 @@ The provided [GitHub Actions workflow](https://github.com/yaniv-golan/cowork-har
 | Stage | Runs | Needs | Gates |
 |---|---|---|---|
 | **build** | format check · version-lockstep guard · typecheck · source guards · build · CLI smoke · token-free `replay` · `verify-cassettes` · `lint` | nothing | every push/PR |
-| **test** | the unit suite (vitest), sharded 4-way | nothing | every push/PR |
+| **test** | the unit suite (vitest), sharded 4-way. If a test step fails, its log and any hang dumps are uploaded as an artifact (`hangs-shard-N`); the floor and release jobs do the same | nothing | every push/PR |
 | **floor** | the unit suite once, unsharded, on Node 22 — the version `engines.node` declares — so the floor is exercised rather than asserted (other jobs run Node 24, the Active LTS line) | nothing | every push/PR; gates the merge context |
 | **metric-runtimes** | the command-metric runtimes at their floors: every shipped Python metric file compiles on 3.9, the Python runner's audit hook and the closure tests run on 3.9, and the Node permission tests run on 22.12 (the `--experimental-permission` branch) | nothing | every push/PR; gates the merge context |
 | **action-self-test** | packs this commit and runs the packaged `uses: ./` Action across its full case set — pass (committed example cassette), usage-error fail (nonexistent path), assertion fail (checks the reporter renders a ❌ row), `lint`, and `analyze-skill`; `ci.yml` currently runs the packaged action **5** times (3 × `replay`, then `lint` and `analyze-skill`) — count the `with: command:` keys, not a bare `grep -c 'command:'`, which also matches step names and log strings | nothing | every push/PR |

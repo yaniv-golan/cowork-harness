@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **A test that hangs now fails with evidence instead of running to the CI time limit.** A synchronous child call
+  blocks its vitest process, so `testTimeout` could never fire on it, and on Node 24 and later a CLI process can
+  deadlock inside its own exit (an upstream Node bug, nodejs/node#64274). A run then sat until the job limit and lost
+  its log. The unit lane now watches for a blocked process: it saves stack dumps of the stuck children and the test
+  process, kills the children, and fails the test, or the run for a hang in a hook. The CI test jobs and the release's
+  Build + test also install gdb, take a job-level dump of every node process shortly before the test step's limit,
+  and upload the dumps and the test log when the step does not pass. This contains the hang; it does not fix the
+  upstream bug. Contributor knobs are in CONTRIBUTING.md.
+
 ## [4.13.1] - 2026-11-02
 
 A dependency-only patch: no code, baseline, result field or cassette changes.
