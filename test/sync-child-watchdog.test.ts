@@ -147,7 +147,7 @@ describe("the sync-child watchdog", () => {
   }, 180_000);
 
   it("reports a test whose own thread is blocked with no child, and kills nothing", async () => {
-    const r = await runFixture(`${IMPORTS}it("spins", () => { const end = Date.now() + 4000; while (Date.now() < end); });\n`);
+    const r = await runFixture(`${IMPORTS}it("spins", () => { const end = Date.now() + 8000; while (Date.now() < end); });\n`);
     expect(r.code, r.out).not.toBe(0);
     expect(r.out).toMatch(/no child process: this test's own thread was blocked/);
     expect(r.events).toHaveLength(1);
