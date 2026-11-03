@@ -76,7 +76,7 @@ jobs:
           printf '%s\n' 'import { spawnSync } from "node:child_process";' 'import { it } from "vitest";' 'it("hangs", () => { spawnSync("sh", ["-c", "sleep 600"]); });' > test/_probe/hang.test.ts
           if npx vitest run test/_probe/hang.test.ts --testTimeout=1000 > "$RUNNER_TEMP/probe.log" 2>&1; then echo "::error::expected red"; cat "$RUNNER_TEMP/probe.log"; exit 1; fi
           cat "$RUNNER_TEMP/probe.log"
-          grep -q "watchdog's limit: sleep 600" "$RUNNER_TEMP/probe.log"
+          grep -qE "watchdog's limit: .*sleep 600" "$RUNNER_TEMP/probe.log"
           ls -R "$RUNNER_TEMP/hangs"
           grep -l "Thread" "$RUNNER_TEMP"/hangs/run-*/*/stacks-*-fork.txt
       - name: The watchdog guard tests

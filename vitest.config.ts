@@ -20,7 +20,12 @@ export default defineConfig({
     // The sync-child watchdog goes FIRST, so its child_process wrapping is in place before any other module binds
     // spawnSync/execFileSync/execSync (test/setup/sync-child-watchdog.ts; test/sync-child-watchdog.test.ts guards
     // the order).
-    setupFiles: ["test/setup/sync-child-watchdog.ts", "test/setup/runs-root.ts", "test/setup/forbid-spawn.ts", "test/setup/no-lane-notice.ts"],
+    setupFiles: [
+      "test/setup/sync-child-watchdog.ts",
+      "test/setup/runs-root.ts",
+      "test/setup/forbid-spawn.ts",
+      "test/setup/no-lane-notice.ts",
+    ],
     // Fails the run when a test leaves a shared $TMPDIR/scrubset.key (see the file). hang-dir.ts gives the watchdog
     // its per-run dump directory, and fails the run if any dump was written.
     globalSetup: ["test/setup/no-shared-scrub-key.ts", "test/setup/hang-dir.ts"],
