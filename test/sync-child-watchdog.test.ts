@@ -124,9 +124,28 @@ describe("the sync-child watchdog", () => {
     if (process.platform === "darwin") expect(forkStacks).toMatch(/Call graph/);
     // Where gdb can attach (CI installs it; GitHub's runner user has passwordless sudo), the dump has real backtraces.
     // gdb exits 0 even when it cannot attach, so this checks for frames, not the exit code.
-    if (process.platform === "linux" && existsSync("/usr/bin/gdb") && process.env.CI) expect(forkStacks).toMatch(/^Thread \d+ \(/m);
+    if (process.platform === "linux" && process.env.CI) {
+      // Not silent when the gdb install failed: the backtrace check is skipped, and the run says so.
+      if (existsSync("/usr/bin/gdb")) expect(forkStacks).toMatch(/^Thread \d+ \(/m);
+      else process.stdout.write("::warning::gdb is not installed on this runner: the watchdog's backtrace check was skipped\n");
+    }
     // Well before the 600 s the child would have taken.
     expect(r.ms).toBeLessThan(150_000);
+  }, 180_000);
+
+  it("retries when its first process listing fails, instead of leaving the hang in place", async () => {
+    // A listing that fails or times out is unknown, not "no children". The first one is made to fail; the retry
+    // (10 s later, while the call is still blocked) must find and kill the child.
+    const r = await runFixture(`${IMPORTS}it("hangs", () => { spawnSync("sh", ["-c", "sleep 600"]); });\n`, {
+      env: { COWORK_TEST_HANG_FAIL_FIRST_LISTING: "1" },
+    });
+    expect(r.code, r.out).not.toBe(0);
+    expect(r.events).toHaveLength(1);
+    const s = r.events[0]!.summary as unknown as { killed: boolean; attempts: number; children: { command: string }[] };
+    expect(s.killed).toBe(true);
+    expect(s.attempts).toBeGreaterThanOrEqual(2);
+    expect(s.children.map((c) => c.command).join("\n")).toMatch(/sleep 600/);
+    expect(r.ms).toBeLessThan(120_000);
   }, 180_000);
 
   it("leaves a call that declares its own timeout alone, so that timeout fires first", async () => {
@@ -191,7 +210,7 @@ describe("the sync-child watchdog", () => {
   it("is not fooled by a test that fakes the clock", async () => {
     // A fake Date months in the past must not read as months of silence. Async, so the heartbeat keeps running.
     const r = await runFixture(
-      `import { expect, it, vi } from "vitest";\nit("fakes Date", async () => { vi.useFakeTimers({ toFake: ["Date"] }); vi.setSystemTime(new Date("2020-01-01")); await new Promise((ok) => setTimeout(ok, 2500)); vi.useRealTimers(); expect(1).toBe(1); }, 20_000);\n`,
+      `import { expect, it, vi } from "vitest";\nit("fakes Date", async () => { vi.useFakeTimers({ toFake: ["Date", "hrtime", "performance"] }); vi.setSystemTime(new Date("2020-01-01")); await new Promise((ok) => setTimeout(ok, 2500)); vi.useRealTimers(); expect(1).toBe(1); }, 20_000);\n`,
     );
     expect(r.code, r.out).toBe(0);
     expect(r.events).toEqual([]);

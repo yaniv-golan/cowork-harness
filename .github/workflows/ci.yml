@@ -181,8 +181,11 @@ jobs:
     # Hard backstop: a hung shard fails here instead of running to GitHub's 6h default. A test that
     # spawns a CLI subprocess which blocks (waiting on stdin / a gate / a channel) hangs SYNCHRONOUSLY,
     # and vitest's per-test testTimeout cannot interrupt a blocked sync call — only a wall-clock kill can.
-    # 14, not 12: the gdb install runs first, and the test step's own 11-min limit must come before this one.
-    timeout-minutes: 14
+    # Budget for the hang path (a test step that runs to its limit), measured shard steps in brackets:
+    #   setup incl. gdb install <= 3 min [~0.5]  +  test step <= 11 (its `timeout` ends vitest at 10.5)
+    #   + disarm <= 1 (the dump fires at 7 min with a 2-min gdb budget, so it is done by ~10)  +  upload <= 1
+    #   = 16 min, under this 18. A green shard takes ~1.5-5 min of test.
+    timeout-minutes: 18
     permissions:
       contents: read
     strategy:
@@ -202,15 +205,19 @@ jobs:
         run: test -f dist/cli.js || { echo "::error::dist/cli.js missing after build — CLI-integration cases would silently skip."; exit 1; }
       # Hang evidence. A test process that hangs must leave stacks behind, not just a time-limit kill with the log
       # lost. The suite's own watchdog dumps a fork blocked on a synchronous child; this job-level dump, armed to
-      # fire a minute before the shard's 10-min `timeout`, covers everything else (vitest main, an idle fork, an orphaned child). gdb lets both
+      # fire 3 min before the shard's 10-min `timeout`, covers everything else (vitest main, an idle fork, an orphaned child). gdb lets both
       # dumps record all-thread backtraces; an apt outage must not fail the job, so its install may fail.
       - name: Install gdb (stack dumps if a test process hangs)
         continue-on-error: true
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends gdb
+        run: |
+          if ! { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends gdb; }; then
+            echo "::warning::gdb install failed: a hang on this run will be dumped WITHOUT backtraces"
+            exit 1
+          fi
       - name: Arm the job-level hang dump
         run: |
           mkdir -p "$RUNNER_TEMP/hangs"
-          nohup scripts/ci/hang-dump.sh 540 "$RUNNER_TEMP/hangs" >"$RUNNER_TEMP/hangs/hang-dump.out" 2>&1 &
+          HANG_DUMP_GDB_BUDGET=120 nohup scripts/ci/hang-dump.sh 420 "$RUNNER_TEMP/hangs" >"$RUNNER_TEMP/hangs/hang-dump.out" 2>&1 &
           echo $! >"$RUNNER_TEMP/hang-dump.pid"
       - name: Unit tests — shard ${{ matrix.shard }}/4
         # Past the `timeout` below (10.5 min): bounds the step even if a surviving detached descendant holds the
@@ -231,7 +238,7 @@ jobs:
         if: always()
         run: |
           pid=$(cat "$RUNNER_TEMP/hang-dump.pid" 2>/dev/null) || exit 0
-          if [ -e "$RUNNER_TEMP/hangs/.dump-started" ]; then timeout 150 tail --pid="$pid" -f /dev/null || true; else kill "$pid" 2>/dev/null || true; fi
+          if [ -e "$RUNNER_TEMP/hangs/.dump-started" ]; then timeout 60 tail --pid="$pid" -f /dev/null || true; else kill "$pid" 2>/dev/null || true; fi
       - name: Upload hang evidence and the test log (only when the test step did not pass)
         if: ${{ always() && !success() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -593,7 +600,11 @@ jobs:
     # which blocks hangs SYNCHRONOUSLY, and vitest's per-test timeout cannot interrupt a blocked sync
     # call — only a wall-clock kill can. This job runs the suite UNSHARDED, the shape the `test` job's
     # own header calls "the former `unit` 15-min pole", so 40 is a generous backstop, not a target.
-    timeout-minutes: 40
+    #
+    # Budget for the hang path: setup incl. gdb install <= 3 min [~0.75]  +  Build + test <= 37 (its step limit)
+    #   + disarm <= 1 (the dump fires at 32 min with a 2.5-min gdb budget, so it is done by ~35)  +  upload <= 1
+    #   = 42 min, under this 45. A green Build + test takes ~9 min.
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -606,18 +617,22 @@ jobs:
       - run: npm ci
       # Hang evidence. A test process that hangs must leave stacks behind, not just a time-limit kill with the log
       # lost. The suite's own watchdog dumps a fork blocked on a synchronous child; this job-level dump, armed to
-      # fire 2 min before Build + test's own 37-min limit, covers everything else (vitest main, an idle fork, an orphaned child). gdb lets both
+      # fire 5 min before Build + test's own 37-min limit, covers everything else (vitest main, an idle fork, an orphaned child). gdb lets both
       # dumps record all-thread backtraces; an apt outage must not fail the job, so its install may fail.
       - name: Install gdb (stack dumps if a test process hangs)
         continue-on-error: true
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends gdb
+        run: |
+          if ! { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends gdb; }; then
+            echo "::warning::gdb install failed: a hang on this run will be dumped WITHOUT backtraces"
+            exit 1
+          fi
       - name: Arm the job-level hang dump
         run: |
           mkdir -p "$RUNNER_TEMP/hangs"
-          nohup scripts/ci/hang-dump.sh 2100 "$RUNNER_TEMP/hangs" >"$RUNNER_TEMP/hangs/hang-dump.out" 2>&1 &
+          HANG_DUMP_GDB_BUDGET=150 nohup scripts/ci/hang-dump.sh 1920 "$RUNNER_TEMP/hangs" >"$RUNNER_TEMP/hangs/hang-dump.out" 2>&1 &
           echo $! >"$RUNNER_TEMP/hang-dump.pid"
       - name: Build + test
-        # A step limit under the job's 40, so a hang fails this step and the upload below still runs.
+        # A step limit under the job's 45 (see its budget), so a hang fails this step and the upload below still runs.
         timeout-minutes: 37
         # The hillclimb lite-contract test fetches pinned upstream files; on CI a fetch failure must fail, not skip.
         env:
@@ -630,7 +645,7 @@ jobs:
         if: always()
         run: |
           pid=$(cat "$RUNNER_TEMP/hang-dump.pid" 2>/dev/null) || exit 0
-          if [ -e "$RUNNER_TEMP/hangs/.dump-started" ]; then timeout 150 tail --pid="$pid" -f /dev/null || true; else kill "$pid" 2>/dev/null || true; fi
+          if [ -e "$RUNNER_TEMP/hangs/.dump-started" ]; then timeout 60 tail --pid="$pid" -f /dev/null || true; else kill "$pid" 2>/dev/null || true; fi
       - name: Upload hang evidence and the test log (only when the test step did not pass)
         if: ${{ always() && !success() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

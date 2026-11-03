@@ -86,10 +86,11 @@ Paths inside a scenario/session resolve relative to that file (see [docs/session
 - **Consumer-visible workflow changes update the skill.** A change a scenario author would act on — a new assertion key, cassette field, CLI command, or a changed record/replay/verify workflow — must land with a matching update to `.claude/skills/cowork-harness/` (SKILL.md or `references/`). The machine-checkable slices are enforced (`test/skill-docs-sync.test.ts` pins the skill against the assertion-key catalog and the cassette schema's field list; `test/cli-help.test.ts` pins the `docs/cli.md` command table); prose workflows are on you — this checklist line exists because `effectiveFidelity` shipped consumer-visible and stayed undocumented in the skill until an external consumer flagged it.
 - **Typecheck.** `npm test` is `vitest run` — it strips types and does **not** typecheck. `tsconfig.json` covers only `src`; test files are typechecked solely by `tsconfig.test.json`, i.e. only via `npm run typecheck` (which `npm run ci` runs). After editing `src/`, run `npm run typecheck`, not just `npm test`.
 - **Format.** `npm run format:check` must pass (`npm run format:write` to fix).
-- **A test that hangs fails instead.** A synchronous child call (`spawnSync`, `execFileSync`, `execSync`) blocks its
-  vitest process, so `testTimeout` cannot fire on it. The unit lane's first setup file, `test/setup/sync-child-watchdog.ts`,
-  watches for that: past the limit it saves stack dumps, kills the stuck children, and fails the test (or the run,
-  for a hang in a hook) with the dump directory. The limit is the largest of 90 s, the test's timeout + 30 s, and the
+- **A test that hangs fails instead (macOS and Linux).** A synchronous child call (`spawnSync`, `execFileSync`,
+  `execSync`) blocks its vitest process, so `testTimeout` cannot fire on it. The unit lane's first setup file,
+  `test/setup/sync-child-watchdog.ts`, watches for that: past the limit it saves stack dumps, kills the stuck children,
+  and fails the test (or the run, for a hang in a hook) with the dump directory. It needs `ps` (and `sample` on macOS,
+  `gdb` on Linux for backtraces), so on other platforms a hang is not caught. The limit is the largest of 90 s, the test's timeout + 30 s, and the
   call's own `timeout` + 30 s, so give a sync call that can legitimately run longer than 90 s an explicit `timeout`.
   Dumps go under `COWORK_TEST_HANG_DIR` (default `<tmpdir>/cowork-test-hangs`); `COWORK_TEST_HANG_T_MS` changes the
   90 s; `COWORK_TEST_WATCHDOG=0` turns it off.

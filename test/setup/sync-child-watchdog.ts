@@ -69,7 +69,17 @@ function start(): Watchdog {
   Atomics.store(slots, BEAT, BigInt(realNow()));
   setInterval(() => Atomics.store(slots, BEAT, BigInt(realNow())), 250).unref();
   const worker = new Worker(new URL("./sync-child-watchdog-worker.mjs", import.meta.url), {
-    workerData: { sab, fileSab, pid: process.pid, runDir, baseMs, pollMs: Math.min(1000, Math.max(100, baseMs / 10)), graceMs: GRACE_MS },
+    workerData: {
+      sab,
+      fileSab,
+      pid: process.pid,
+      runDir,
+      baseMs,
+      pollMs: Math.min(1000, Math.max(100, baseMs / 10)),
+      graceMs: GRACE_MS,
+      // Test-only: see test/sync-child-watchdog.test.ts.
+      failFirstListing: process.env.COWORK_TEST_HANG_FAIL_FIRST_LISTING === "1",
+    },
   });
   // Never keep the fork alive, and never delay its exit: vitest ends a fork by terminating it.
   worker.unref();

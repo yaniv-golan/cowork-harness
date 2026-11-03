@@ -3,17 +3,18 @@
 
 /** Slot of the shared array holding the running sync call's declared timeout (ms; 0 = none). */
 export const CALL_TIMEOUT = 1;
-/** Slot holding when the running sync call started (epoch ms; 0 = no call running). */
+/** Slot holding when the running sync call started (realNow ms; 0 = no call running). */
 export const CALL_START = 5;
-/** Slot of the main thread's heartbeat (epoch ms). */
+/** Slot of the main thread's heartbeat (realNow ms). */
 export const BEAT = 0;
 
 /**
- * The real clock, captured at load. A test may fake `Date` (vi.useFakeTimers, vi.setSystemTime); the watchdog's
- * worker thread compares against its own real clock, so a faked time here would read as a huge silence (a false
- * kill) or as none (a blind watchdog).
+ * The watchdog's clock, in ms: monotonic (process.hrtime), so a suspended laptop is not silence, and captured at load,
+ * so a test that fakes `Date` or `hrtime` (vi.useFakeTimers, vi.setSystemTime) cannot move it. The worker thread
+ * reads the same clock (same process).
  */
-export const realNow: () => number = Date.now.bind(Date);
+const hrBig: () => bigint = process.hrtime.bigint.bind(process.hrtime);
+export const realNow = (): number => Number(hrBig() / 1_000_000n);
 
 /** The options object of a child_process sync call: the last plain-object argument after the command. */
 export function optionsOf(args: unknown[]): { timeout?: unknown } | undefined {
