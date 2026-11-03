@@ -52,6 +52,9 @@ function runFixture(body: string, opts: { tMs?: number; testTimeoutMs?: number; 
     COWORK_TEST_HANG_DIR: hangBase,
     COWORK_TEST_HANG_T_MS: String(opts.tMs ?? 1500),
     COWORK_TEST_HANG_GRACE_MS: "1000",
+    // CI forces colour; the assertions read plain text.
+    NO_COLOR: "1",
+    FORCE_COLOR: "0",
     ...opts.env,
   };
   delete env.COWORK_TEST_HANG_RUN_DIR;
@@ -78,7 +81,8 @@ function runFixture(body: string, opts: { tMs?: number; testTimeoutMs?: number; 
           summary: JSON.parse(readFileSync(join(hangBase, r, e, "summary.json"), "utf8")),
         })),
       );
-      done({ code, out, hangBase, events, runDirs, ms: Date.now() - t0 });
+      // eslint-disable-next-line no-control-regex
+      done({ code, out: out.replace(/\x1b\[[0-9;]*m/g, ""), hangBase, events, runDirs, ms: Date.now() - t0 });
     });
   });
 }
