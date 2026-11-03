@@ -122,11 +122,11 @@ describe("the sync-child watchdog", () => {
   }, 90_000);
 
   it("leaves a call that declares its own timeout alone, so that timeout fires first", async () => {
-    // T is 1.5 s; the call declares 3 s. Only the wrapped spawnSync tells the watchdog about the 3 s; unwrapped,
-    // the watchdog would kill the child at ~1.5 s and record an event.
+    // In a hook, so no test floor applies: the limit is T (1.5 s) unless the call declares more. The call declares
+    // 3 s. Only the wrapped spawnSync tells the watchdog about the 3 s; unwrapped, it would kill the child at ~1.5 s
+    // and record an event.
     const r = await runFixture(
-      `${IMPORTS}it("declares a timeout", () => { const s = spawnSync("sleep", ["60"], { timeout: 3000 }); expect((s.error as NodeJS.ErrnoException)?.code).toBe("ETIMEDOUT"); });\n`,
-      { testTimeoutMs: 10_000 },
+      `${IMPORTS}let code: string | undefined;\nbeforeAll(() => { code = (spawnSync("sleep", ["60"], { timeout: 3000 }).error as NodeJS.ErrnoException)?.code; }, 20_000);\nit("timed out on its own", () => { expect(code).toBe("ETIMEDOUT"); });\n`,
     );
     expect(r.code, r.out).toBe(0);
     expect(r.events).toEqual([]);
