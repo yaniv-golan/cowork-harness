@@ -2168,10 +2168,13 @@ export function coworkMemoryUsableDefect(chunk: string, at: number, callee: stri
 export function checkArtifactsMcpGuardFacts(files: Map<string, string>): string[] {
   const KEY = "CLAUDE_CODE_HOST_GUARDS_ARTIFACTS_MCP";
   const why: string[] = [];
-  const ctorRe = new RegExp(`(?<![\\w$])${KEY}(?!:\\(\\)=>)`, "g");
-  const w2Re = new RegExp(`CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS:"",${KEY}:"1"[,}]`, "g");
-  const w1Re = new RegExp(`\\.\\.\\.([\\w$]+)&&([\\w$]+)!==void 0&&\\{CLAUDE_ARTIFACT_HOST_GRANT:\\2,${KEY}:"0"\\}`, "g");
-  const codeRe = new RegExp(`![\\w$.]+\\.supportsLaunchTools\\(\\)\\|\\|[\\w$]+\\?([\\w$.]+)\\.env&&\\(\\1\\.env\\.${KEY}="0"\\)`, "g");
+  const ctorRe = new RegExp(`(?<![\\w$])${reEsc(KEY)}(?!:\\(\\)=>)`, "g");
+  const w2Re = new RegExp(`CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS:"",${reEsc(KEY)}:"1"[,}]`, "g");
+  const w1Re = new RegExp(`\\.\\.\\.([\\w$]+)&&([\\w$]+)!==void 0&&\\{CLAUDE_ARTIFACT_HOST_GRANT:\\2,${reEsc(KEY)}:"0"\\}`, "g");
+  const codeRe = new RegExp(
+    `![\\w$.]+\\.supportsLaunchTools\\(\\)\\|\\|[\\w$]+\\?([\\w$.]+)\\.env&&\\(\\1\\.env\\.${reEsc(KEY)}="0"\\)`,
+    "g",
+  );
   let ctors = 0;
   const found = { w2: 0, w1: 0, code: 0 };
   for (const chunk of files.values()) {
@@ -5817,11 +5820,13 @@ export const S14A_EMPTY_SENTINEL_KEYS: readonly string[] = [
   "CLAUDE_CODE_SESSIONS_OAUTH_TOKEN",
 ];
 
-/** Every `for(<kw> <v> of["ANTHROPIC_API_KEY",…])<e>[<v>]===""&&delete <e>[<v>]` loop: the member lists, in order.
+/** Every `for(<kw> <v> of["ANTHROPIC_API_KEY",…])<e>[<v>]===""&&delete <e>[<v>]` loop (or its `if(…)delete` form,
+ *  as an unminified build writes it): the member lists, in order.
  *  The loop BODY is part of the match, so another loop over a list that happens to start with the same key (a scrub
  *  list, a header list) is not taken for the helper. */
 export function s14aEmptySentinelLists(bundle: string): string[][] {
-  const re = /for\((?:const|let|var) ([\w$]+) of\s*\[("ANTHROPIC_API_KEY"(?:,"[A-Z0-9_]+")*)\]\)([\w$]+)\[\1\]===""&&delete \3\[\1\]/g;
+  const re =
+    /for\((?:const|let|var) ([\w$]+) of\s*\[("ANTHROPIC_API_KEY"(?:,"[A-Z0-9_]+")*)\]\)(?:([\w$]+)\[\1\]===""&&delete \3\[\1\]|if\(([\w$]+)\[\1\]===""\)delete \4\[\1\])/g;
   return [...bundle.matchAll(re)].map((m) => m[2]!.split(",").map((s) => s.slice(1, -1)));
 }
 
