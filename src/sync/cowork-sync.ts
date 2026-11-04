@@ -3787,7 +3787,7 @@ function readPromptFingerprintsFile(): PromptFingerprintsFile | null {
 /** One committed fingerprint entry. `hl`/`vm` are the ternary branch texts; `manifest`/`suffix` are the
  *  two parts composed AFTER the overridable section (Desktop >=1.46388.3) — absent on older entries,
  *  which is why only the NEWEST entry is ever compared and only its OWN axes are mandatory. */
-export type SubagentFingerprintEntry = { hl: string; vm: string; manifest?: string; suffix?: string; note?: string };
+export type SubagentFingerprintEntry = { hl: string; vm: string; manifest?: string; suffix?: string; retry?: string; note?: string };
 
 /** subagentAppendVersions map from cowork-system-prompt-fingerprints.json; null = unreadable/absent
  *  (checkSubagentPromptFacts turns that into a hard-fail flag — never a silent skip). */
@@ -4097,6 +4097,10 @@ export function extractSubagentComposition(files: Map<string, string>): {
   generator?: { name: string; params: string[] };
   /** Whether the generator source renders anything read-only (check 7c then requires the 1p gate). */
   readOnly?: { listParam: string } | "unrecognized";
+  /** Desktop >=4.16336.0: the host-loop-only "Workspace still starting" retry part between the manifest and the
+   *  suffix. `gate` is the binding the part is rendered under (check 7b requires the generator's hostLoopMode);
+   *  `text` is its prose (base sentence, then the download-status text), or `unrecognized` names what failed. */
+  retry?: { gate: string; text: string } | { gate: string; unrecognized: string };
 } | null {
   const module = [...files.values()].find((c) => c.includes("exist only in the sandbox"));
   if (!module) return null;
@@ -4138,9 +4142,13 @@ export function extractSubagentComposition(files: Map<string, string>): {
   // this module's own `<ident>="…"` binding. Never matched by name.
   // The manifest call admits one level of nested parentheses: 3.1623.4 passes `<ns>.<id>(<folders>??[])` as a
   // sixth argument.
-  const comp = module.match(/return`\\n\\n\$\{[\w$.]+\([\s\S]{0,200}?\}\$\{[\w$]+\?[\w$]+\((?:[^()]|\([^()]*\))*\):""\}\$\{([\w$]+)\}`/);
+  // 4.16336.0 inserts an optional host-loop-only part before the suffix: `${<hl>?`\n\n${<retry>()}`:""}`.
+  const comp = module.match(
+    /return`\\n\\n\$\{[\w$.]+\([\s\S]{0,200}?\}\$\{[\w$]+\?[\w$]+\((?:[^()]|\([^()]*\))*\):""\}(?:\$\{([\w$]+)\?`\\n\\n\$\{([\w$]+)\(\)\}`:""\})?\$\{([\w$]+)\}`/,
+  );
   if (!comp) return null;
-  const decl = module.match(new RegExp(`(?<![\\w$])${reEsc(comp[1])}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
+  const retry = comp[1] !== undefined ? subagentRetryPart(module, comp[1], comp[2]!, files) : undefined;
+  const decl = module.match(new RegExp(`(?<![\\w$])${reEsc(comp[3]!)}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
   if (!decl) return null;
   const sig = /^function ([\w$]+)\(([^)]*)\)/.exec(fnSrc);
   const generator = sig ? { name: sig[1]!, params: sig[2]!.split(",").filter(Boolean) } : undefined;
@@ -4154,7 +4162,40 @@ export function extractSubagentComposition(files: Map<string, string>): {
     ...(defaultArm !== undefined ? { defaultArm, predicate } : {}),
     ...(generator ? { generator } : {}),
     ...(readOnly ? { readOnly } : {}),
+    ...(retry ? { retry } : {}),
   };
+}
+
+/** The sub-agent's retry part (Desktop >=4.16336.0): `function <f>(){let <e>='<base>';return <g>("1978029737",
+ *  "workspaceBashDownloadStatus",!1,<x>())?`${<e>}; ${<status>}`:`${<e>}.`}`. The gate id, field and default are
+ *  pinned, the status text is resolved through the module's own require binding to a string or template literal,
+ *  and each `${<id>}` inside that template to a string in the same chunk (one hop). Anything else is reported as
+ *  unrecognized rather than guessed. */
+function subagentRetryPart(
+  module: string,
+  gate: string,
+  fn: string,
+  files: Map<string, string>,
+): { gate: string; text: string } | { gate: string; unrecognized: string } {
+  const shape = new RegExp(
+    `function ${reEsc(fn)}\\(\\)\\{let ([\\w$]+)=(["'])((?:(?!\\2)[^\\\\]|\\\\.)*)\\2;return [\\w$.]+\\("1978029737","workspaceBashDownloadStatus",!1,[\\w$.]+\\(\\)\\)\\?\`\\$\\{\\1\\}; \\$\\{([\\w$]+(?:\\.[\\w$]+)?)\\}\`:\`\\$\\{\\1\\}\\.\`\\}`,
+  ).exec(module);
+  if (!shape)
+    return {
+      gate,
+      unrecognized: `${fn}() is no longer the base sentence plus the download-status text under gate 1978029737 workspaceBashDownloadStatus (default off)`,
+    };
+  const ref = resolveNamespaceRef(shape[4]!, module, files);
+  const lit = ref && new RegExp(`(?<![\\w$.])${reEsc(ref.local)}=(?:"((?:[^"\\\\]|\\\\.)*)"|\`([^\`]*)\`)`).exec(ref.chunk);
+  if (!ref || !lit) return { gate, unrecognized: `the download-status text ${shape[4]} does not resolve to a string` };
+  let status = lit[1] ?? lit[2]!;
+  if (lit[2] !== undefined)
+    for (const m of [...lit[2].matchAll(/\$\{([\w$]+)\}/g)]) {
+      const v = new RegExp(`(?<![\\w$.])${reEsc(m[1]!)}="((?:[^"\\\\]|\\\\.)*)"`).exec(ref.chunk);
+      if (!v) return { gate, unrecognized: `the download-status text interpolates ${m[1]}, which is not a string in its module` };
+      status = status.replace(m[0], v[1]!);
+    }
+  return { gate, text: `${shape[3]}\u0000${status}` };
 }
 
 /** The code that makes a scheduled-task session differ from an ordinary one (Desktop >=2.42304.0). An observation
@@ -4684,6 +4725,20 @@ export function checkSubagentPromptFacts(
       )
         roMiss(`the reader ${feed[1]} no longer returns [] first on a non-3p deployment — a 1p sub-agent may now get read-only markers`);
     }
+    // (7d) Desktop 4.16336.0's host-loop-only retry part. It must render under the generator's own hostLoopMode
+    //      parameter (the main-loop shell section carries the same sentence, and a VM-loop sub-agent is told nothing
+    //      about a workspace starting), and its text is fingerprinted as its own axis.
+    let retryFp: string | undefined;
+    if (comp.retry) {
+      const hlParam = /\(\{vmProcessName:[\w$]+,hostLoopMode:([\w$]+)[,}]/.exec(comp.module);
+      if (!hlParam || comp.retry.gate !== hlParam[1])
+        miss(
+          "retry part gate",
+          `the "Workspace still starting" part renders under ${comp.retry.gate}, not the generator's hostLoopMode parameter${hlParam ? ` ${hlParam[1]}` : ""} — a VM-loop sub-agent may now get it`,
+        );
+      if ("unrecognized" in comp.retry) miss("retry part text", comp.retry.unrecognized);
+      else retryFp = subagentBranchFingerprint(comp.retry.text);
+    }
     const manifestFp = subagentBranchFingerprint(comp.manifest);
     const suffixFp = subagentBranchFingerprint(comp.suffix);
     if (committedNewest) {
@@ -4707,6 +4762,20 @@ export function checkSubagentPromptFacts(
       if (!declares)
         flags.push(
           `subagent-append: the build carries composed append parts (manifest ${manifestFp}, suffix ${suffixFp}) but the newest committed entry ${committedNewest.version} records neither — record them or a change to either ships unguarded`,
+        );
+      // The retry axis both ways: a build that carries the part needs a recorded fingerprint, and a recorded one
+      // that the build no longer carries means the harness still sends a part production dropped.
+      if (retryFp !== undefined && want.retry === undefined)
+        flags.push(
+          `subagent-append: the build carries the host-loop retry part (${retryFp}) but the newest committed entry ${committedNewest.version} does not record it — record it or a change to it ships unguarded`,
+        );
+      else if (typeof want.retry === "string" && retryFp !== undefined && want.retry !== retryFp)
+        flags.push(
+          `subagent-append: host-loop retry-part fingerprint drifted vs ${committedNewest.version} (${want.retry} -> ${retryFp}) — update the paraphrase in src/prompt/subagent-manifest.ts, then add a new version entry`,
+        );
+      else if (typeof want.retry === "string" && !comp.retry)
+        flags.push(
+          `subagent-append: the newest committed entry ${committedNewest.version} records a host-loop retry part but the build carries none — the harness still sends it; remove it from the composition`,
         );
     }
   }

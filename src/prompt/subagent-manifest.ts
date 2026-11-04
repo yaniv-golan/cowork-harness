@@ -70,6 +70,22 @@ export const SUBAGENT_SKILL_SENTENCE =
   "\n\nTo use a skill — including one that comes from a plugin — call the `Skill` tool with the skill's name. " +
   "A plugin skill's name has the form `plugin-name:skill-name`.";
 
+/** Desktop 4.16336.0 and later: the host-loop sub-agent append gains a third part, after the manifest and before
+ *  the skill sentence. Paraphrased, like every prompt text here; the main-loop shell section
+ *  (src/runtime/hostloop-prompt.ts) carries the same base instruction separately. The quoted error prefixes are
+ *  what the workspace bash tool returns, so they stay verbatim. */
+export const SUBAGENT_RETRY_MIN_VERSION = "4.16336.0";
+const SUBAGENT_RETRY_BASE = 'When bash fails with "Workspace still starting", give it a few seconds and try again';
+const SUBAGENT_RETRY_DOWNLOAD_STATUS =
+  'if the error starts with "Workspace still downloading", hold off on bash until the download can finish and work ' +
+  "with the file tools in the meantime; if bash is needed sooner, let the user know the command environment is " +
+  "still being fetched, estimate the time remaining, and suggest they retry once it is ready.";
+
+/** The retry part. `downloadStatus` is gate 1978029737 field `workspaceBashDownloadStatus` (production default off). */
+export function subagentRetryPart(downloadStatus: boolean): string {
+  return `\n\n${downloadStatus ? `${SUBAGENT_RETRY_BASE}; ${SUBAGENT_RETRY_DOWNLOAD_STATUS}` : `${SUBAGENT_RETRY_BASE}.`}`;
+}
+
 /**
  * Render the host-loop folder manifest. Mirrors `Bd`, including its two prose variants: the list
  * variant when there is anything to list, and the no-list variant when there is not.
@@ -128,7 +144,7 @@ export function subagentGeneratedPromptText(): string {
     ],
   });
   const emptyVariant = generateSubagentFolderManifest({ vmCwd: P, hostCwd: P, folders: [] });
-  // Between them these two cover every constant this module can emit: both prose variants and all
-  // three line shapes (outputs, reachable, unreachable), plus the trailing sentence.
-  return [listVariant, emptyVariant, SUBAGENT_SKILL_SENTENCE].join("\u0001");
+  // Between them these cover every constant this module can emit: both prose variants and all
+  // three line shapes (outputs, reachable, unreachable), both arms of the retry part, plus the trailing sentence.
+  return [listVariant, emptyVariant, subagentRetryPart(false), subagentRetryPart(true), SUBAGENT_SKILL_SENTENCE].join("\u0001");
 }

@@ -2,8 +2,15 @@ import { warn } from "./io.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveMounts } from "./baseline.js";
-import { generateSubagentFolderManifest, SUBAGENT_SKILL_SENTENCE, type SubagentManifestFolder } from "./prompt/subagent-manifest.js";
+import { cmpVersionStrings, resolveMounts } from "./baseline.js";
+import { readGateFlag } from "./loop-decision.js";
+import {
+  generateSubagentFolderManifest,
+  SUBAGENT_RETRY_MIN_VERSION,
+  SUBAGENT_SKILL_SENTENCE,
+  subagentRetryPart,
+  type SubagentManifestFolder,
+} from "./prompt/subagent-manifest.js";
 import type { PlatformBaseline } from "./types.js";
 import type { SessionConfig } from "./session.js";
 
@@ -219,7 +226,7 @@ export function renderPrompts(
   };
   const isProtocol = opts.effectiveFidelity === "protocol";
   /** Mirrors production's composition (Desktop >=1.46388.3):
-   *    section  +  (hostLoopMode ? folderManifest : "")  +  skillSentence
+   *    section  +  (hostLoopMode ? folderManifest : "")  +  (hostLoopMode ? retryPart : "", >=4.16336.0)  +  skillSentence
    *  The section is the only overridable part; the other two are appended after it in code. Before
    *  1.46388.3 the append WAS just the section, which is why the asset alone used to be the whole
    *  thing — see the header of the 1.46388.3 hl asset. */
@@ -234,7 +241,12 @@ export function renderPrompts(
           folders: opts.subagentFolders ?? [],
         })
       : "";
-    return (section + manifest + SUBAGENT_SKILL_SENTENCE).trim();
+    // Its arm follows the baseline's recorded gate; the rendered append, and so the arm, is in control-out.jsonl.
+    const retry =
+      isHostLoop && cmpVersionStrings(baseline.appVersion, SUBAGENT_RETRY_MIN_VERSION) >= 0
+        ? subagentRetryPart(readGateFlag(baseline, "1978029737", "workspaceBashDownloadStatus", false))
+        : "";
+    return (section + manifest + retry + SUBAGENT_SKILL_SENTENCE).trim();
   };
   const readSubagentAppend = (): string | undefined => {
     if (isProtocol) return undefined; // decided divergence: neither branch text is true on protocol topology

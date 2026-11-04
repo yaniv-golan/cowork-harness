@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { generateSubagentFolderManifest, subagentGeneratedPromptText, SUBAGENT_SKILL_SENTENCE } from "../src/prompt/subagent-manifest.js";
+import {
+  generateSubagentFolderManifest,
+  subagentGeneratedPromptText,
+  subagentRetryPart,
+  SUBAGENT_SKILL_SENTENCE,
+} from "../src/prompt/subagent-manifest.js";
 import { renderPrompts } from "../src/prompt.js";
 import { loadBaseline } from "../src/baseline.js";
 import { SessionConfig } from "../src/session.js";
@@ -143,5 +148,63 @@ describe("renderPrompts — composed sub-agent append (Desktop >= 1.46388.3)", (
     const sectionOnly = out.slice(0, out.indexOf("Read, Write, Edit, Glob, Grep"));
     expect(sectionOnly).toContain("/sessions/vm_abc");
     expect(sectionOnly, "the host cwd moved OUT of the overridable section at 1.46388.3").not.toContain(hostCwd);
+  });
+});
+
+// Desktop 4.16336.0: a third, host-loop-only part between the manifest and the skill sentence, whose arm follows
+// gate 1978029737 field workspaceBashDownloadStatus. No 4.16336.0 baseline exists yet at this commit, so the
+// 4.4212.0 baseline is re-versioned and its gate value set explicitly.
+describe("renderPrompts — sub-agent retry part (Desktop >= 4.16336.0)", () => {
+  const session = SessionConfig.parse({});
+  const sessionId = "vm_abc";
+  const hostCwd = "/Users/x/run/work/session/mnt/outputs";
+  const withGate = (appVersion: string, downloadStatus: boolean | undefined) => {
+    const b = structuredClone(loadBaseline("desktop-4.4212.0")) as unknown as {
+      appVersion: string;
+      provenance: { gates: Record<string, { value?: Record<string, unknown> }> };
+    };
+    b.appVersion = appVersion;
+    const key = Object.keys(b.provenance.gates).find((k) => k === "1978029737" || k.endsWith(":1978029737"))!;
+    const value = { ...(b.provenance.gates[key]!.value ?? {}) };
+    if (downloadStatus === undefined) delete value.workspaceBashDownloadStatus;
+    else value.workspaceBashDownloadStatus = downloadStatus;
+    b.provenance.gates[key] = { ...b.provenance.gates[key], value };
+    return b as unknown as ReturnType<typeof loadBaseline>;
+  };
+  const render = (b: ReturnType<typeof loadBaseline>, effectiveFidelity: "hostloop" | "container") =>
+    renderPrompts(b, session, sessionId, "project", {
+      effectiveFidelity,
+      ...(effectiveFidelity === "hostloop" ? { hostCwd, hostOutputsDir: hostCwd, subagentFolders: [] } : {}),
+    }).subagentAppend!;
+
+  it("host-loop: manifest THEN retry part THEN the skill sentence", () => {
+    const out = render(withGate("4.16336.0", true), "hostloop");
+    const manifest = out.indexOf("Read, Write, Edit, Glob, Grep");
+    const retry = out.indexOf('"Workspace still starting"');
+    const suffix = out.indexOf("call the `Skill` tool");
+    expect(manifest).toBeGreaterThanOrEqual(0);
+    expect(retry).toBeGreaterThan(manifest);
+    expect(suffix).toBeGreaterThan(retry);
+    expect(out).toContain(subagentRetryPart(true));
+  });
+
+  it("the arm follows the recorded gate; an absent field takes production's default (off)", () => {
+    expect(render(withGate("4.16336.0", true), "hostloop")).toContain('"Workspace still downloading"');
+    for (const v of [false, undefined]) {
+      const out = render(withGate("4.16336.0", v), "hostloop");
+      expect(out).toContain(subagentRetryPart(false));
+      expect(out).not.toContain("Workspace still downloading");
+    }
+  });
+
+  it("VM tiers never get it; nor does a baseline older than 4.16336.0", () => {
+    expect(render(withGate("4.16336.0", true), "container")).not.toContain("Workspace still starting");
+    expect(render(withGate("4.4212.0", true), "hostloop")).not.toContain("Workspace still starting");
+  });
+
+  it("both arms are in the cassette-staleness text", () => {
+    const text = subagentGeneratedPromptText();
+    expect(text).toContain(subagentRetryPart(false));
+    expect(text).toContain(subagentRetryPart(true));
   });
 });

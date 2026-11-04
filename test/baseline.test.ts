@@ -5767,3 +5767,61 @@ describe("checkScheduledSessionFacts — scheduled-session sentinel", () => {
     expect(checkScheduledSessionFacts(files)).toEqual([]);
   });
 });
+
+// Desktop 4.16336.0: the host-loop-only retry part between the manifest and the trailing sentence. Synthetic shapes.
+describe("checkSubagentPromptFacts — host-loop retry part (Desktop >= 4.16336.0)", () => {
+  const RETRY_FN =
+    'const DL="Workspace still downloading",ST=`once the error opens with "${DL}", synthetic download-status text.`;' +
+    "function qa(){let e='When bash fails with \"Workspace still starting\", synthetic retry';" +
+    'return G("1978029737","workspaceBashDownloadStatus",!1,C())?`${e}; ${ST}`:`${e}.`}';
+  const withRetry = (o: { gate?: string; fn?: string } = {}) => {
+    const base = subagentBundle();
+    const src = (o.fn ?? RETRY_FN) + base.replace("${SUF}`}", `\${${o.gate ?? "h"}?\`\\n\\n\${qa()}\`:""}\${SUF}\`}`);
+    expect(src, "the retry part was not spliced in").toContain("${qa()}");
+    return new Map([["index.chunk-gen.js", src]]);
+  };
+  const clean = extractSubagentBranchSlices(genFiles())!;
+  const comp = extractSubagentComposition(genFiles())!;
+  const entry = {
+    hl: subagentBranchFingerprint(clean.hl),
+    vm: subagentBranchFingerprint(clean.vm),
+    manifest: subagentBranchFingerprint(comp.manifest),
+    suffix: subagentBranchFingerprint(comp.suffix),
+  };
+  const retryComp = extractSubagentComposition(withRetry())!;
+
+  it("slices the part, resolving the status text and its interpolation", () => {
+    expect(retryComp.retry).toEqual({
+      gate: "h",
+      text: 'When bash fails with "Workspace still starting", synthetic retry\u0000once the error opens with "Workspace still downloading", synthetic download-status text.',
+    });
+    expect(retryComp.manifest).toBe(comp.manifest);
+    expect(retryComp.suffix).toBe(comp.suffix);
+  });
+  it("clean when the newest entry records it; flags when it does not", () => {
+    const fp = subagentBranchFingerprint((retryComp.retry as { text: string }).text);
+    expect(checkSubagentPromptFacts(withRetry(), { versions: { "4.16336.0": { ...entry, retry: fp } } })).toEqual([]);
+    expect(checkSubagentPromptFacts(withRetry(), { versions: { "4.16336.0": entry } }).join("\n")).toMatch(/does not record it/);
+  });
+  it("flags a drifted text, and a recorded part the build no longer carries", () => {
+    expect(checkSubagentPromptFacts(withRetry(), { versions: { v: { ...entry, retry: "0000000000000000" } } }).join("\n")).toMatch(
+      /retry-part fingerprint drifted/,
+    );
+    expect(checkSubagentPromptFacts(genFiles(), { versions: { v: { ...entry, retry: "0000000000000000" } } }).join("\n")).toMatch(
+      /build carries none/,
+    );
+  });
+  it.each([
+    ["rendered under another binding than hostLoopMode", { gate: "od" }, /retry part gate/],
+    ["a different gate id", { fn: RETRY_FN.replace('"1978029737"', '"1978029738"') }, /retry part text/],
+    ["the gate default flipped on", { fn: RETRY_FN.replace(",!1,C()", ",!0,C()") }, /retry part text/],
+    ["a status text that is not a string", { fn: RETRY_FN.replace("ST=`", "ST=f(`").replace("text.`;", "text.`);") }, /retry part text/],
+    [
+      "an interpolation that does not resolve",
+      { fn: RETRY_FN.replace('const DL="Workspace still downloading",', "const ") },
+      /interpolates DL/,
+    ],
+  ])("flags: %s", (_n, o, why) => {
+    expect(checkSubagentPromptFacts(withRetry(o), { versions: { v: entry } }).join("\n")).toMatch(why);
+  });
+});
