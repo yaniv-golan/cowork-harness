@@ -6,6 +6,13 @@ import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import * as acorn from "acorn";
 import { BASELINES_DIR, cmpVersionStrings } from "../baseline.js";
+import {
+  checkHostLoopPermissionKeys,
+  fenceFloorFlag,
+  permissionsSchemaKeys,
+  readHostLoopFence,
+  type HostLoopFence,
+} from "./hostloop-fence.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../prompt.js";
 import {
   ObservedSpawnEnv,
@@ -50,6 +57,8 @@ export interface SyncResult {
   allowDomains: string[];
   /** Hosts web_fetch's Path B refuses even when allowlisted, read from this build; null = the build has no such step. */
   webFetchVendorDeny: string[] | null;
+  /** The host-loop CLI fence's version floor (src/sync/hostloop-fence.ts); null = this build has no fence. */
+  hostLoopFence: HostLoopFence | null;
   networkMode: string | null;
   requireFullVmSandbox: unknown;
   asarFingerprint: string;
@@ -959,8 +968,20 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
     spawnEnvProducer,
     cloud,
     webFetchVendorDeny,
+    hostLoopFence,
+    hostLoopFenceWriters,
     notes,
   } = extractFromAsar(unknown, gates, appVersion);
+  // The fence: monotonic — from HOSTLOOP_FENCE_MIN_VERSION on, a build must carry it, and a missing read
+  // refuses the write rather than recording "no fence". Its permissions-key tripwire reads the agent's own settings
+  // schema from the staged VM agent binary.
+  const floor = fenceFloorFlag(appVersion, hostLoopFence);
+  if (floor) flag(unknown, floor);
+  if (hostLoopFenceWriters.length > 0) {
+    const elfPath = agentVersion ? join(SUPPORT, "claude-code-vm", agentVersion, "claude") : "";
+    const elf = elfPath && existsSync(elfPath) ? readFileSync(elfPath) : null;
+    for (const f of checkHostLoopPermissionKeys(hostLoopFenceWriters, elf ? permissionsSchemaKeys(elf) : null)) flag(unknown, f);
+  }
 
   // 6. Desktop's own server tool surface, from real Desktop init frames of THIS release (see
   // desktop-init-surface.ts). An unobserved surface is a WARNING, never an unknown delta: every Desktop
@@ -1036,6 +1057,7 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
     agentVersion,
     allowDomains,
     webFetchVendorDeny,
+    hostLoopFence,
     networkMode,
     requireFullVmSandbox,
     asarFingerprint: fingerprint,
@@ -1780,6 +1802,9 @@ function extractFromAsar(
   /** web_fetch Path B vendor-host refusal list (`checkWebFetchVendorFacts`); null when the build has no such step or
    *  the bundle could not be read. */
   webFetchVendorDeny: string[] | null;
+  hostLoopFence: HostLoopFence | null;
+  /** The fence writers the permissions-key tripwire scans (empty when there is no fence). */
+  hostLoopFenceWriters: string[];
   notes: string[];
 } {
   if (!existsSync(ASAR)) {
@@ -1798,6 +1823,8 @@ function extractFromAsar(
       spawnEnvProducer: null,
       cloud: null,
       webFetchVendorDeny: null,
+      hostLoopFence: null,
+      hostLoopFenceWriters: [],
       notes: [],
     };
   }
@@ -1822,6 +1849,8 @@ function extractFromAsar(
     const vendor = checkWebFetchVendorFacts(bundleFiles);
     for (const f of vendor.flags) flag(unknown, f);
     const webFetchVendorDeny = vendor.flags.length ? null : vendor.vendorDeny;
+    const fenceRead = readHostLoopFence(bundleFiles);
+    for (const f of fenceRead.flags) flag(unknown, f);
     for (const f of checkPathHookFacts(bundleFiles)) flag(unknown, f);
     for (const f of checkSyspromptMapFacts(bundleFiles)) flag(unknown, f);
     // Code-shape tripwires (getMcpSkillSources caller, MCP-skills cap) — deltas hard-fail, NOTEs inform.
@@ -1902,6 +1931,8 @@ function extractFromAsar(
       spawnEnvProducer: bundleHasSpawnEnvProducer(bundle),
       cloud,
       webFetchVendorDeny,
+      hostLoopFence: fenceRead.fence,
+      hostLoopFenceWriters: fenceRead.writers,
       notes: [...notes, ...postWriteNotes, ...promptDrift.notes, ...tripwireNotes, ...cloudNotes],
     };
   } catch (e) {
@@ -1920,6 +1951,8 @@ function extractFromAsar(
       spawnEnvProducer: null,
       cloud: null,
       webFetchVendorDeny: null,
+      hostLoopFence: null,
+      hostLoopFenceWriters: [],
       notes: [],
     };
   } finally {

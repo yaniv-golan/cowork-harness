@@ -3655,7 +3655,7 @@ async function cmdSync(args: string[]) {
   const next = withSyncedCloudBlock(
     {
       ...(base as Record<string, unknown>),
-      $comment: `Platform baseline auto-derived by \`cowork-harness sync\` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured ${capturedAt} on macOS arm64.`,
+      $comment: `Platform baseline auto-derived by \`cowork-harness sync\` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. \`hostLoopFence\` is re-read from the asar each sync (null before Desktop 4.16336.0). Captured ${capturedAt} on macOS arm64.`,
       baselineVersion: 1,
       appVersion: res.appVersion,
       capturedAt,
@@ -3668,6 +3668,7 @@ async function cmdSync(args: string[]) {
         res.webFetchVendorDeny,
       ),
       requireFullVmSandbox: res.requireFullVmSandbox,
+      hostLoopFence: res.hostLoopFence,
       // spawn.env AND spawn.effortByModel/effortRegexDefault are the GENERATED tier: re-derived from the asar
       // each sync, canonically ordered so a benign source-reorder is a zero-line diff. All the hand-curated
       // spawn fields (tools, allowedTools, scalars, prompt pointers, $comment*) carry forward from base

@@ -401,6 +401,15 @@ export function renderChangelog(allEntries: BaselineDiffEntry[], next?: unknown)
         : e.kind === "added"
           ? `- \`requireFullVmSandbox\` introduced: \`${e.to}\``
           : undefined,
+    hostLoopFence: (e) =>
+      e.kind === "added"
+        ? `- host-loop CLI fence introduced: \`${JSON.stringify(e.to)}\``
+        : e.kind === "removed"
+          ? "- host-loop CLI fence removed"
+          : e.kind === "scalar"
+            ? `- host-loop CLI fence: \`${JSON.stringify(e.from)}\` → \`${JSON.stringify(e.to)}\``
+            : undefined,
+    "hostLoopFence.minCli": (e) => (e.kind === "scalar" ? `- host-loop CLI fence floor: \`${e.from}\` → \`${e.to}\`` : undefined),
     "provenance.asarFingerprint": (e) =>
       e.kind === "scalar" ? `- cowork-relevant asar regions changed (fingerprint \`${e.from}\` → \`${e.to}\`)` : undefined,
     capturedAt: (e) => (e.kind === "scalar" ? `- baseline captured: \`${e.from}\` → \`${e.to}\`` : undefined),
