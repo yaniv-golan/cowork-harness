@@ -1817,6 +1817,7 @@ function extractFromAsar(
     // mode FACTS still hold so a policy change is a loud flag, not silent baseline rot.
     for (const f of checkMountModeFacts(bundle, bundleFiles)) flag(unknown, f);
     for (const f of checkAutoMemoryFacts(bundleFiles)) flag(unknown, f);
+    for (const f of checkArtifactsMcpGuardFacts(bundleFiles)) flag(unknown, f);
     for (const f of checkWebFetchFacts(bundle)) flag(unknown, f);
     const vendor = checkWebFetchVendorFacts(bundleFiles);
     for (const f of vendor.flags) flag(unknown, f);
@@ -2152,6 +2153,54 @@ export function coworkMemoryUsableDefect(chunk: string, at: number, callee: stri
  * churn); the gate-id literal and the arm structure carry the meaning. The no-account/org guard is not pinned:
  * it returns null, which is already the disabled outcome.
  */
+/** The env key that lets agent >=2.1.317 attach its own claude.ai Artifacts MCP server (Desktop >=4.16336.0). The
+ *  harness leaves it unset on purpose, so the agent keeps skipping that server and a harness run cannot write to the
+ *  operator's real Artifacts (registry: deliberately-unset). That choice is safe to keep only while production's own
+ *  constructions are the three below, so each is pinned by shape and every construction is counted bundle-wide,
+ *  with the env-key export tables (`KEY:()=>local`) excluded:
+ *   W2   the base env builder sets it "1", right after `CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS:""`;
+ *   W1   the Cowork spawn overrides it to "0" alongside the artifact host grant, under the SAME predicate the
+ *        chunk's frame-artifacts key spreads under (`...<p>&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"}`);
+ *   Code the Code tab sets it "0" on its own env when it cannot launch tools.
+ *  A fourth construction, a changed value, or an override that loses its predicate flags: an unconditional "0" on
+ *  the Cowork spawn would make "unset" production's behaviour by accident, which must be reviewed, not passed.
+ *  A bundle that never constructs the key (Desktop <4.16336.0) has nothing to guard. */
+export function checkArtifactsMcpGuardFacts(files: Map<string, string>): string[] {
+  const KEY = "CLAUDE_CODE_HOST_GUARDS_ARTIFACTS_MCP";
+  const why: string[] = [];
+  const ctorRe = new RegExp(`(?<![\\w$])${KEY}(?!:\\(\\)=>)`, "g");
+  const w2Re = new RegExp(`CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS:"",${KEY}:"1"[,}]`, "g");
+  const w1Re = new RegExp(`\\.\\.\\.([\\w$]+)&&([\\w$]+)!==void 0&&\\{CLAUDE_ARTIFACT_HOST_GRANT:\\2,${KEY}:"0"\\}`, "g");
+  const codeRe = new RegExp(`![\\w$.]+\\.supportsLaunchTools\\(\\)\\|\\|[\\w$]+\\?([\\w$.]+)\\.env&&\\(\\1\\.env\\.${KEY}="0"\\)`, "g");
+  let ctors = 0;
+  const found = { w2: 0, w1: 0, code: 0 };
+  for (const chunk of files.values()) {
+    ctors += [...chunk.matchAll(ctorRe)].length;
+    found.w2 += [...chunk.matchAll(w2Re)].length;
+    found.code += [...chunk.matchAll(codeRe)].length;
+    for (const m of chunk.matchAll(w1Re)) {
+      found.w1++;
+      const frame = [...chunk.matchAll(/\.\.\.([\w$]+)&&\{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"\}/g)].map((f) => f[1]);
+      if (frame.length !== 1 || frame[0] !== m[1])
+        why.push(
+          `the Cowork spawn's "0" override is spread under ${m[1]}, not the chunk's one frame-artifacts predicate (${frame.join(", ") || "none"})`,
+        );
+    }
+  }
+  if (ctors === 0) return [];
+  for (const [site, n] of Object.entries(found))
+    if (n !== 1)
+      why.push(
+        `${n} ${site === "w2" ? 'base-builder "1"' : site === "w1" ? 'Cowork-spawn "0" override' : 'Code-tab "0"'} site(s), expected 1`,
+      );
+  if (ctors !== found.w2 + found.w1 + found.code)
+    why.push(`${ctors} construction(s) in the bundle but ${found.w2 + found.w1 + found.code} in a pinned shape — one is new or reshaped`);
+  return why.map(
+    (w) =>
+      `artifacts-mcp: ${w} — the harness leaves ${KEY} unset so the agent skips its own Artifacts server; re-check that choice and the deliberately-unset row (src/sync/spawn-env-registry.ts)`,
+  );
+}
+
 export function checkAutoMemoryFacts(files: Map<string, string>): string[] {
   const chunks = [...files.values()];
   const count = (re: RegExp) => chunks.reduce((n, c) => n + (c.match(re)?.length ?? 0), 0);

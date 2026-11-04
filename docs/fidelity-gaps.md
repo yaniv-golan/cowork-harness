@@ -25,7 +25,7 @@ Every `##` below is one gap (or one scoping note). Grouped, since there are 41 o
 
 - **Read first** — [Which Cowork LANE this harness models](#which-cowork-lane-this-harness-models--read-first-it-scopes-everything-below) · [Fidelity tier differences](#fidelity-tier-differences)
 - **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [A workspace fixture starts with a fresh conversation](#a-workspace-fixture-starts-with-a-fresh-conversation) · [Deletes in `outputs/` follow the baseline's recorded mount mode](#deletes-in-outputs-follow-the-baselines-recorded-mount-mode) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
-- **Files & delivery** — [Artifacts](#artifacts--two-mechanisms-neither-modeled) · [File delivery](#file-delivery--present_files-here-senduserfile-on-remote-cowork) · [Browser↔webview↔human-interaction boundary (interactive artifacts)](#browserwebviewhuman-interaction-boundary-interactive-artifacts)
+- **Files & delivery** — [Artifacts](#artifacts--two-mechanisms-neither-modeled) · [The agent's own Artifacts server is not attached](#the-agents-own-artifacts-server-is-not-attached) · [File delivery](#file-delivery--present_files-here-senduserfile-on-remote-cowork) · [Browser↔webview↔human-interaction boundary (interactive artifacts)](#browserwebviewhuman-interaction-boundary-interactive-artifacts)
 - **Tools, skills & plugins** — [A plugin's declared MCP servers run here; production stubs them conditionally](#a-plugins-declared-mcp-servers-run-here-production-stubs-them-under-conditions-the-harness-cannot-see) · [Skill/plugin discovery SDK-MCP servers](#skillplugin-discovery-sdk-mcp-servers--modeled-on-containerhostloop-microvmprotocol-pending) · [Skill argument collection](#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here) · [Skill authoring](#skill-authoring--save_skill-and-propose_skills-are-not-modeled) · [Anthropic's built-in skills are not staged](#anthropics-built-in-skills-anthropic-skills-are-not-staged) · [Hooks](#hooks--the-harness-installs-one-of-productions-six) · [Browser tools are not served](#browser-tools-are-not-served--and-egress-assertions-say-nothing-about-that-path) · [VM tiers have no workspace tool aliases](#vm-tiers-have-no-workspace-tool-aliases) · [Hostloop: the substituted plugin path shares the VM path's suffix](#hostloop-the-substituted-plugin-path-shares-the-vm-paths-suffix-real-coworks-does-not)
 - **Prompt & model** — [System-prompt reconstruction](#system-prompt-reconstruction) · [Server-driven system-prompt patches (`coworkSyspromptMap`)](#server-driven-system-prompt-patches-coworksyspromptmap) · [Model selection](#model-selection--the-harness-inherits-the-local-cli-default) · [Thinking forced on for managed-config models](#thinking-forced-on-for-managed-config-models-thinkingalwaysonmodels) · [Protocol-tier sub-agents get no Cowork environment append](#protocol-tier-sub-agents-get-no-cowork-environment-append) · [The silent-turn reminder is served by capability, and it lands in the graded corpus](#the-silent-turn-reminder-is-served-by-capability-and-it-lands-in-the-graded-corpus)
 - **Identity & environment** — [Auto-memory: the off switch is modeled, the memory keys are not](#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not) · [Background tasks are off on every tier](#background-tasks-are-off-on-every-tier) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn)
@@ -429,6 +429,21 @@ This is **not a harness gap**. Startup folder access works in both commands; the
 
 ---
 
+## The agent's own Artifacts server is not attached
+
+**Real Cowork behaviour.** From Desktop 4.16336.0 (agent 2.1.317 and later), Desktop's base spawn env sets
+`CLAUDE_CODE_HOST_GUARDS_ARTIFACTS_MCP` to `"1"`. With that, the agent attaches its own `claude-artifacts` HTTP MCP
+server, which reads and writes the signed-in user's claude.ai Artifacts. The Cowork spawn turns it back to `"0"` only
+for a session that has the frame-artifacts tools and an artifact host grant, and the Code tab does the same when it
+cannot launch tools. An ordinary Cowork session therefore lists `claude-artifacts` among its MCP servers.
+
+**Harness behaviour.** The harness leaves the key unset on every tier. Without it, an agent started with the
+`local-agent` entrypoint skips the server as Desktop-hosted, as it did before 4.16336.0, so a test run cannot read
+or write the operator's real Artifacts. A skill that uses `claude-artifacts` will find it missing here and present
+in Cowork. `sync` pins the three places Desktop sets the key and flags a fourth, a changed value, or an override that
+loses its condition. The harness never passes `--strict-mcp-config` to the agent under test, so that `desktop_host`
+skip is the only thing keeping the server off; a change to the harness's agent flags could reopen it.
+
 ## Artifacts — two mechanisms, neither modeled
 
 > **Third layer, added in Desktop 2.2553.1 and also not modeled.** Alongside the two mechanisms below,
@@ -439,7 +454,8 @@ This is **not a harness gap**. Startup folder access works in both commands; the
 > resolver error. It is inert for the session this harness models — no Artifact tool is registered when the
 > frame-artifacts flag is off — which is why it is recorded rather than built. The harness's own
 > `src/hostloop/pretooluse-path-hook.ts` models no part of it. **Since Desktop 3.6556.1** the matcher also covers
-> every tool of the `claude-artifacts` MCP server (a remote server Desktop connects), and for that server's file
+> every tool of the `claude-artifacts` MCP server (since Desktop 4.16336.0, the agent's own HTTP server, which it
+> attaches when Desktop's env key allows it; see the next section), and for that server's file
 > publishing the hook records each file's identity before the approval card; the permission check re-verifies it
 > after approval, content hash included, and refuses files whose drive cannot identify them. Also not modeled.
 > `sync` checks how the recorded identity reaches the permission check, the widened matcher and that refusal, not
