@@ -28,7 +28,7 @@ Every `##` below is one gap (or one scoping note). Grouped, since there are 41 o
 - **Files & delivery** — [Artifacts](#artifacts--two-mechanisms-neither-modeled) · [The agent's own Artifacts server is not attached](#the-agents-own-artifacts-server-is-not-attached) · [File delivery](#file-delivery--present_files-here-senduserfile-on-remote-cowork) · [Browser↔webview↔human-interaction boundary (interactive artifacts)](#browserwebviewhuman-interaction-boundary-interactive-artifacts)
 - **Tools, skills & plugins** — [A plugin's declared MCP servers run here; production stubs them conditionally](#a-plugins-declared-mcp-servers-run-here-production-stubs-them-under-conditions-the-harness-cannot-see) · [Skill/plugin discovery SDK-MCP servers](#skillplugin-discovery-sdk-mcp-servers--modeled-on-containerhostloop-microvmprotocol-pending) · [Skill argument collection](#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here) · [Skill authoring](#skill-authoring--save_skill-and-propose_skills-are-not-modeled) · [Anthropic's built-in skills are not staged](#anthropics-built-in-skills-anthropic-skills-are-not-staged) · [Hooks](#hooks--the-harness-installs-one-of-productions-six) · [Browser tools are not served](#browser-tools-are-not-served--and-egress-assertions-say-nothing-about-that-path) · [VM tiers have no workspace tool aliases](#vm-tiers-have-no-workspace-tool-aliases) · [Hostloop: the substituted plugin path shares the VM path's suffix](#hostloop-the-substituted-plugin-path-shares-the-vm-paths-suffix-real-coworks-does-not)
 - **Prompt & model** — [System-prompt reconstruction](#system-prompt-reconstruction) · [Server-driven system-prompt patches (`coworkSyspromptMap`)](#server-driven-system-prompt-patches-coworksyspromptmap) · [Model selection](#model-selection--the-harness-inherits-the-local-cli-default) · [Thinking forced on for managed-config models](#thinking-forced-on-for-managed-config-models-thinkingalwaysonmodels) · [Protocol-tier sub-agents get no Cowork environment append](#protocol-tier-sub-agents-get-no-cowork-environment-append) · [The silent-turn reminder is served by capability, and it lands in the graded corpus](#the-silent-turn-reminder-is-served-by-capability-and-it-lands-in-the-graded-corpus)
-- **Identity & environment** — [Auto-memory: the off switch is modeled, the memory keys are not](#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not) · [Background tasks are off on every tier](#background-tasks-are-off-on-every-tier) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn)
+- **Identity & environment** — [Auto-memory: the off switch is modeled, the memory keys are not](#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not) · [Background tasks are off on every tier](#background-tasks-are-off-on-every-tier) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn) · [Host-loop outside-folder fence](#host-loop-outside-folder-fence-configured-behaviour-not-measured)
 - **Sandbox & egress** — [`--raw` mode bypasses the egress sandbox](#--raw-mode-bypasses-the-egress-sandbox) · [HIPAA restriction is a process-global latch](#hipaa-restriction-is-a-process-global-latch) · [Booting the real rootfs image under a generic VZ host](#booting-the-real-rootfs-image-under-a-generic-vz-host) · [Stopping a host-tier run stops the processes the agent started](#stopping-a-host-tier-run-stops-the-processes-the-agent-started)
 - **Permissions & limits** — [A frozen search corpus is not live search](#a-frozen-search-corpus-is-not-live-search) · [`answer_channel: none` has no Cowork counterpart](#answer_channel-none-has-no-cowork-counterpart) · [Auto-mode permission rubric is not modeled](#auto-mode-permission-rubric-is-not-modeled) · [Gate `1648655587` is the scheduled-task session limiter](#gate-1648655587-is-the-scheduled-task-session-limiter--distinct-from-the-agent-side-task-fan-out-cap)
 
@@ -1139,6 +1139,39 @@ teach the model false claims about its filesystem. Consequence: protocol sub-age
 environment framing — and since 1.46388.3 that means no folder manifest and no trailing skills sentence
 either, since the harness composes all three parts together or not at all. This is a decided divergence, not an oversight; use hostloop (the production
 default loop) or container for sub-agent environment fidelity.
+
+---
+
+## Host-loop outside-folder fence: configured, behaviour not measured
+
+**Real Cowork behaviour.** From Desktop 4.16336.0, a host-loop task whose host CLI is at or above a floor (2.1.315 in
+that release; recorded per baseline as `hostLoopFence.minCli`) turns on the agent's own blocks on file reads and
+writes outside its working directories. Every connected folder, read-only or not, becomes a working directory; the
+roots Desktop owns (uploads, the spooled tool results, the skills plugin, read-only plugins) are exempt from the read
+block, each listed as written and as its realpath. Desktop sends these settings at spawn, again right after it, and
+again when a folder is connected or an artifact folder is granted mid-session. Below the floor it leaves the fence
+off. A third-party deployment below the floor also loses its `autoMode` settings at spawn; the harness models a
+first-party deployment and does not reproduce that.
+
+**Harness behaviour.** When the baseline records a fence and the native agent that runs is at or above its floor
+(its version is read from the staged path), the harness sends the same settings once, in its one `--settings`
+object: outputs and every connected folder as working directories, the read exemptions for uploads, the spool,
+skills and staged plugins (given and realpath spellings), and the two blocks. Outputs, the process cwd and
+auto-memory are not exempt, as in production. Below the floor, or on a baseline without a fence, nothing changes.
+
+What is shown, per channel:
+- **Spawn settings:** unit-tested, including the exact members and the rule that every entry is an absolute path
+  with no trailing separator (the agent drops an entry that ends in one).
+- **The post-spawn push:** not sent separately. A $0 probe against the staged agent shows it merges a later push into
+  the same settings source, so one `--settings` ends in the same set production's two messages do. That ordering
+  does not matter is an assumption.
+- **Mid-session pushes:** the harness has no mid-session folder connect or artifact grant, so there is nothing to push.
+- **Behaviour:** not measured. What a Read or Write inside and outside these roots does under the fence needs a live
+  host-loop run, which has not been made. Until then the fence is configured and acceptance-verified only.
+
+Connected folders being working directories also matters for CLAUDE.md. Production sets
+`CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD` from the claude.ai account config, so a CLAUDE.md inside a connected
+folder reaches the model. The harness leaves that key unset, so on host-loop such a file is not loaded.
 
 ---
 

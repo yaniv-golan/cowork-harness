@@ -1,5 +1,5 @@
 import { closeSync, constants, fsyncSync, mkdirSync, openSync, realpathSync, statSync, writeSync } from "node:fs";
-import { join } from "node:path";
+import { join, parse, resolve, sep } from "node:path";
 import { cmpVersionStrings, HOSTLOOP_SYSTEM_EMPTY_CWD_MIN_VERSION } from "../baseline.js";
 import type { PlatformBaseline } from "../types.js";
 
@@ -119,6 +119,8 @@ export function hostLoopPermissionArgs(opts: {
   hostOutputsDir: string;
   platform?: NodeJS.Platform | string;
   realpath?: (p: string) => string;
+  /** Present when the outside-folder fence applies (see `hostLoopFenceApplies`). */
+  fence?: HostLoopFenceRoots;
 }): { disallowed: string[]; extraArgs: string[]; cwdSpellings: string[] } {
   const { cwdSpellings: spellings, rules } = cwdDenyRules(opts.processCwd, opts);
   // Known limit: a fallback dir whose path contains `(`/`)` gets `[?]` here, which matches a literal `?`,
@@ -131,7 +133,87 @@ export function hostLoopPermissionArgs(opts: {
   });
   return {
     disallowed: escaped,
-    extraArgs: ["--settings", JSON.stringify({ permissions: { additionalDirectories: [opts.hostOutputsDir] } })],
+    extraArgs: [
+      "--settings",
+      JSON.stringify({
+        permissions: opts.fence
+          ? hostLoopFencePermissions(opts.hostOutputsDir, opts.fence, opts.realpath)
+          : { additionalDirectories: [opts.hostOutputsDir] },
+      }),
+    ],
     cwdSpellings: spellings,
+  };
+}
+
+/**
+ * The host-loop outside-folder fence (Desktop 4.16336.0 onward, for a host CLI at or above the baseline's
+ * `hostLoopFence.minCli`). Desktop turns on the agent's own blocks on file reads and writes outside its working
+ * directories, adds every connected folder as a working directory, and lets reads through to the roots it owns
+ * (uploads, the spooled tool results, the skills plugin, read-only plugins), each listed as written and as its
+ * realpath. It does this at spawn and again in a post-spawn settings push that the agent merges into the same
+ * flag-settings source (measured with apply_flag_settings), so the harness sends the union once, in its one
+ * `--settings` object. Not exempt, as in production: outputs (a working directory), the process cwd, auto-memory.
+ */
+export interface HostLoopFenceRoots {
+  /** Connected folders' host paths, read-only and read-write alike; their read-only-ness is the path gate's job. */
+  folders: string[];
+  /** The roots the agent may read but not treat as working directories. */
+  readOnlyRoots: string[];
+}
+
+/** The version of the agent binary at `binaryPath`: the nearest enclosing directory named like a version
+ *  (Desktop stages the native agent at `claude-code/<ver>/[<build>/]claude.app/…`). Under an override whose path
+ *  names no version, the baseline's own agent version stands in, with a warning. */
+export function agentVersionOfBinary(binaryPath: string, fallback: string | undefined, warn: (m: string) => void): string | undefined {
+  const named = binaryPath
+    .split(sep)
+    .reverse()
+    .find((c) => /^\d+\.\d+\.\d+$/.test(c));
+  if (named) return named;
+  warn(
+    `::warning:: [hostloop] the agent binary ${binaryPath} names no version; deciding the outside-folder fence by the baseline's agent version ${fallback ?? "(none)"}\n`,
+  );
+  return fallback;
+}
+
+/** True when the fence applies: the baseline records one and the agent that runs is at or above its floor. */
+export function hostLoopFenceApplies(baseline: Pick<PlatformBaseline, "hostLoopFence">, agentVersion: string | undefined): boolean {
+  const fence = baseline.hostLoopFence;
+  return !!fence && agentVersion !== undefined && cmpVersionStrings(agentVersion, fence.minCli) >= 0;
+}
+
+/** An entry the agent keeps: absolute, normalized, not a filesystem root, with no trailing separator (the agent
+ *  drops `…/dir/`; measured). `resolve` normalizes and strips the separator; a root is refused. */
+function fenceEntry(p: string): string | null {
+  const r = resolve(p);
+  return r === parse(r).root || r.endsWith(sep) ? null : r;
+}
+
+/** The `permissions` object for a fenced spawn. Three disjoint sets: the working directories (outputs and every
+ *  connected folder), the read exemptions (each read-only root as given and as its realpath), and nothing else. */
+export function hostLoopFencePermissions(
+  hostOutputsDir: string,
+  roots: HostLoopFenceRoots,
+  realpath: (p: string) => string = realpathSync.native,
+): Record<string, unknown> {
+  const folders = [...new Set(roots.folders.map(fenceEntry).filter((p): p is string => p !== null))];
+  const exempt = new Set<string>();
+  for (const root of roots.readOnlyRoots) {
+    const given = fenceEntry(root);
+    if (!given) continue;
+    exempt.add(given);
+    try {
+      const real = fenceEntry(realpath(given));
+      if (real) exempt.add(real);
+    } catch {
+      // not created yet: its given spelling is the only one a read can arrive by
+    }
+  }
+  return {
+    additionalDirectories: [hostOutputsDir, ...folders],
+    blockReadsOutsideWorkingDirectories: true,
+    blockWritesOutsideWorkingDirectories: true,
+    blockReadsExemptPaths: [...exempt],
+    workingDirectoriesAsGiven: folders,
   };
 }
