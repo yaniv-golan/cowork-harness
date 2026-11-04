@@ -244,6 +244,12 @@ their sub-agent spend) do not run.
   built-in memory-tidy skill gated on the same id. Production also skips the directory for a session whose
   server-delivered `memoryEnabled` flag is false, which the harness cannot read. `sync` prints a WARNING note when it
   reads the gate ON.
+- **claude.ai memory reset (Desktop 4.16336.0 and later).** Desktop now also asks claude.ai whether a memory reset is
+  owed before it gives the session a directory. While a reset is owed, or while that check has not answered, it
+  withholds the directory: the check fails closed. With no signed-in account or org the check answers yes and the
+  resolver's own no-account guard then yields no directory. After a reset, Desktop deletes the local Cowork memory.
+  The harness models neither the check nor the deletion. Its modeled session is the one where claude.ai answered "no
+  reset owed", which with the gate off sends the same disable switch as before.
 - **No gate row.** Baselines before 1.18286.0 predate the gate pin and are treated as off. That is an assumption:
   every baseline that records the gate records it off, and no Desktop bundle older than 1.18286.2 was available to
   check.

@@ -771,6 +771,71 @@ describe("checkAutoMemoryFacts (auto-memory anchor)", () => {
   });
 });
 
+// Desktop 4.16336.0 adds a claude.ai memory-reset check as a second conjunct of the spawn's switch. Synthetic shapes.
+describe("checkAutoMemoryFacts (reset-checked switch)", () => {
+  const SITE =
+    "let gt=s.memoryEnabled!==!1&&await z.t(r.getCurrentAccountId(),r.getCurrentOrgId())?r.getAutoMemoryDirForSession(a):null,_t=g&&gt?t.Dz(gt):gt;";
+  const TAIL =
+    '...R?(()=>{return{CLAUDE_COWORK_MEMORY_PATH_OVERRIDE:R}})():{CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"},' +
+    'e.env?.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE||(e.env={...e.env,CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"});';
+  const SPAWN = 'const z=require("./index.chunk-MEM.js");async function spawn(){' + SITE + TAIL + "}";
+  const MEM =
+    'Object.defineProperty(exports,Symbol.toStringTag,{value:"Module"});exports.t=Z;' +
+    "var M={coworkMemoryUsable:()=>Z};" +
+    'async function Z(e,n){try{return!e||!n||I()?!0:(await t.got(e,n),V())}catch(e){return t.log("x",{}),!1}}' +
+    'function I(){return t.Hft().type==="3p"||t.Tnt("3989806346")}';
+  const RESOLVER =
+    "getAutoMemoryDirForSession(e){return this.resolveAutoMemoryDir(e,!1)}" +
+    "resolveAutoMemoryDir(e,n){if(!this.currentAccountId||!this.currentOrgId)return null;let r=this.sessions.get(e);" +
+    'return r?.sessionType==="agent"?t.zI(this.currentAccountId,this.currentOrgId):r&&!r?.sessionType&&t.ZW("123929380")?t.BI(this.currentAccountId,this.currentOrgId):null}';
+  const files = (spawn = SPAWN, mem = MEM) =>
+    new Map([
+      ["index.chunk-SPAWN.js", spawn],
+      ["index.chunk-MEM.js", mem],
+      ["index.chunk-RESOLVER.js", RESOLVER],
+    ]);
+
+  it("the reset-checked form counts as the one switch site", () => {
+    expect(checkAutoMemoryFacts(files())).toEqual([]);
+  });
+  it.each([
+    [
+      "an export the map does not name coworkMemoryUsable",
+      () => files(SPAWN, MEM.replace("coworkMemoryUsable:", "otherCheck:")),
+      /does not name coworkMemoryUsable/,
+    ],
+    [
+      "no short-circuit for a missing account",
+      () => files(SPAWN, MEM.replace("return!e||!n||I()?!0:", "return I()?!0:")),
+      /no longer answers true/,
+    ],
+    [
+      "a catch that no longer withholds",
+      () => files(SPAWN, MEM.replace(",!1}}async", ",!0}}async").replace(",!1}}function", ",!0}}function")),
+      /catch no longer answers false/,
+    ],
+    [
+      "a different gate in the 3p helper",
+      () => files(SPAWN, MEM.replace('"3989806346"', '"3989806347"')),
+      /no longer "3p deployment or gate/,
+    ],
+    [
+      "the namespace re-declared around the site",
+      () => files(SPAWN.replace("async function spawn(){", "async function spawn(){let z={};")),
+      /re-declared around the site/,
+    ],
+    [
+      "both forms at once",
+      () => files(SPAWN.replace(SITE, SITE + "let o=s.memoryEnabled===!1?null:r.getAutoMemoryDirForSession(a);")),
+      /expected 1 in all/,
+    ],
+  ])("flags: %s", (_n, make, why) => {
+    const f = make();
+    expect([...f.values()].join("")).not.toBe([...files().values()].join("")); // the mutation applied
+    expect(checkAutoMemoryFacts(f).join("\n")).toMatch(why);
+  });
+});
+
 describe("checkAutoMemoryGate (gate 123929380 now has a runtime consumer)", () => {
   const gate = (on: boolean) => ({
     "123929380": { id: "123929380", name: "autoMemoryStandardSessions", on, source: "defaultValue", value: on },

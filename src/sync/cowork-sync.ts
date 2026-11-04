@@ -2101,6 +2101,37 @@ export function checkMountModeFacts(bundle: string, files: Map<string, string>):
   return flags;
 }
 
+/** The reset-checked auto-memory switch (Desktop >=4.16336.0); group 2 is the callee `<ns>.<m>`. */
+const COWORK_MEMORY_USABLE_SITE =
+  /(?<![\w$])([\w$]+)\.memoryEnabled!==!1&&await ([\w$]+\.[\w$]+)\(([\w$]+)\.getCurrentAccountId\(\),\3\.getCurrentOrgId\(\)\)\?\3\.getAutoMemoryDirForSession\([\w$]+\):null/g;
+
+/** Why the callee of the reset-checked auto-memory switch is not Desktop's claude.ai memory-reset check, or null.
+ *  The namespace is resolved through the site chunk's own `require` binding and must not be shadowed at the site (the
+ *  chunk re-binds the same short name in other functions); the target's export map must name the export
+ *  `coworkMemoryUsable`; that function must answer true at once for a missing account/org or for `<I>()`, and false
+ *  from its catch; `<I>` (same chunk) must be exactly "3p deployment, or gate 3989806346". */
+export function coworkMemoryUsableDefect(chunk: string, at: number, callee: string, files: Map<string, string>): string | null {
+  const ns = callee.slice(0, callee.indexOf("."));
+  const req = new RegExp(`(?<![\\w$])${reEsc(ns)}=require\\(`).exec(chunk);
+  if (!req) return `\`${ns}\` is not a require() binding in the spawn's chunk`;
+  if (shadowedByInnerDeclaration(chunk, at, ns, req.index))
+    return `\`${ns}\` is re-declared around the site, so it is not the require() binding`;
+  const ref = resolveNamespaceRef(callee, chunk, files);
+  if (!ref) return `\`${callee}\` does not resolve to an export`;
+  if (!new RegExp(`coworkMemoryUsable:\\(\\)=>${reEsc(ref.local)}(?![\\w$])`).test(ref.chunk))
+    return `\`${callee}\` resolves to \`${ref.local}\`, which the module's export map does not name coworkMemoryUsable`;
+  const head = new RegExp(`async function ${reEsc(ref.local)}\\(`).exec(ref.chunk);
+  const src = head ? enclosingFunctionSource(ref.chunk, ref.chunk.indexOf("{", head.index) + 1) : null;
+  if (!src) return `coworkMemoryUsable (\`${ref.local}\`) is not an async function in its module`;
+  const short = /^function [\w$]+\(([\w$]+),([\w$]+)\)\{try\{return\s*!\1\|\|!\2\|\|([\w$]+)\(\)\?!0:/.exec(src);
+  if (!short) return "coworkMemoryUsable no longer answers true at once for a missing account/org or its 3p/gate helper";
+  if (!/(?:,\s*|return\s*)!1\}\}$/.test(src)) return "coworkMemoryUsable's catch no longer answers false (withheld)";
+  const helper = braceBodyOf(ref.chunk, `function ${short[3]}(){`);
+  if (helper === null || !/^return [\w$.]+\(\)\.type==="3p"\|\|[\w$.]+\("3989806346"\)$/.test(helper))
+    return `coworkMemoryUsable's short-circuit \`${short[3]}()\` is no longer "3p deployment or gate 3989806346"`;
+  return null;
+}
+
 /**
  * Anchor for the auto-memory switch the harness models (`autoMemoryEnv`, src/loop-decision.ts). Pure over the
  * normalized per-chunk bundle; every flag is an unknown delta.
@@ -2126,7 +2157,18 @@ export function checkAutoMemoryFacts(files: Map<string, string>): string[] {
   const count = (re: RegExp) => chunks.reduce((n, c) => n + (c.match(re)?.length ?? 0), 0);
   const why: string[] = [];
   const ternary = count(/(?<![\w$])[\w$]+\.memoryEnabled===!1\?null:[\w$]+\.getAutoMemoryDirForSession\([\w$]+\)/g);
-  if (ternary !== 1) why.push(`the spawn's \`memoryEnabled===!1?null:getAutoMemoryDirForSession(…)\` is at ${ternary} site(s), expected 1`);
+  // Desktop 4.16336.0: the switch gained a second conjunct, a claude.ai memory-reset check
+  // (`memoryEnabled!==!1&&await <ns>.<m>(account,org)?getAutoMemoryDirForSession(id):null`). Either form counts as the
+  // one site; the new form is admitted only when its callee resolves to the reset check (coworkMemoryUsableDefect).
+  const usable = chunks.flatMap((c) => [...c.matchAll(COWORK_MEMORY_USABLE_SITE)].map((m) => ({ chunk: c, at: m.index!, callee: m[2]! })));
+  if (ternary + usable.length !== 1)
+    why.push(
+      `the spawn's \`memoryEnabled===!1?null:getAutoMemoryDirForSession(…)\` is at ${ternary} site(s) and its reset-checked form at ${usable.length}, expected 1 in all`,
+    );
+  else if (usable.length === 1) {
+    const defect = coworkMemoryUsableDefect(usable[0]!.chunk, usable[0]!.at, usable[0]!.callee, files);
+    if (defect) why.push(`the auto-memory switch's reset check: ${defect}`);
+  }
   const delegationRe = /getAutoMemoryDirForSession\(([\w$]+)\)\{return this\.resolveAutoMemoryDir\(\1,!1\)\}/;
   const sites = chunks.filter((c) => delegationRe.test(c));
   if (sites.length !== 1)
