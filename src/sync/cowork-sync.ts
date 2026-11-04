@@ -2835,6 +2835,86 @@ function pathHookBody(chunk: string, installAt: number): string | null {
   return inline ? literalAwareBodyAt(chunk, installAt + inline[0].length - 1) : null;
 }
 
+/** Whether the brace depth (literal-aware) from `from` to `to` stays at or above zero and ends at `end` (0 = same
+ *  function body, >0 = `to` is nested deeper). Returns the final depth, or -1 when it drops below zero (different
+ *  function) or a literal could not be read. */
+function braceDepthBetween(text: string, from: number, to: number): number {
+  let depth = 0;
+  for (let i = from; i < to;) {
+    const lit = skipLiteralAt(text, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}" && --depth < 0) return -1;
+    i++;
+  }
+  return depth;
+}
+
+/** Index just past the `}` that closes the destructuring pattern containing `at` (the `}` directly followed by `=`),
+ *  or -1. Literal-aware; nested `{}` inside the pattern (a default value) is skipped. */
+function destructuringPatternEnd(text: string, at: number): number {
+  let depth = 0;
+  for (let i = at; i < text.length;) {
+    const lit = skipLiteralAt(text, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}") {
+      if (depth === 0) return text[i + 1] === "=" && text[i + 2] !== "=" && text[i + 2] !== ">" ? i + 1 : -1;
+      depth--;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/** Why the hoisted readOnly tail (Desktop >=4.16336.0) is not the per-call mid-session roots, or null when it is.
+ *  The shape: `<C>=<g>?.()??[]` (or downleveled) in the path hook's closure, used as `...<A>||<B>?[]:<C>` later in
+ *  the SAME closure, where `<g>` is the destructured `getMidSessionReadOnlyPaths:<g>` of a function that ENCLOSES the
+ *  closure (one function up) and is not re-bound in between. Each connection is checked, so a same-named binding in
+ *  another function, a binding to some other getter, or a getter destructured from another property is not admitted. */
+export function readOnlyTailHoistDefect(chunk: string): string | null {
+  const bindRe = /(?<![\w$.])([\w$]+)=(?:([\w$]+)\?\.\(\)|\(([\w$]+)==null\?void 0:\3\(\)\))\?\?\[\](?=[,;)])/g;
+  const reasons: string[] = [];
+  for (const b of chunk.matchAll(bindRe)) {
+    const C = b[1]!;
+    const g = (b[2] ?? b[3])!;
+    const at = b.index!;
+    const useRe = new RegExp(`\\.\\.\\.[\\w$]+\\|\\|[\\w$]+\\?\\[\\]:${reEsc(C)}(?![\\w$])`, "g");
+    useRe.lastIndex = at + b[0].length;
+    const use = useRe.exec(chunk);
+    if (!use) continue;
+    if (braceDepthBetween(chunk, at, use.index) !== 0) {
+      reasons.push(`\`${C}\` is used outside the closure that binds it`);
+      continue;
+    }
+    const destr = [...chunk.slice(0, at).matchAll(new RegExp(`getMidSessionReadOnlyPaths:${reEsc(g)}(?=[,}=])`, "g"))].pop();
+    if (!destr) {
+      reasons.push(`\`${g}\` is not a destructured getMidSessionReadOnlyPaths`);
+      continue;
+    }
+    // One function up: the binding sits strictly deeper than the destructuring, and nothing between them closes the
+    // function the destructuring belongs to. The walk starts after the destructuring PATTERN (`{…}=`), whose own
+    // closing brace would otherwise read as leaving the function.
+    const patternEnd = destructuringPatternEnd(chunk, destr.index!);
+    if (patternEnd < 0 || patternEnd > at || braceDepthBetween(chunk, patternEnd, at) <= 0) {
+      reasons.push(`the getMidSessionReadOnlyPaths destructuring of \`${g}\` does not enclose the closure`);
+      continue;
+    }
+    if (new RegExp(`(?<![\\w$.:])${reEsc(g)}(?:=(?![=>])|\\?\\?=|\\|\\|=|&&=)`).test(chunk.slice(destr.index! + destr[0].length, at))) {
+      reasons.push(`\`${g}\` is re-bound between the destructuring and the closure`);
+      continue;
+    }
+    return null;
+  }
+  return reasons.length > 0 ? reasons.join("; ") : "no hoisted `<C>=<g>?.()??[]` binding used as `...A||B?[]:<C>`";
+}
+
 /** Why the launcher guard `<g>` of a conditional canUseTool link is not `<o>.viaLauncher` read from the launcher call
  *  in the install's own function, or null. See checkPathHookFacts (6). */
 function launcherGuardDefect(chunk: string, files: Map<string, string>, g: string, conditionalLinks: number): string | null {
@@ -3137,11 +3217,12 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   inHook(/getMidSessionReadOnlyPaths/, "mid-session roots", "getMidSessionReadOnlyPaths is no longer wired");
   // B14: the optional call is emitted NATIVELY now (`?[]:ye?.()??[]`) instead of downleveled
   // (`?[]:(ne==null?void 0:ne())??[]`). Same expression, newer output target — admit both.
-  inHook(
-    /\?\[\]:(?:\([\w$]+==null\?void 0:[\w$]+\(\)\)|[\w$]+\?\.\(\))\?\?\[\]/,
-    "readOnly-tail rule",
-    "the ...ie||ct?[]:(ne?.())??[] per-call assembly shape is gone",
-  );
+  // Desktop 4.16336.0 hoists the same expression into a binding (`C=de?.()??[]`, then `...A||B?[]:C`). That form is
+  // admitted only through readOnlyTailHoistDefect, which proves the binding, its use and the getter are connected.
+  if (!/\?\[\]:(?:\([\w$]+==null\?void 0:[\w$]+\(\)\)|[\w$]+\?\.\(\))\?\?\[\]/.test(consuming)) {
+    const defect = readOnlyTailHoistDefect(consuming);
+    if (defect !== null) miss("readOnly-tail rule", `the ...ie||ct?[]:(ne?.())??[] per-call assembly shape is gone (${defect})`);
+  }
   // B15: the SESSION_TYPE_CHAT constant is INLINED to its literal at this comparison
   // (`e.sessionType==="chat"`). The constant itself is still exported and separately asserted above, so
   // accept either form here — what this anchor pins is that the hook still branches on chat sessions.
@@ -5567,6 +5648,23 @@ export function checkVmAgentStagingFacts(files: Map<string, string>): string[] {
   return flags;
 }
 
+/** The keys the spawn's empty-sentinel helper may delete (S14a). The ANTHROPIC_* three are required; the fourth arrived
+ *  in Desktop 4.16336.0. Exported for the tests. */
+export const S14A_EMPTY_SENTINEL_KEYS: readonly string[] = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_CUSTOM_HEADERS",
+  "CLAUDE_CODE_SESSIONS_OAUTH_TOKEN",
+];
+
+/** Every `for(<kw> <v> of["ANTHROPIC_API_KEY",…])<e>[<v>]===""&&delete <e>[<v>]` loop: the member lists, in order.
+ *  The loop BODY is part of the match, so another loop over a list that happens to start with the same key (a scrub
+ *  list, a header list) is not taken for the helper. */
+export function s14aEmptySentinelLists(bundle: string): string[][] {
+  const re = /for\((?:const|let|var) ([\w$]+) of\s*\[("ANTHROPIC_API_KEY"(?:,"[A-Z0-9_]+")*)\]\)([\w$]+)\[\1\]===""&&delete \3\[\1\]/g;
+  return [...bundle.matchAll(re)].map((m) => m[2]!.split(",").map((s) => s.slice(1, -1)));
+}
+
 /**
  * S-tier sentinel: the structural/curated spawn facts the generator does NOT produce (scalar options,
  * tools/allowedTools heads + tail-guards, the FnA delete def+application, the negative invariant, the
@@ -6242,8 +6340,23 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
   // B7 (Desktop 1.25927.0): the loop binding is emitted as `let` in the new codegen (`for(let t of[…])`).
   // The binding keyword is a minifier choice, never a contract fact — admit all three. Its NAME is a
   // minifier choice too, hence `[\w$]+` (a `$`-initial name is legal and `\w` cannot match it).
-  if (!has(/for\((?:const|let|var) [\w$]+ of\s*\[?"ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"\]/))
-    miss("S14a FnA definition", "the empty-ANTHROPIC_* delete helper is gone");
+  // Desktop 4.16336.0 added CLAUDE_CODE_SESSIONS_OAUTH_TOKEN as a fourth member. The MEMBER SET is the contract (each
+  // member is a key W2 constructs as "" and relies on this helper to delete), so it is pinned as a set: a member outside
+  // S14A_EMPTY_SENTINEL_KEYS flags by name, and a missing ANTHROPIC_* member flags. The fourth member is optional so
+  // older baselines still read.
+  {
+    const s14a = s14aEmptySentinelLists(bundle);
+    if (s14a.length === 0) miss("S14a FnA definition", "the empty-ANTHROPIC_* delete helper is gone");
+    for (const members of s14a) {
+      const extra = members.filter((k) => !S14A_EMPTY_SENTINEL_KEYS.includes(k));
+      const lost = S14A_EMPTY_SENTINEL_KEYS.filter((k) => k.startsWith("ANTHROPIC_") && !members.includes(k));
+      if (extra.length > 0 || lost.length > 0)
+        miss(
+          "S14a FnA definition",
+          `the empty-sentinel delete helper's member set changed${extra.length ? ` (+${extra.join(", ")})` : ""}${lost.length ? ` (-${lost.join(", ")})` : ""} — classify each key W2 builds as "" before re-pinning`,
+        );
+    }
+  }
   // The blank-empties helper must be CALLED on the same env object that just received ANTHROPIC_CUSTOM_HEADERS
   // (…},helper(X.env)). The sdkOptions var name is minifier-assigned (V→F across builds); capture it and
   // backreference so the guarantee "blank runs on THIS env" survives the rename without hardcoding the name.
