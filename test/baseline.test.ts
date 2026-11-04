@@ -5263,7 +5263,9 @@ describe("1.25927.0 bundler change: MUTATION — widened guards still fail on re
     // Needle scoped to the `of[…]` head so it targets the delete helper S14a actually guards. The bare
     // triple is NOT unique — an unrelated array carries the same three names, and since 1.30096.1 both
     // live in one chunk, so the bare needle mutated the decoy and this test failed while S14a was fine.
-    const m = mutateDefining(f, 'of["ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"]', 'of["SOMETHING_ELSE"]');
+    // Open-ended: since Desktop 4.16336.0 the list carries a fourth member after the three, so a needle that closes
+    // the bracket no longer applies there.
+    const m = mutateDefining(f, 'of["ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"', 'of["SOMETHING_ELSE"');
     expect(m).not.toBeNull();
     expect(checkSpawnContractFacts(joined(m!), m!).some((x) => /S14a/.test(x))).toBe(true);
   });
