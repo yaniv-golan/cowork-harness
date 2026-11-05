@@ -40,7 +40,14 @@ import { resolveHostLoopBindMounts, stageHostLoopWorkspace } from "./hostloop-st
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
 import { checkHostLoopPathGate, PATH_GATE_TOOL_NAMES, type HostLoopPathGateConfig } from "../hostloop/pretooluse-path-hook.js";
 import { combineSdkMcp, type HookBundle } from "../agent/session.js";
-import { hostLoopPermissionArgs, hostLoopUsesSystemEmptyCwd, resolveHostProcessCwd } from "../hostloop/process-cwd.js";
+import {
+  agentVersionOfBinary,
+  hostLoopFenceApplies,
+  hostLoopPermissionArgs,
+  hostLoopUsesSystemEmptyCwd,
+  resolveHostProcessCwd,
+  type HostLoopFenceRoots,
+} from "../hostloop/process-cwd.js";
 import { stripComments } from "../prompt.js";
 import { resolveAgentImage, resolveContainerRuntime } from "./agent-image.js";
 
@@ -156,7 +163,13 @@ export function hostLoopProcessContract(
   outDir: string,
   sessionRoot: string,
   hostOutputsDir: string,
-  deps: { stat?: Parameters<typeof resolveHostProcessCwd>[0]["stat"] } = {},
+  deps: {
+    stat?: Parameters<typeof resolveHostProcessCwd>[0]["stat"];
+    /** The roots the outside-folder fence needs and the agent binary that will run (its version decides it). */
+    fence?: { roots: HostLoopFenceRoots; agentBinary: string };
+    /** Test seam: how the agent binary is asked for its version (default: run `<binary> --version`). */
+    askAgentVersion?: (binaryPath: string) => string;
+  } = {},
 ): {
   processCwd: string | undefined;
   permission: ReturnType<typeof hostLoopPermissionArgs> | undefined;
@@ -172,7 +185,19 @@ export function hostLoopProcessContract(
   const processCwd = hostLoopUsesSystemEmptyCwd(baseline)
     ? resolveHostProcessCwd({ fallbackDir: join(resolve(outDir), "work", "host-cwd"), stat: deps.stat })
     : undefined;
-  const permission = processCwd !== undefined ? hostLoopPermissionArgs({ processCwd, hostOutputsDir }) : undefined;
+  // The binary's version is read only when the baseline records a fence: a pre-fence baseline runs no --version and
+  // warns about nothing.
+  const fenced =
+    deps.fence !== undefined &&
+    baseline.hostLoopFence != null &&
+    hostLoopFenceApplies(
+      baseline,
+      agentVersionOfBinary(deps.fence.agentBinary, (m) => warn(m), deps.askAgentVersion),
+    );
+  const permission =
+    processCwd !== undefined
+      ? hostLoopPermissionArgs({ processCwd, hostOutputsDir, ...(fenced ? { fence: deps.fence!.roots } : {}) })
+      : undefined;
   return { processCwd, permission, cwds: hostLoopCwds(sessionRoot, hostOutputsDir, processCwd) };
 }
 
@@ -368,13 +393,16 @@ function spawnHostLoopTracked(
   // run and outside `sessionHost`, which the bash sidecar mounts — Desktop's equivalent is not VM-visible.
   // `outDir` is stable across a resume, so both turns run at the same cwd (the agent keys its transcript
   // on it).
-  const { processCwd, permission, cwds } = hostLoopProcessContract(baseline, outDir, sessionRoot, hostOutputsDir);
+  // The app-owned roots, derived once: the path gate below and the outside-folder fence read the same values.
+  const { uploadsRoot, spoolRoot, skillsRoot, pluginRoots, fence } = hostLoopAppRoots(plan, mntHost);
+  const { processCwd, permission, cwds } = hostLoopProcessContract(baseline, outDir, sessionRoot, hostOutputsDir, {
+    fence: { roots: fence, agentBinary: agentNativeHost },
+  });
   // `lane: remote` serves no cowork server, so the tool must not be advertised or pre-approved either:
   // a registered tool with no backing server is a phantom capability the model can try and fail to use.
   const coworkTools = plan.lane === "remote" ? [] : ["mcp__cowork__present_files"];
-  // Hoisted from the path-gate config below: the SAME staged dir is both the Read-allowed uploads root
-  // and the uploads bullet's file-tool path — one value, so the prompt and the gate can never disagree.
-  const uploadsRoot = join(mntHost, "uploads");
+  // `uploadsRoot` (above) is both the Read-allowed uploads root and the uploads bullet's file-tool path — one
+  // value, so the prompt and the gate can never disagree.
   const systemPromptAppend = [
     opts.systemPromptAppend,
     hostLoopShellSection(baseline, m.sessionRoot, mntRoot, plan, hostOutputsDir, uploadsRoot),
@@ -423,9 +451,6 @@ function spawnHostLoopTracked(
   // `hostCwd = getOutputsDir(e)`), the base a relative path resolves against in both eras;
   // scratchRoots = [hostCwd] (production's writable set is `[outputs]` from 2.7032.0, and was two names for
   // the same dir before it).
-  const spoolRoot = join(plan.configDir, "projects"); // production's spooled-tool-results dir analog: the staged config dir's own "projects" subdir
-  const skillsRoot = join(plan.configDir, "skills");
-  const pluginRoots = plan.mounts.filter((mt) => mt.kind !== "folder" && mt.kind !== "upload").map((mt) => join(mntHost, mt.mountPath));
   const gateCfg: HostLoopPathGateConfig = {
     hostCwd: hostOutputsDir,
     allowedRoots: [
@@ -767,6 +792,28 @@ export function watchHostLoopSidecar(
  *  sidecar's extraBinds mounts into the VM and the native `--plugin-dir` argv references. 2+ configured
  *  plugins keep the unresolvable sentinel for both consumers — a pre-existing per-plugin-hook scoping
  *  limitation, not something introduced here. */
+/** The roots the host-loop agent's file tools may reach besides outputs, as `spawnHostLoop` derives them for both
+ *  the path gate and the outside-folder fence: uploads, the spool (the staged config dir's own `projects`, production's
+ *  spooled-tool-results analog), skills, every staged plugin mount, and the connected folders' real host paths.
+ *  Exported so a test can check them against what `stageHostLoopWorkspace` and `--plugin-dir` actually produce. */
+export function hostLoopAppRoots(
+  plan: Pick<LaunchPlan, "configDir" | "mounts">,
+  mntHost: string,
+): { uploadsRoot: string; spoolRoot: string; skillsRoot: string; pluginRoots: string[]; fence: HostLoopFenceRoots } {
+  const uploadsRoot = join(mntHost, "uploads");
+  const spoolRoot = join(plan.configDir, "projects");
+  const skillsRoot = join(plan.configDir, "skills");
+  const pluginRoots = plan.mounts.filter((mt) => mt.kind !== "folder" && mt.kind !== "upload").map((mt) => join(mntHost, mt.mountPath));
+  const folders = plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => mt.hostPath);
+  return {
+    uploadsRoot,
+    spoolRoot,
+    skillsRoot,
+    pluginRoots,
+    fence: { folders, readOnlyRoots: [uploadsRoot, spoolRoot, skillsRoot, ...pluginRoots] },
+  };
+}
+
 function resolveClaudePluginRootHostPath(plan: LaunchPlan, mntHost: string): string | undefined {
   const pluginMounts = plan.mounts.filter(
     (mt) => mt.kind === "local-plugin" || mt.kind === "remote-plugin" || mt.kind === "marketplace-plugin",

@@ -15,6 +15,7 @@ import {
   recordedLayoutDivergence,
   sha256File,
   countStringInFile,
+  cmpVersionStrings,
 } from "../src/baseline.js";
 import { createHash } from "node:crypto";
 import type { PlatformBaseline } from "../src/types.js";
@@ -37,6 +38,7 @@ import {
   checkSyspromptMapFacts,
   checkSubagentOverrideGate,
   checkAutoMemoryFacts,
+  checkArtifactsMcpGuardFacts,
   checkAutoMemoryGate,
   checkCodeTripwires,
   PINNED_GATES,
@@ -63,6 +65,8 @@ import {
 } from "../src/sync/cowork-sync.js";
 import { checkNormalizationSanity, checkEgressContractFacts, extractAsarGateIds } from "../src/sync/cowork-sync.js";
 import { hostLoopCwds } from "../src/runtime/hostloop.js";
+import { permissionsSchemaKeys, readHostLoopFence } from "../src/sync/hostloop-fence.js";
+import { homedir } from "node:os";
 import { fidelityOmitted } from "../src/run/execute.js";
 import { buildJudgedDocument } from "../src/assert.js";
 import { renderPrompts } from "../src/prompt.js";
@@ -566,6 +570,7 @@ describe.skipIf(!ASAR_BACKUPS)("checkPathHookFacts oracle over saved Desktop asa
     ["3.6556.2", true],
     ["4.29.0", true],
     ["4.4212.0", true],
+    ["4.16336.0", true],
   ])("%s: clean = %s", (version, clean) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
     expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
@@ -580,12 +585,66 @@ describe.skipIf(!ASAR_BACKUPS)("checkPathHookFacts oracle over saved Desktop asa
 // The scheduled-session facts over saved asars: the frame-tool list, its read-only export and the host loop's spread
 // have had the same shape in every build that has the frame-tools predicate, before and after the chat arm (4.29.0).
 describe.skipIf(!ASAR_BACKUPS)("checkScheduledSessionFacts oracle over saved Desktop asars (COWORK_ASAR_BACKUP_DIR)", () => {
-  it.each(["3.6556.2", "4.29.0", "4.4212.0"])("%s: clean", (version) => {
+  it.each(["3.6556.2", "4.29.0", "4.4212.0", "4.16336.0"])("%s: clean", (version) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
     expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
     const files = readAsarBuildFiles(asar);
     expect(files.size).toBeGreaterThan(100);
     expect(checkScheduledSessionFacts(files)).toEqual([]);
+  });
+});
+
+// The host-loop fence and the Artifacts-server key over saved asars: the fence reads as null before Desktop 4.16336.0 and
+// as its 2.1.315 floor from it, with no flags either way, and the key's three constructions read clean where it exists.
+describe.skipIf(!ASAR_BACKUPS)("readHostLoopFence + checkArtifactsMcpGuardFacts oracle over saved Desktop asars", () => {
+  it.each([
+    ["4.4212.0", null],
+    ["4.16336.0", { minCli: "2.1.315" }],
+  ])("%s: fence %j, no flags; the Artifacts-key guard is clean", (version, fence) => {
+    const asar = join(ASAR_BACKUPS!, version, "app.asar");
+    expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
+    const files = readAsarBuildFiles(asar);
+    expect(files.size).toBeGreaterThan(100);
+    const r = readHostLoopFence(files);
+    expect(r.fence).toEqual(fence);
+    expect(r.flags).toEqual([]);
+    expect(r.writers.length).toBe(fence ? 4 : 0);
+    expect(checkArtifactsMcpGuardFacts(files)).toEqual([]);
+  });
+});
+
+// The permissions schema in the staged agents (local only): both the VM ELF and the native agent hostloop runs carry
+// the 11 keys the fence's tripwire was reviewed against, from agent 2.1.315 on.
+describe("permissionsSchemaKeys over the staged agents", () => {
+  const KEYS = [
+    "allow",
+    "deny",
+    "ask",
+    "defaultMode",
+    "disableBypassPermissionsMode",
+    "blockReadsOutsideWorkingDirectories",
+    "blockWritesOutsideWorkingDirectories",
+    "blockReadsExemptPaths",
+    "workingDirectoriesAsGiven",
+    "disableAutoMode",
+    "additionalDirectories",
+  ];
+  const vmRoot = join(homedir(), "Library", "Application Support", "Claude", "claude-code-vm");
+  const vmVer = existsSync(join(vmRoot, ".sdk-version")) ? readFileSync(join(vmRoot, ".sdk-version"), "utf8").trim() : "";
+  const elf = vmVer ? join(vmRoot, vmVer, "claude") : "";
+  it.skipIf(!elf || !existsSync(elf) || cmpVersionStrings(vmVer, "2.1.315") < 0)("the staged VM ELF", () => {
+    expect(permissionsSchemaKeys(readFileSync(elf))?.sort()).toEqual([...KEYS].sort());
+  });
+  const native = (() => {
+    if (process.platform !== "darwin") return "";
+    try {
+      return resolveHostAgentBinary(loadBaseline("latest"));
+    } catch {
+      return "";
+    }
+  })();
+  it.skipIf(!native || cmpVersionStrings(loadBaseline("latest").agentVersion ?? "0", "2.1.315") < 0)("the staged native agent", () => {
+    expect(permissionsSchemaKeys(readFileSync(native))?.sort()).toEqual([...KEYS].sort());
   });
 });
 
@@ -768,6 +827,71 @@ describe("checkAutoMemoryFacts (auto-memory anchor)", () => {
     const real = readRealBundleFilesOrSkip();
     if (!real) return;
     expect(checkAutoMemoryFacts(real)).toEqual([]);
+  });
+});
+
+// Desktop 4.16336.0 adds a claude.ai memory-reset check as a second conjunct of the spawn's switch. Synthetic shapes.
+describe("checkAutoMemoryFacts (reset-checked switch)", () => {
+  const SITE =
+    "let gt=s.memoryEnabled!==!1&&await z.t(r.getCurrentAccountId(),r.getCurrentOrgId())?r.getAutoMemoryDirForSession(a):null,_t=g&&gt?t.Dz(gt):gt;";
+  const TAIL =
+    '...R?(()=>{return{CLAUDE_COWORK_MEMORY_PATH_OVERRIDE:R}})():{CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"},' +
+    'e.env?.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE||(e.env={...e.env,CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"});';
+  const SPAWN = 'const z=require("./index.chunk-MEM.js");async function spawn(){' + SITE + TAIL + "}";
+  const MEM =
+    'Object.defineProperty(exports,Symbol.toStringTag,{value:"Module"});exports.t=Z;' +
+    "var M={coworkMemoryUsable:()=>Z};" +
+    'async function Z(e,n){try{return!e||!n||I()?!0:(await t.got(e,n),V())}catch(e){return t.log("x",{}),!1}}' +
+    'function I(){return t.Hft().type==="3p"||t.Tnt("3989806346")}';
+  const RESOLVER =
+    "getAutoMemoryDirForSession(e){return this.resolveAutoMemoryDir(e,!1)}" +
+    "resolveAutoMemoryDir(e,n){if(!this.currentAccountId||!this.currentOrgId)return null;let r=this.sessions.get(e);" +
+    'return r?.sessionType==="agent"?t.zI(this.currentAccountId,this.currentOrgId):r&&!r?.sessionType&&t.ZW("123929380")?t.BI(this.currentAccountId,this.currentOrgId):null}';
+  const files = (spawn = SPAWN, mem = MEM) =>
+    new Map([
+      ["index.chunk-SPAWN.js", spawn],
+      ["index.chunk-MEM.js", mem],
+      ["index.chunk-RESOLVER.js", RESOLVER],
+    ]);
+
+  it("the reset-checked form counts as the one switch site", () => {
+    expect(checkAutoMemoryFacts(files())).toEqual([]);
+  });
+  it.each([
+    [
+      "an export the map does not name coworkMemoryUsable",
+      () => files(SPAWN, MEM.replace("coworkMemoryUsable:", "otherCheck:")),
+      /does not name coworkMemoryUsable/,
+    ],
+    [
+      "no short-circuit for a missing account",
+      () => files(SPAWN, MEM.replace("return!e||!n||I()?!0:", "return I()?!0:")),
+      /no longer answers true/,
+    ],
+    [
+      "a catch that no longer withholds",
+      () => files(SPAWN, MEM.replace(",!1}}async", ",!0}}async").replace(",!1}}function", ",!0}}function")),
+      /catch no longer answers false/,
+    ],
+    [
+      "a different gate in the 3p helper",
+      () => files(SPAWN, MEM.replace('"3989806346"', '"3989806347"')),
+      /no longer "3p deployment or gate/,
+    ],
+    [
+      "the namespace re-declared around the site",
+      () => files(SPAWN.replace("async function spawn(){", "async function spawn(){let z={};")),
+      /re-declared around the site/,
+    ],
+    [
+      "both forms at once",
+      () => files(SPAWN.replace(SITE, SITE + "let o=s.memoryEnabled===!1?null:r.getAutoMemoryDirForSession(a);")),
+      /expected 1 in all/,
+    ],
+  ])("flags: %s", (_n, make, why) => {
+    const f = make();
+    expect([...f.values()].join("")).not.toBe([...files().values()].join("")); // the mutation applied
+    expect(checkAutoMemoryFacts(f).join("\n")).toMatch(why);
   });
 });
 
@@ -5198,9 +5322,20 @@ describe("1.25927.0 bundler change: MUTATION — widened guards still fail on re
     // Needle scoped to the `of[…]` head so it targets the delete helper S14a actually guards. The bare
     // triple is NOT unique — an unrelated array carries the same three names, and since 1.30096.1 both
     // live in one chunk, so the bare needle mutated the decoy and this test failed while S14a was fine.
-    const m = mutateDefining(f, 'of["ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"]', 'of["SOMETHING_ELSE"]');
+    // Open-ended: since Desktop 4.16336.0 the list carries a fourth member after the three, so a needle that closes
+    // the bracket no longer applies there.
+    const m = mutateDefining(f, 'of["ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"', 'of["SOMETHING_ELSE"');
     expect(m).not.toBeNull();
     expect(checkSpawnContractFacts(joined(m!), m!).some((x) => /S14a/.test(x))).toBe(true);
+  });
+
+  it('MUTATION: the empty-sentinel helper loses its fourth member while W2 still builds it as "" → S14a flags it', () => {
+    const f = realFiles();
+    if (!f) return;
+    if (!joined(f).includes('"ANTHROPIC_CUSTOM_HEADERS","CLAUDE_CODE_SESSIONS_OAUTH_TOKEN"]')) return; // a build before the fourth
+    const m = mutateDefining(f, '"ANTHROPIC_CUSTOM_HEADERS","CLAUDE_CODE_SESSIONS_OAUTH_TOKEN"]', '"ANTHROPIC_CUSTOM_HEADERS"]');
+    expect(m).not.toBeNull();
+    expect(checkSpawnContractFacts(joined(m!), m!).some((x) => /S14a.*-CLAUDE_CODE_SESSIONS_OAUTH_TOKEN/.test(x))).toBe(true);
   });
 
   // D6 (Desktop 2.2553.1): the gated set and the path keys both derive from ONE tool→path-key map, so the
@@ -5698,5 +5833,63 @@ describe("checkScheduledSessionFacts — scheduled-session sentinel", () => {
     const files = readRealBundleFilesOrSkip();
     if (!files) return;
     expect(checkScheduledSessionFacts(files)).toEqual([]);
+  });
+});
+
+// Desktop 4.16336.0: the host-loop-only retry part between the manifest and the trailing sentence. Synthetic shapes.
+describe("checkSubagentPromptFacts — host-loop retry part (Desktop >= 4.16336.0)", () => {
+  const RETRY_FN =
+    'const DL="Workspace still downloading",ST=`once the error opens with "${DL}", synthetic download-status text.`;' +
+    "function qa(){let e='When bash fails with \"Workspace still starting\", synthetic retry';" +
+    'return G("1978029737","workspaceBashDownloadStatus",!1,C())?`${e}; ${ST}`:`${e}.`}';
+  const withRetry = (o: { gate?: string; fn?: string } = {}) => {
+    const base = subagentBundle();
+    const src = (o.fn ?? RETRY_FN) + base.replace("${SUF}`}", `\${${o.gate ?? "h"}?\`\\n\\n\${qa()}\`:""}\${SUF}\`}`);
+    expect(src, "the retry part was not spliced in").toContain("${qa()}");
+    return new Map([["index.chunk-gen.js", src]]);
+  };
+  const clean = extractSubagentBranchSlices(genFiles())!;
+  const comp = extractSubagentComposition(genFiles())!;
+  const entry = {
+    hl: subagentBranchFingerprint(clean.hl),
+    vm: subagentBranchFingerprint(clean.vm),
+    manifest: subagentBranchFingerprint(comp.manifest),
+    suffix: subagentBranchFingerprint(comp.suffix),
+  };
+  const retryComp = extractSubagentComposition(withRetry())!;
+
+  it("slices the part, resolving the status text and its interpolation", () => {
+    expect(retryComp.retry).toEqual({
+      gate: "h",
+      text: 'When bash fails with "Workspace still starting", synthetic retry\u0000once the error opens with "Workspace still downloading", synthetic download-status text.',
+    });
+    expect(retryComp.manifest).toBe(comp.manifest);
+    expect(retryComp.suffix).toBe(comp.suffix);
+  });
+  it("clean when the newest entry records it; flags when it does not", () => {
+    const fp = subagentBranchFingerprint((retryComp.retry as { text: string }).text);
+    expect(checkSubagentPromptFacts(withRetry(), { versions: { "4.16336.0": { ...entry, retry: fp } } })).toEqual([]);
+    expect(checkSubagentPromptFacts(withRetry(), { versions: { "4.16336.0": entry } }).join("\n")).toMatch(/does not record it/);
+  });
+  it("flags a drifted text, and a recorded part the build no longer carries", () => {
+    expect(checkSubagentPromptFacts(withRetry(), { versions: { v: { ...entry, retry: "0000000000000000" } } }).join("\n")).toMatch(
+      /retry-part fingerprint drifted/,
+    );
+    expect(checkSubagentPromptFacts(genFiles(), { versions: { v: { ...entry, retry: "0000000000000000" } } }).join("\n")).toMatch(
+      /build carries none/,
+    );
+  });
+  it.each([
+    ["rendered under another binding than hostLoopMode", { gate: "od" }, /retry part gate/],
+    ["a different gate id", { fn: RETRY_FN.replace('"1978029737"', '"1978029738"') }, /retry part text/],
+    ["the gate default flipped on", { fn: RETRY_FN.replace(",!1,C()", ",!0,C()") }, /retry part text/],
+    ["a status text that is not a string", { fn: RETRY_FN.replace("ST=`", "ST=f(`").replace("text.`;", "text.`);") }, /retry part text/],
+    [
+      "an interpolation that does not resolve",
+      { fn: RETRY_FN.replace('const DL="Workspace still downloading",', "const ") },
+      /interpolates DL/,
+    ],
+  ])("flags: %s", (_n, o, why) => {
+    expect(checkSubagentPromptFacts(withRetry(o), { versions: { v: entry } }).join("\n")).toMatch(why);
   });
 });

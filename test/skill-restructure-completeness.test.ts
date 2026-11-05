@@ -4,7 +4,7 @@ import { resolve, join } from "node:path";
 
 // Completeness check for the split of the companion skill's SKILL.md into a short entrypoint plus
 // references/. The lists below are FROZEN from SKILL.md as it stood before the split (commit ec7ca3f):
-// every section heading, and the first line of every numbered bold item (the 27 gotchas plus the two
+// every section heading, and the first line of every numbered bold item (the 28 gotchas plus the two
 // numbered workflows). Each must still appear, as a whole line, in SKILL.md or one of references/*.md.
 // A section or gotcha dropped in the move goes red here even if every other guard stays green.
 //

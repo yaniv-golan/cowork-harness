@@ -274,6 +274,9 @@ export const PlatformBaseline = z.looseObject({
      *  such step. */
     webFetchVendorDeny: z.array(z.string()).optional(),
   }),
+  /** The host-loop CLI fence (Desktop >=4.16336.0, HOSTLOOP_FENCE_MIN_VERSION): the host CLI version from which
+   *  Desktop sends the agent its outside-folder blocks. DERIVED by \`sync\` each time; null below the floor. */
+  hostLoopFence: z.object({ minCli: z.string() }).nullable().optional(),
   bgEnvStrip: z
     .object({ knownVars: z.array(z.string()) })
     .partial()

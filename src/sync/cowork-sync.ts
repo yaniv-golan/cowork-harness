@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import * as acorn from "acorn";
 import { BASELINES_DIR, cmpVersionStrings } from "../baseline.js";
+import { fenceFloorFlag, readHostLoopFence, type HostLoopFence } from "./hostloop-fence.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../prompt.js";
 import {
   ObservedSpawnEnv,
@@ -50,6 +51,11 @@ export interface SyncResult {
   allowDomains: string[];
   /** Hosts web_fetch's Path B refuses even when allowlisted, read from this build; null = the build has no such step. */
   webFetchVendorDeny: string[] | null;
+  /** The host-loop CLI fence's version floor (src/sync/hostloop-fence.ts); null = this build has no fence. */
+  hostLoopFence: HostLoopFence | null;
+  /** The fence's permission-writer sources, for the permissions-key tripwire `sync` runs once it knows both staged
+   *  binaries (src/sync/hostloop-fence.ts `hostLoopPermissionKeyFlags`). */
+  hostLoopFenceWriters: string[];
   networkMode: string | null;
   requireFullVmSandbox: unknown;
   asarFingerprint: string;
@@ -959,8 +965,15 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
     spawnEnvProducer,
     cloud,
     webFetchVendorDeny,
+    hostLoopFence,
+    hostLoopFenceWriters,
     notes,
   } = extractFromAsar(unknown, gates, appVersion);
+  // The fence: monotonic — from HOSTLOOP_FENCE_MIN_VERSION on, a build must carry it, and a missing read refuses the
+  // write rather than recording "no fence". Its permissions-key tripwire runs in the sync command, which resolves the
+  // native agent hostloop runs as well as the VM ELF.
+  const floor = fenceFloorFlag(appVersion, hostLoopFence);
+  if (floor) flag(unknown, floor);
 
   // 6. Desktop's own server tool surface, from real Desktop init frames of THIS release (see
   // desktop-init-surface.ts). An unobserved surface is a WARNING, never an unknown delta: every Desktop
@@ -1036,6 +1049,8 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
     agentVersion,
     allowDomains,
     webFetchVendorDeny,
+    hostLoopFence,
+    hostLoopFenceWriters,
     networkMode,
     requireFullVmSandbox,
     asarFingerprint: fingerprint,
@@ -1780,6 +1795,9 @@ function extractFromAsar(
   /** web_fetch Path B vendor-host refusal list (`checkWebFetchVendorFacts`); null when the build has no such step or
    *  the bundle could not be read. */
   webFetchVendorDeny: string[] | null;
+  hostLoopFence: HostLoopFence | null;
+  /** The fence writers the permissions-key tripwire scans (empty when there is no fence). */
+  hostLoopFenceWriters: string[];
   notes: string[];
 } {
   if (!existsSync(ASAR)) {
@@ -1798,6 +1816,8 @@ function extractFromAsar(
       spawnEnvProducer: null,
       cloud: null,
       webFetchVendorDeny: null,
+      hostLoopFence: null,
+      hostLoopFenceWriters: [],
       notes: [],
     };
   }
@@ -1817,10 +1837,13 @@ function extractFromAsar(
     // mode FACTS still hold so a policy change is a loud flag, not silent baseline rot.
     for (const f of checkMountModeFacts(bundle, bundleFiles)) flag(unknown, f);
     for (const f of checkAutoMemoryFacts(bundleFiles)) flag(unknown, f);
+    for (const f of checkArtifactsMcpGuardFacts(bundleFiles)) flag(unknown, f);
     for (const f of checkWebFetchFacts(bundle)) flag(unknown, f);
     const vendor = checkWebFetchVendorFacts(bundleFiles);
     for (const f of vendor.flags) flag(unknown, f);
     const webFetchVendorDeny = vendor.flags.length ? null : vendor.vendorDeny;
+    const fenceRead = readHostLoopFence(bundleFiles);
+    for (const f of fenceRead.flags) flag(unknown, f);
     for (const f of checkPathHookFacts(bundleFiles)) flag(unknown, f);
     for (const f of checkSyspromptMapFacts(bundleFiles)) flag(unknown, f);
     // Code-shape tripwires (getMcpSkillSources caller, MCP-skills cap) — deltas hard-fail, NOTEs inform.
@@ -1901,6 +1924,8 @@ function extractFromAsar(
       spawnEnvProducer: bundleHasSpawnEnvProducer(bundle),
       cloud,
       webFetchVendorDeny,
+      hostLoopFence: fenceRead.fence,
+      hostLoopFenceWriters: fenceRead.writers,
       notes: [...notes, ...postWriteNotes, ...promptDrift.notes, ...tripwireNotes, ...cloudNotes],
     };
   } catch (e) {
@@ -1919,6 +1944,8 @@ function extractFromAsar(
       spawnEnvProducer: null,
       cloud: null,
       webFetchVendorDeny: null,
+      hostLoopFence: null,
+      hostLoopFenceWriters: [],
       notes: [],
     };
   } finally {
@@ -2101,6 +2128,37 @@ export function checkMountModeFacts(bundle: string, files: Map<string, string>):
   return flags;
 }
 
+/** The reset-checked auto-memory switch (Desktop >=4.16336.0); group 2 is the callee `<ns>.<m>`. */
+const COWORK_MEMORY_USABLE_SITE =
+  /(?<![\w$])([\w$]+)\.memoryEnabled!==!1&&await ([\w$]+\.[\w$]+)\(([\w$]+)\.getCurrentAccountId\(\),\3\.getCurrentOrgId\(\)\)\?\3\.getAutoMemoryDirForSession\([\w$]+\):null/g;
+
+/** Why the callee of the reset-checked auto-memory switch is not Desktop's claude.ai memory-reset check, or null.
+ *  The namespace is resolved through the site chunk's own `require` binding and must not be shadowed at the site (the
+ *  chunk re-binds the same short name in other functions); the target's export map must name the export
+ *  `coworkMemoryUsable`; that function must answer true at once for a missing account/org or for `<I>()`, and false
+ *  from its catch; `<I>` (same chunk) must be exactly "3p deployment, or gate 3989806346". */
+export function coworkMemoryUsableDefect(chunk: string, at: number, callee: string, files: Map<string, string>): string | null {
+  const ns = callee.slice(0, callee.indexOf("."));
+  const req = new RegExp(`(?<![\\w$])${reEsc(ns)}=require\\(`).exec(chunk);
+  if (!req) return `\`${ns}\` is not a require() binding in the spawn's chunk`;
+  if (shadowedByInnerDeclaration(chunk, at, ns, req.index))
+    return `\`${ns}\` is re-declared around the site, so it is not the require() binding`;
+  const ref = resolveNamespaceRef(callee, chunk, files);
+  if (!ref) return `\`${callee}\` does not resolve to an export`;
+  if (!new RegExp(`coworkMemoryUsable:\\(\\)=>${reEsc(ref.local)}(?![\\w$])`).test(ref.chunk))
+    return `\`${callee}\` resolves to \`${ref.local}\`, which the module's export map does not name coworkMemoryUsable`;
+  const head = new RegExp(`async function ${reEsc(ref.local)}\\(`).exec(ref.chunk);
+  const src = head ? enclosingFunctionSource(ref.chunk, ref.chunk.indexOf("{", head.index) + 1) : null;
+  if (!src) return `coworkMemoryUsable (\`${ref.local}\`) is not an async function in its module`;
+  const short = /^function [\w$]+\(([\w$]+),([\w$]+)\)\{try\{return\s*!\1\|\|!\2\|\|([\w$]+)\(\)\?!0:/.exec(src);
+  if (!short) return "coworkMemoryUsable no longer answers true at once for a missing account/org or its 3p/gate helper";
+  if (!/(?:,\s*|return\s*)!1\}\}$/.test(src)) return "coworkMemoryUsable's catch no longer answers false (withheld)";
+  const helper = braceBodyOf(ref.chunk, `function ${short[3]}(){`);
+  if (helper === null || !/^return [\w$.]+\(\)\.type==="3p"\|\|[\w$.]+\("3989806346"\)$/.test(helper))
+    return `coworkMemoryUsable's short-circuit \`${short[3]}()\` is no longer "3p deployment or gate 3989806346"`;
+  return null;
+}
+
 /**
  * Anchor for the auto-memory switch the harness models (`autoMemoryEnv`, src/loop-decision.ts). Pure over the
  * normalized per-chunk bundle; every flag is an unknown delta.
@@ -2121,12 +2179,74 @@ export function checkMountModeFacts(bundle: string, files: Map<string, string>):
  * churn); the gate-id literal and the arm structure carry the meaning. The no-account/org guard is not pinned:
  * it returns null, which is already the disabled outcome.
  */
+/** The env key that lets agent >=2.1.317 attach its own claude.ai Artifacts MCP server (Desktop >=4.16336.0). The
+ *  harness leaves it unset on purpose, so the agent keeps skipping that server and a harness run cannot write to the
+ *  operator's real Artifacts (registry: deliberately-unset). That choice is safe to keep only while production's own
+ *  constructions are the three below, so each is pinned by shape and every construction is counted bundle-wide,
+ *  with the env-key export tables (`KEY:()=>local`) excluded:
+ *   W2   the base env builder sets it "1", right after `CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS:""`;
+ *   W1   the Cowork spawn overrides it to "0" alongside the artifact host grant, under the SAME predicate the
+ *        chunk's frame-artifacts key spreads under (`...<p>&&{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"}`);
+ *   Code the Code tab sets it "0" on its own env when it cannot launch tools.
+ *  A fourth construction, a changed value, or an override that loses its predicate flags: an unconditional "0" on
+ *  the Cowork spawn would make "unset" production's behaviour by accident, which must be reviewed, not passed.
+ *  A bundle that never constructs the key (Desktop <4.16336.0) has nothing to guard. */
+export function checkArtifactsMcpGuardFacts(files: Map<string, string>): string[] {
+  const KEY = "CLAUDE_CODE_HOST_GUARDS_ARTIFACTS_MCP";
+  const why: string[] = [];
+  const ctorRe = new RegExp(`(?<![\\w$])${reEsc(KEY)}(?!:\\(\\)=>)`, "g");
+  const w2Re = new RegExp(`CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS:"",${reEsc(KEY)}:"1"[,}]`, "g");
+  const w1Re = new RegExp(`\\.\\.\\.([\\w$]+)&&([\\w$]+)!==void 0&&\\{CLAUDE_ARTIFACT_HOST_GRANT:\\2,${reEsc(KEY)}:"0"\\}`, "g");
+  const codeRe = new RegExp(
+    `![\\w$.]+\\.supportsLaunchTools\\(\\)\\|\\|[\\w$]+\\?([\\w$.]+)\\.env&&\\(\\1\\.env\\.${reEsc(KEY)}="0"\\)`,
+    "g",
+  );
+  let ctors = 0;
+  const found = { w2: 0, w1: 0, code: 0 };
+  for (const chunk of files.values()) {
+    ctors += [...chunk.matchAll(ctorRe)].length;
+    found.w2 += [...chunk.matchAll(w2Re)].length;
+    found.code += [...chunk.matchAll(codeRe)].length;
+    for (const m of chunk.matchAll(w1Re)) {
+      found.w1++;
+      const frame = [...chunk.matchAll(/\.\.\.([\w$]+)&&\{CLAUDE_CODE_COWORK_FRAME_ARTIFACTS:"1"\}/g)].map((f) => f[1]);
+      if (frame.length !== 1 || frame[0] !== m[1])
+        why.push(
+          `the Cowork spawn's "0" override is spread under ${m[1]}, not the chunk's one frame-artifacts predicate (${frame.join(", ") || "none"})`,
+        );
+    }
+  }
+  if (ctors === 0) return [];
+  for (const [site, n] of Object.entries(found))
+    if (n !== 1)
+      why.push(
+        `${n} ${site === "w2" ? 'base-builder "1"' : site === "w1" ? 'Cowork-spawn "0" override' : 'Code-tab "0"'} site(s), expected 1`,
+      );
+  if (ctors !== found.w2 + found.w1 + found.code)
+    why.push(`${ctors} construction(s) in the bundle but ${found.w2 + found.w1 + found.code} in a pinned shape — one is new or reshaped`);
+  return why.map(
+    (w) =>
+      `artifacts-mcp: ${w} — the harness leaves ${KEY} unset so the agent skips its own Artifacts server; re-check that choice and the deliberately-unset row (src/sync/spawn-env-registry.ts)`,
+  );
+}
+
 export function checkAutoMemoryFacts(files: Map<string, string>): string[] {
   const chunks = [...files.values()];
   const count = (re: RegExp) => chunks.reduce((n, c) => n + (c.match(re)?.length ?? 0), 0);
   const why: string[] = [];
   const ternary = count(/(?<![\w$])[\w$]+\.memoryEnabled===!1\?null:[\w$]+\.getAutoMemoryDirForSession\([\w$]+\)/g);
-  if (ternary !== 1) why.push(`the spawn's \`memoryEnabled===!1?null:getAutoMemoryDirForSession(…)\` is at ${ternary} site(s), expected 1`);
+  // Desktop 4.16336.0: the switch gained a second conjunct, a claude.ai memory-reset check
+  // (`memoryEnabled!==!1&&await <ns>.<m>(account,org)?getAutoMemoryDirForSession(id):null`). Either form counts as the
+  // one site; the new form is admitted only when its callee resolves to the reset check (coworkMemoryUsableDefect).
+  const usable = chunks.flatMap((c) => [...c.matchAll(COWORK_MEMORY_USABLE_SITE)].map((m) => ({ chunk: c, at: m.index!, callee: m[2]! })));
+  if (ternary + usable.length !== 1)
+    why.push(
+      `the spawn's \`memoryEnabled===!1?null:getAutoMemoryDirForSession(…)\` is at ${ternary} site(s) and its reset-checked form at ${usable.length}, expected 1 in all`,
+    );
+  else if (usable.length === 1) {
+    const defect = coworkMemoryUsableDefect(usable[0]!.chunk, usable[0]!.at, usable[0]!.callee, files);
+    if (defect) why.push(`the auto-memory switch's reset check: ${defect}`);
+  }
   const delegationRe = /getAutoMemoryDirForSession\(([\w$]+)\)\{return this\.resolveAutoMemoryDir\(\1,!1\)\}/;
   const sites = chunks.filter((c) => delegationRe.test(c));
   if (sites.length !== 1)
@@ -2835,6 +2955,86 @@ function pathHookBody(chunk: string, installAt: number): string | null {
   return inline ? literalAwareBodyAt(chunk, installAt + inline[0].length - 1) : null;
 }
 
+/** Whether the brace depth (literal-aware) from `from` to `to` stays at or above zero and ends at `end` (0 = same
+ *  function body, >0 = `to` is nested deeper). Returns the final depth, or -1 when it drops below zero (different
+ *  function) or a literal could not be read. */
+function braceDepthBetween(text: string, from: number, to: number): number {
+  let depth = 0;
+  for (let i = from; i < to;) {
+    const lit = skipLiteralAt(text, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}" && --depth < 0) return -1;
+    i++;
+  }
+  return depth;
+}
+
+/** Index just past the `}` that closes the destructuring pattern containing `at` (the `}` directly followed by `=`),
+ *  or -1. Literal-aware; nested `{}` inside the pattern (a default value) is skipped. */
+function destructuringPatternEnd(text: string, at: number): number {
+  let depth = 0;
+  for (let i = at; i < text.length;) {
+    const lit = skipLiteralAt(text, i);
+    if (lit >= 0) {
+      i = lit;
+      continue;
+    }
+    if (text[i] === "{") depth++;
+    else if (text[i] === "}") {
+      if (depth === 0) return text[i + 1] === "=" && text[i + 2] !== "=" && text[i + 2] !== ">" ? i + 1 : -1;
+      depth--;
+    }
+    i++;
+  }
+  return -1;
+}
+
+/** Why the hoisted readOnly tail (Desktop >=4.16336.0) is not the per-call mid-session roots, or null when it is.
+ *  The shape: `<C>=<g>?.()??[]` (or downleveled) in the path hook's closure, used as `...<A>||<B>?[]:<C>` later in
+ *  the SAME closure, where `<g>` is the destructured `getMidSessionReadOnlyPaths:<g>` of a function that ENCLOSES the
+ *  closure (one function up) and is not re-bound in between. Each connection is checked, so a same-named binding in
+ *  another function, a binding to some other getter, or a getter destructured from another property is not admitted. */
+export function readOnlyTailHoistDefect(chunk: string): string | null {
+  const bindRe = /(?<![\w$.])([\w$]+)=(?:([\w$]+)\?\.\(\)|\(([\w$]+)==null\?void 0:\3\(\)\))\?\?\[\](?=[,;)])/g;
+  const reasons: string[] = [];
+  for (const b of chunk.matchAll(bindRe)) {
+    const C = b[1]!;
+    const g = (b[2] ?? b[3])!;
+    const at = b.index!;
+    const useRe = new RegExp(`\\.\\.\\.[\\w$]+\\|\\|[\\w$]+\\?\\[\\]:${reEsc(C)}(?![\\w$])`, "g");
+    useRe.lastIndex = at + b[0].length;
+    const use = useRe.exec(chunk);
+    if (!use) continue;
+    if (braceDepthBetween(chunk, at, use.index) !== 0) {
+      reasons.push(`\`${C}\` is used outside the closure that binds it`);
+      continue;
+    }
+    const destr = [...chunk.slice(0, at).matchAll(new RegExp(`getMidSessionReadOnlyPaths:${reEsc(g)}(?=[,}=])`, "g"))].pop();
+    if (!destr) {
+      reasons.push(`\`${g}\` is not a destructured getMidSessionReadOnlyPaths`);
+      continue;
+    }
+    // One function up: the binding sits strictly deeper than the destructuring, and nothing between them closes the
+    // function the destructuring belongs to. The walk starts after the destructuring PATTERN (`{…}=`), whose own
+    // closing brace would otherwise read as leaving the function.
+    const patternEnd = destructuringPatternEnd(chunk, destr.index!);
+    if (patternEnd < 0 || patternEnd > at || braceDepthBetween(chunk, patternEnd, at) <= 0) {
+      reasons.push(`the getMidSessionReadOnlyPaths destructuring of \`${g}\` does not enclose the closure`);
+      continue;
+    }
+    if (new RegExp(`(?<![\\w$.:])${reEsc(g)}(?:=(?![=>])|\\?\\?=|\\|\\|=|&&=)`).test(chunk.slice(destr.index! + destr[0].length, at))) {
+      reasons.push(`\`${g}\` is re-bound between the destructuring and the closure`);
+      continue;
+    }
+    return null;
+  }
+  return reasons.length > 0 ? reasons.join("; ") : "no hoisted `<C>=<g>?.()??[]` binding used as `...A||B?[]:<C>`";
+}
+
 /** Why the launcher guard `<g>` of a conditional canUseTool link is not `<o>.viaLauncher` read from the launcher call
  *  in the install's own function, or null. See checkPathHookFacts (6). */
 function launcherGuardDefect(chunk: string, files: Map<string, string>, g: string, conditionalLinks: number): string | null {
@@ -3137,11 +3337,12 @@ export function checkPathHookFacts(files: Map<string, string>): string[] {
   inHook(/getMidSessionReadOnlyPaths/, "mid-session roots", "getMidSessionReadOnlyPaths is no longer wired");
   // B14: the optional call is emitted NATIVELY now (`?[]:ye?.()??[]`) instead of downleveled
   // (`?[]:(ne==null?void 0:ne())??[]`). Same expression, newer output target — admit both.
-  inHook(
-    /\?\[\]:(?:\([\w$]+==null\?void 0:[\w$]+\(\)\)|[\w$]+\?\.\(\))\?\?\[\]/,
-    "readOnly-tail rule",
-    "the ...ie||ct?[]:(ne?.())??[] per-call assembly shape is gone",
-  );
+  // Desktop 4.16336.0 hoists the same expression into a binding (`C=de?.()??[]`, then `...A||B?[]:C`). That form is
+  // admitted only through readOnlyTailHoistDefect, which proves the binding, its use and the getter are connected.
+  if (!/\?\[\]:(?:\([\w$]+==null\?void 0:[\w$]+\(\)\)|[\w$]+\?\.\(\))\?\?\[\]/.test(consuming)) {
+    const defect = readOnlyTailHoistDefect(consuming);
+    if (defect !== null) miss("readOnly-tail rule", `the ...ie||ct?[]:(ne?.())??[] per-call assembly shape is gone (${defect})`);
+  }
   // B15: the SESSION_TYPE_CHAT constant is INLINED to its literal at this comparison
   // (`e.sessionType==="chat"`). The constant itself is still exported and separately asserted above, so
   // accept either form here — what this anchor pins is that the hook still branches on chat sessions.
@@ -3664,7 +3865,7 @@ function readPromptFingerprintsFile(): PromptFingerprintsFile | null {
 /** One committed fingerprint entry. `hl`/`vm` are the ternary branch texts; `manifest`/`suffix` are the
  *  two parts composed AFTER the overridable section (Desktop >=1.46388.3) — absent on older entries,
  *  which is why only the NEWEST entry is ever compared and only its OWN axes are mandatory. */
-export type SubagentFingerprintEntry = { hl: string; vm: string; manifest?: string; suffix?: string; note?: string };
+export type SubagentFingerprintEntry = { hl: string; vm: string; manifest?: string; suffix?: string; retry?: string; note?: string };
 
 /** subagentAppendVersions map from cowork-system-prompt-fingerprints.json; null = unreadable/absent
  *  (checkSubagentPromptFacts turns that into a hard-fail flag — never a silent skip). */
@@ -3974,6 +4175,10 @@ export function extractSubagentComposition(files: Map<string, string>): {
   generator?: { name: string; params: string[] };
   /** Whether the generator source renders anything read-only (check 7c then requires the 1p gate). */
   readOnly?: { listParam: string } | "unrecognized";
+  /** Desktop >=4.16336.0: the host-loop-only "Workspace still starting" retry part between the manifest and the
+   *  suffix. `gate` is the binding the part is rendered under (check 7b requires the generator's hostLoopMode);
+   *  `text` is its prose (base sentence, then the download-status text), or `unrecognized` names what failed. */
+  retry?: { gate: string; text: string } | { gate: string; unrecognized: string };
 } | null {
   const module = [...files.values()].find((c) => c.includes("exist only in the sandbox"));
   if (!module) return null;
@@ -4015,9 +4220,13 @@ export function extractSubagentComposition(files: Map<string, string>): {
   // this module's own `<ident>="…"` binding. Never matched by name.
   // The manifest call admits one level of nested parentheses: 3.1623.4 passes `<ns>.<id>(<folders>??[])` as a
   // sixth argument.
-  const comp = module.match(/return`\\n\\n\$\{[\w$.]+\([\s\S]{0,200}?\}\$\{[\w$]+\?[\w$]+\((?:[^()]|\([^()]*\))*\):""\}\$\{([\w$]+)\}`/);
+  // 4.16336.0 inserts an optional host-loop-only part before the suffix: `${<hl>?`\n\n${<retry>()}`:""}`.
+  const comp = module.match(
+    /return`\\n\\n\$\{[\w$.]+\([\s\S]{0,200}?\}\$\{[\w$]+\?[\w$]+\((?:[^()]|\([^()]*\))*\):""\}(?:\$\{([\w$]+)\?`\\n\\n\$\{([\w$]+)\(\)\}`:""\})?\$\{([\w$]+)\}`/,
+  );
   if (!comp) return null;
-  const decl = module.match(new RegExp(`(?<![\\w$])${reEsc(comp[1])}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
+  const retry = comp[1] !== undefined ? subagentRetryPart(module, comp[1], comp[2]!, files) : undefined;
+  const decl = module.match(new RegExp(`(?<![\\w$])${reEsc(comp[3]!)}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`));
   if (!decl) return null;
   const sig = /^function ([\w$]+)\(([^)]*)\)/.exec(fnSrc);
   const generator = sig ? { name: sig[1]!, params: sig[2]!.split(",").filter(Boolean) } : undefined;
@@ -4031,7 +4240,40 @@ export function extractSubagentComposition(files: Map<string, string>): {
     ...(defaultArm !== undefined ? { defaultArm, predicate } : {}),
     ...(generator ? { generator } : {}),
     ...(readOnly ? { readOnly } : {}),
+    ...(retry ? { retry } : {}),
   };
+}
+
+/** The sub-agent's retry part (Desktop >=4.16336.0): `function <f>(){let <e>='<base>';return <g>("1978029737",
+ *  "workspaceBashDownloadStatus",!1,<x>())?`${<e>}; ${<status>}`:`${<e>}.`}`. The gate id, field and default are
+ *  pinned, the status text is resolved through the module's own require binding to a string or template literal,
+ *  and each `${<id>}` inside that template to a string in the same chunk (one hop). Anything else is reported as
+ *  unrecognized rather than guessed. */
+function subagentRetryPart(
+  module: string,
+  gate: string,
+  fn: string,
+  files: Map<string, string>,
+): { gate: string; text: string } | { gate: string; unrecognized: string } {
+  const shape = new RegExp(
+    `function ${reEsc(fn)}\\(\\)\\{let ([\\w$]+)=(["'])((?:(?!\\2)[^\\\\]|\\\\.)*)\\2;return [\\w$.]+\\("1978029737","workspaceBashDownloadStatus",!1,[\\w$.]+\\(\\)\\)\\?\`\\$\\{\\1\\}; \\$\\{([\\w$]+(?:\\.[\\w$]+)?)\\}\`:\`\\$\\{\\1\\}\\.\`\\}`,
+  ).exec(module);
+  if (!shape)
+    return {
+      gate,
+      unrecognized: `${fn}() is no longer the base sentence plus the download-status text under gate 1978029737 workspaceBashDownloadStatus (default off)`,
+    };
+  const ref = resolveNamespaceRef(shape[4]!, module, files);
+  const lit = ref && new RegExp(`(?<![\\w$.])${reEsc(ref.local)}=(?:"((?:[^"\\\\]|\\\\.)*)"|\`([^\`]*)\`)`).exec(ref.chunk);
+  if (!ref || !lit) return { gate, unrecognized: `the download-status text ${shape[4]} does not resolve to a string` };
+  let status = lit[1] ?? lit[2]!;
+  if (lit[2] !== undefined)
+    for (const m of [...lit[2].matchAll(/\$\{([\w$]+)\}/g)]) {
+      const v = new RegExp(`(?<![\\w$.])${reEsc(m[1]!)}="((?:[^"\\\\]|\\\\.)*)"`).exec(ref.chunk);
+      if (!v) return { gate, unrecognized: `the download-status text interpolates ${m[1]}, which is not a string in its module` };
+      status = status.replace(m[0], v[1]!);
+    }
+  return { gate, text: `${shape[3]}\u0000${status}` };
 }
 
 /** The code that makes a scheduled-task session differ from an ordinary one (Desktop >=2.42304.0). An observation
@@ -4183,7 +4425,10 @@ export function checkScheduledSessionFacts(files: Map<string, string>, appVersio
   // `<L>=[<ns>.<k>,…]`, the subset `<R>=<L>.filter(e=><T>[e].annotations?.readOnlyHint===!0).map(e=>\`mcp__${<srv>}__${e}\`)`.
   // Every name must be one this sync has read (KNOWN_COWORK_FRAME_TOOLS), and `<srv>` must be "cowork". From Desktop
   // 4.29.0 the host loop's allowed-tools list spreads `<R>` (`...<f>(<G>.<export of R>)`), pre-approving the read-only
-  // tools; any spread of this module into that list must be exactly `<R>`, never the whole list. Required under the same
+  // tools; any spread of this module into that list must be exactly `<R>`, never the whole list. From Desktop 4.16336.0
+  // the spawn can remove `<R>` from that list again (`<gate>&&!<x>&&(allowedTools=allowedTools.filter(…<R>…))`, where
+  // `<x>` is `<gate>&&<launcher-era session>`); on an ordinary session `<x>` equals `<gate>`, so it never fires, and
+  // nothing here pins it. Required under the same
   // dating signals as (5): every bundle that has the predicate has had this list (3.6556.2, 4.29.0, 4.4212.0).
   const roSites = all(
     /(?<![\w$.])([\w$]+)=\[((?:[\w$]+\.[\w$]+,)*[\w$]+\.[\w$]+)\],([\w$]+)=\1\.filter\(\(e=>[\w$]+\[e\]\.annotations\?\.readOnlyHint===!0\)\)\.map\(\(e=>`mcp__\$\{([\w$]+\.[\w$]+)\}__\$\{e\}`\)\)/g,
@@ -4561,6 +4806,20 @@ export function checkSubagentPromptFacts(
       )
         roMiss(`the reader ${feed[1]} no longer returns [] first on a non-3p deployment — a 1p sub-agent may now get read-only markers`);
     }
+    // (7d) Desktop 4.16336.0's host-loop-only retry part. It must render under the generator's own hostLoopMode
+    //      parameter (the main-loop shell section carries the same sentence, and a VM-loop sub-agent is told nothing
+    //      about a workspace starting), and its text is fingerprinted as its own axis.
+    let retryFp: string | undefined;
+    if (comp.retry) {
+      const hlParam = /\(\{vmProcessName:[\w$]+,hostLoopMode:([\w$]+)[,}]/.exec(comp.module);
+      if (!hlParam || comp.retry.gate !== hlParam[1])
+        miss(
+          "retry part gate",
+          `the "Workspace still starting" part renders under ${comp.retry.gate}, not the generator's hostLoopMode parameter${hlParam ? ` ${hlParam[1]}` : ""} — a VM-loop sub-agent may now get it`,
+        );
+      if ("unrecognized" in comp.retry) miss("retry part text", comp.retry.unrecognized);
+      else retryFp = subagentBranchFingerprint(comp.retry.text);
+    }
     const manifestFp = subagentBranchFingerprint(comp.manifest);
     const suffixFp = subagentBranchFingerprint(comp.suffix);
     if (committedNewest) {
@@ -4584,6 +4843,20 @@ export function checkSubagentPromptFacts(
       if (!declares)
         flags.push(
           `subagent-append: the build carries composed append parts (manifest ${manifestFp}, suffix ${suffixFp}) but the newest committed entry ${committedNewest.version} records neither — record them or a change to either ships unguarded`,
+        );
+      // The retry axis both ways: a build that carries the part needs a recorded fingerprint, and a recorded one
+      // that the build no longer carries means the harness still sends a part production dropped.
+      if (retryFp !== undefined && want.retry === undefined)
+        flags.push(
+          `subagent-append: the build carries the host-loop retry part (${retryFp}) but the newest committed entry ${committedNewest.version} does not record it — record it or a change to it ships unguarded`,
+        );
+      else if (typeof want.retry === "string" && retryFp !== undefined && want.retry !== retryFp)
+        flags.push(
+          `subagent-append: host-loop retry-part fingerprint drifted vs ${committedNewest.version} (${want.retry} -> ${retryFp}) — update the paraphrase in src/prompt/subagent-manifest.ts, then add a new version entry`,
+        );
+      else if (typeof want.retry === "string" && !comp.retry)
+        flags.push(
+          `subagent-append: the newest committed entry ${committedNewest.version} records a host-loop retry part but the build carries none — the harness still sends it; remove it from the composition`,
         );
     }
   }
@@ -5567,6 +5840,39 @@ export function checkVmAgentStagingFacts(files: Map<string, string>): string[] {
   return flags;
 }
 
+/** The keys the spawn's empty-sentinel helper may delete (S14a). The ANTHROPIC_* three are required; the fourth arrived
+ *  in Desktop 4.16336.0. Exported for the tests. */
+export const S14A_EMPTY_SENTINEL_KEYS: readonly string[] = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_CUSTOM_HEADERS",
+  "CLAUDE_CODE_SESSIONS_OAUTH_TOKEN",
+];
+
+/** What is wrong with one empty-sentinel helper's member list, or null. A member outside S14A_EMPTY_SENTINEL_KEYS is
+ *  unclassified; a known member is required when it is an ANTHROPIC_* key or when `bundle` constructs it as `""`. */
+export function s14aMemberDefect(members: readonly string[], bundle: string): string | null {
+  const extra = members.filter((k) => !S14A_EMPTY_SENTINEL_KEYS.includes(k));
+  const lost = S14A_EMPTY_SENTINEL_KEYS.filter(
+    (k) => !members.includes(k) && (k.startsWith("ANTHROPIC_") || new RegExp(`[{,]${reEsc(k)}:""`).test(bundle)),
+  );
+  if (extra.length === 0 && lost.length === 0) return null;
+  return (
+    `the empty-sentinel delete helper's member set changed${extra.length ? ` (+${extra.join(", ")})` : ""}` +
+    `${lost.length ? ` (-${lost.join(", ")}, still constructed as "" or an ANTHROPIC_* key)` : ""} — classify each key W2 builds as "" before re-pinning`
+  );
+}
+
+/** Every `for(<kw> <v> of["ANTHROPIC_API_KEY",…])<e>[<v>]===""&&delete <e>[<v>]` loop (or its `if(…)delete` form,
+ *  as an unminified build writes it): the member lists, in order.
+ *  The loop BODY is part of the match, so another loop over a list that happens to start with the same key (a scrub
+ *  list, a header list) is not taken for the helper. */
+export function s14aEmptySentinelLists(bundle: string): string[][] {
+  const re =
+    /for\((?:const|let|var) ([\w$]+) of\s*\[("ANTHROPIC_API_KEY"(?:,"[A-Z0-9_]+")*)\]\)(?:([\w$]+)\[\1\]===""&&delete \3\[\1\]|if\(([\w$]+)\[\1\]===""\)delete \4\[\1\])/g;
+  return [...bundle.matchAll(re)].map((m) => m[2]!.split(",").map((s) => s.slice(1, -1)));
+}
+
 /**
  * S-tier sentinel: the structural/curated spawn facts the generator does NOT produce (scalar options,
  * tools/allowedTools heads + tail-guards, the FnA delete def+application, the negative invariant, the
@@ -6242,8 +6548,19 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
   // B7 (Desktop 1.25927.0): the loop binding is emitted as `let` in the new codegen (`for(let t of[…])`).
   // The binding keyword is a minifier choice, never a contract fact — admit all three. Its NAME is a
   // minifier choice too, hence `[\w$]+` (a `$`-initial name is legal and `\w` cannot match it).
-  if (!has(/for\((?:const|let|var) [\w$]+ of\s*\[?"ANTHROPIC_API_KEY","ANTHROPIC_AUTH_TOKEN","ANTHROPIC_CUSTOM_HEADERS"\]/))
-    miss("S14a FnA definition", "the empty-ANTHROPIC_* delete helper is gone");
+  // Desktop 4.16336.0 added CLAUDE_CODE_SESSIONS_OAUTH_TOKEN as a fourth member. The MEMBER SET is the contract (each
+  // member is a key W2 constructs as "" and relies on this helper to delete), so it is pinned as a set: a member outside
+  // S14A_EMPTY_SENTINEL_KEYS flags by name, and a member goes missing when it is an ANTHROPIC_* one or the bundle
+  // still constructs it as "" (a key built "" and no longer deleted reaches the agent as ""). Older baselines, which
+  // neither construct nor delete the fourth, still read.
+  {
+    const s14a = s14aEmptySentinelLists(bundle);
+    if (s14a.length === 0) miss("S14a FnA definition", "the empty-ANTHROPIC_* delete helper is gone");
+    for (const members of s14a) {
+      const defect = s14aMemberDefect(members, bundle);
+      if (defect) miss("S14a FnA definition", defect);
+    }
+  }
   // The blank-empties helper must be CALLED on the same env object that just received ANTHROPIC_CUSTOM_HEADERS
   // (…},helper(X.env)). The sdkOptions var name is minifier-assigned (V→F across builds); capture it and
   // backreference so the guarantee "blank runs on THIS env" survives the rename without hardcoding the name.

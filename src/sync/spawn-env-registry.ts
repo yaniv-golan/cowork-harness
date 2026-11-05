@@ -114,7 +114,7 @@ const SPAWN_ENV_ALLOWLIST: Record<string, readonly [SpawnEnvClass, string]> = {
   CLAUDE_CODE_SUBAGENT_MODEL: ["settings-conditional", "user-settings-conditional (default absent)"],
   CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: [
     "deliberately-unset",
-    "server-delivered by the claude.ai account config (forced on for third-party and managed deployments) and set in every observed session; the harness leaves it unset because it does not pass connected folders as additional directories",
+    "server-delivered by the claude.ai account config (forced on for third-party and managed deployments) and set in every observed session; it switches the agent's loading of CLAUDE.md files from additional directories. The harness leaves it unset: on hostloop with the outside-folder fence it does pass connected folders as additional directories, but a CLAUDE.md inside one is not loaded into the model's context as it is in production (docs/fidelity-gaps.md)",
   ],
   CLAUDE_CODE_AUTO_COMPACT_WINDOW: ["settings-conditional", "user-settings-conditional (default absent)"],
   CLAUDE_CODE_DISABLE_BUNDLED_SKILLS: ["settings-conditional", "user-settings-conditional (default absent)"],
@@ -196,6 +196,28 @@ const SPAWN_ENV_ALLOWLIST: Record<string, readonly [SpawnEnvClass, string]> = {
   // pinning would bake a 3p-only key into a baseline that describes the 1p spawn, which is the same call
   // made for the 3p-only key in 1.26832.0.
   CLAUDE_CODE_DIAGNOSTICS_FILE: ["3p-only", "3p-provider-only branch; harness models 1p"],
+  // Desktop 4.16336.0. Built in the shared base-env builder as `...<deployment>.type==="3p"&&{…:"Monitor"}`; that
+  // builder is spread into W2 through a call (`...<builder>(localAgent?"cowork":"code")`), so the window scan meets the
+  // key without seeing the 3p guard around it. Deleted again unless the system prompt is a snapshot object.
+  CLAUDE_CODE_UPFRONT_TOOLS: ["3p-only", "3p-provider-only branch inside the shared base-env builder; harness models 1p"],
+  // Desktop 4.16336.0. `...<opts>.autoModeChecksOnServer!==void 0&&{…:"1"|"0"}`, where the option is undefined unless the
+  // deployment is 3p with a gateway inference provider.
+  CLAUDE_CODE_AUTO_MODE_SERVER: ["3p-only", "3p gateway deployments only (autoModeChecksOnServer); harness models 1p"],
+  // Desktop 4.16336.0. Credential-shaped: only the NAME is recorded here. W2 constructs it as "" and the empty-sentinel
+  // delete helper (S14a pins its member set) removes it, exactly as for ANTHROPIC_AUTH_TOKEN.
+  CLAUDE_CODE_SESSIONS_OAUTH_TOKEN: [
+    "anchored-elsewhere",
+    "constructed '' then deleted by the empty-sentinel helper (S14a pins the member set) — absent from the final env",
+  ],
+  // Desktop 4.16336.0. Three construction sites (pinned by checkArtifactsMcpGuardFacts): W2 "1", the W1 override "0"
+  // beside CLAUDE_ARTIFACT_HOST_GRANT under the frame-artifacts predicate, and the Code tab's "0". With "1", agent
+  // 2.1.317 stops skipping its own first-party Artifacts HTTP MCP server (`claude-artifacts`) inside a Desktop host.
+  // The harness leaves it unset so a test run can never read or write the operator's real claude.ai Artifacts; unset,
+  // the agent keeps skipping that server, as every agent before 2.1.317 did (docs/fidelity-gaps.md).
+  CLAUDE_CODE_HOST_GUARDS_ARTIFACTS_MCP: [
+    "deliberately-unset",
+    'W2 sets "1" on a first-party Cowork session, which lets the agent attach its own claude-artifacts server; the harness leaves it unset so test runs cannot reach the operator\'s real Artifacts (three sites pinned by checkArtifactsMcpGuardFacts)',
+  ],
 };
 
 /**
@@ -364,7 +386,7 @@ const EXTRA_ROWS: Record<string, { class: SpawnEnvClass; reason: string; sites: 
   CLAUDE_CODE_SKILL_ATTRIBUTION: {
     class: "attribution-metadata",
     reason:
-      "path → skill id map for analytics (skill_id); the agent deletes it from child-process env; set on every observed session; not modeled",
+      "path → skill id map for analytics (skill_id); the agent deletes it from child-process env; set only when the session resolves at least one synced user-created skill (data-conditional); not modeled",
     sites: ["post-write", "observed"],
   },
   CLAUDE_CODE_MCP_APPS_HOST: {

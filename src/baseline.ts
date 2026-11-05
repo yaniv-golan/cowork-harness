@@ -139,6 +139,11 @@ export const DESKTOP_APP_VERSION_MIN_VERSION = "2.2553.1";
  *  outputs, as those releases did. */
 export const HOSTLOOP_SYSTEM_EMPTY_CWD_MIN_VERSION = "2.7032.0";
 
+/** First Desktop that fences its host-loop agent: for a host CLI at or above the baseline's \`hostLoopFence.minCli\`,
+ *  it turns on the agent's blocks on reads and writes outside the task's folders. A version floor only: \`sync\`
+ *  must read the fence from every build at or above it, and records \`hostLoopFence: null\` below it. */
+export const HOSTLOOP_FENCE_MIN_VERSION = "4.16336.0";
+
 /** First Desktop whose host-loop workspace bash rewrites a plugin's host path, written into the command, to
  *  the plugin's VM mount before running it (see src/hostloop/plugin-path-rewrite.ts). Absent from every
  *  backed-up asar through 1.37937.3 and present, with the same rules, in 1.40609.0, 1.40609.1, 1.44121.1,

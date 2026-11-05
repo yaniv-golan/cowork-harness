@@ -1,5 +1,6 @@
+import { execFileSync } from "node:child_process";
 import { closeSync, constants, fsyncSync, mkdirSync, openSync, realpathSync, statSync, writeSync } from "node:fs";
-import { join } from "node:path";
+import { join, parse, resolve, sep } from "node:path";
 import { cmpVersionStrings, HOSTLOOP_SYSTEM_EMPTY_CWD_MIN_VERSION } from "../baseline.js";
 import type { PlatformBaseline } from "../types.js";
 
@@ -119,6 +120,8 @@ export function hostLoopPermissionArgs(opts: {
   hostOutputsDir: string;
   platform?: NodeJS.Platform | string;
   realpath?: (p: string) => string;
+  /** Present when the outside-folder fence applies (see `hostLoopFenceApplies`). */
+  fence?: HostLoopFenceRoots;
 }): { disallowed: string[]; extraArgs: string[]; cwdSpellings: string[] } {
   const { cwdSpellings: spellings, rules } = cwdDenyRules(opts.processCwd, opts);
   // Known limit: a fallback dir whose path contains `(`/`)` gets `[?]` here, which matches a literal `?`,
@@ -131,7 +134,116 @@ export function hostLoopPermissionArgs(opts: {
   });
   return {
     disallowed: escaped,
-    extraArgs: ["--settings", JSON.stringify({ permissions: { additionalDirectories: [opts.hostOutputsDir] } })],
+    extraArgs: [
+      "--settings",
+      JSON.stringify({
+        permissions: opts.fence
+          ? hostLoopFencePermissions(opts.hostOutputsDir, opts.fence, opts.realpath)
+          : { additionalDirectories: [opts.hostOutputsDir] },
+      }),
+    ],
     cwdSpellings: spellings,
+  };
+}
+
+/**
+ * The host-loop outside-folder fence (Desktop 4.16336.0 onward, for a host CLI at or above the baseline's
+ * `hostLoopFence.minCli`). Desktop turns on the agent's own blocks on file reads and writes outside its working
+ * directories, adds every connected folder as a working directory, and lets reads through to the roots it owns
+ * (uploads, the spooled tool results, the skills plugin, read-only plugins), each listed as written and as its
+ * realpath. It does this at spawn and again in a post-spawn push of the full set, which the agent unions with the
+ * `--settings` value (each push replaces the previous one; measured with apply_flag_settings), so the harness sends
+ * the set once, in its one `--settings` object. Not exempt, as in production: outputs (a working directory), the process cwd, auto-memory.
+ */
+export interface HostLoopFenceRoots {
+  /** Connected folders' host paths, read-only and read-write alike; their read-only-ness is the path gate's job. */
+  folders: string[];
+  /** The roots the agent may read but not treat as working directories. */
+  readOnlyRoots: string[];
+}
+
+/** Desktop's staging layout for the native agent: `claude-code/<ver>/[<build-sha12>/]claude.app/…`. */
+const STAGED_NATIVE_AGENT = /(?:^|\/)claude-code\/(\d+\.\d+\.\d+)\/(?:[0-9a-f]{12}\/)?claude\.app\//;
+
+/** The env the `--version` child gets: enough to start, nothing of the operator's (no credential reaches it). */
+export function versionProbeEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  return { PATH: env.PATH ?? "/usr/bin:/bin", HOME: env.HOME ?? "" };
+}
+
+/** Ask the binary itself (`<binary> --version`, $0, a few milliseconds). Throws when it cannot run. */
+function binaryVersionOutput(binaryPath: string): string {
+  return execFileSync(binaryPath, ["--version"], {
+    encoding: "utf8",
+    timeout: 10_000,
+    stdio: ["ignore", "pipe", "ignore"],
+    env: versionProbeEnv(),
+  });
+}
+
+/** The version of the agent binary at `binaryPath`. A path in Desktop's staging layout names it; any other path
+ *  (an override, a CLI on PATH) is asked with `--version`, since a version-shaped directory elsewhere (a Node or
+ *  Homebrew install, say) says nothing about the agent. When neither yields a version the result is undefined, so the
+ *  fence is not sent, with a warning: Desktop's own version check fails closed the same way. */
+export function agentVersionOfBinary(
+  binaryPath: string,
+  warn: (m: string) => void,
+  askBinary: (p: string) => string = binaryVersionOutput,
+): string | undefined {
+  const staged = STAGED_NATIVE_AGENT.exec(binaryPath.split(sep).join("/"));
+  if (staged) return staged[1];
+  let why: string;
+  try {
+    const out = askBinary(binaryPath);
+    const v = /^\s*(\d+\.\d+\.\d+)\b/.exec(out);
+    if (v) return v[1];
+    why = `its --version printed no version (${JSON.stringify(out.slice(0, 80))})`;
+  } catch (e) {
+    why = `its --version failed (${(e as Error).message.split("\n")[0]})`;
+  }
+  warn(
+    `::warning:: [hostloop] the agent binary ${binaryPath} is not in Desktop's staging layout and ${why}; the outside-folder fence is not sent\n`,
+  );
+  return undefined;
+}
+
+/** True when the fence applies: the baseline records one and the agent that runs is at or above its floor. */
+export function hostLoopFenceApplies(baseline: Pick<PlatformBaseline, "hostLoopFence">, agentVersion: string | undefined): boolean {
+  const fence = baseline.hostLoopFence;
+  return !!fence && agentVersion !== undefined && cmpVersionStrings(agentVersion, fence.minCli) >= 0;
+}
+
+/** An entry the agent keeps: absolute, normalized, not a filesystem root, with no trailing separator (the agent
+ *  drops `…/dir/`; measured). `resolve` normalizes and strips the separator; a root is refused. */
+function fenceEntry(p: string): string | null {
+  const r = resolve(p);
+  return r === parse(r).root || r.endsWith(sep) ? null : r;
+}
+
+/** The `permissions` object for a fenced spawn. Three disjoint sets: the working directories (outputs and every
+ *  connected folder), the read exemptions (each read-only root as given and as its realpath), and nothing else. */
+export function hostLoopFencePermissions(
+  hostOutputsDir: string,
+  roots: HostLoopFenceRoots,
+  realpath: (p: string) => string = realpathSync.native,
+): Record<string, unknown> {
+  const folders = [...new Set(roots.folders.map(fenceEntry).filter((p): p is string => p !== null))];
+  const exempt = new Set<string>();
+  for (const root of roots.readOnlyRoots) {
+    const given = fenceEntry(root);
+    if (!given) continue;
+    exempt.add(given);
+    try {
+      const real = fenceEntry(realpath(given));
+      if (real) exempt.add(real);
+    } catch {
+      // not created yet: its given spelling is the only one a read can arrive by
+    }
+  }
+  return {
+    additionalDirectories: [hostOutputsDir, ...folders],
+    blockReadsOutsideWorkingDirectories: true,
+    blockWritesOutsideWorkingDirectories: true,
+    blockReadsExemptPaths: [...exempt],
+    workingDirectoriesAsGiven: folders,
   };
 }

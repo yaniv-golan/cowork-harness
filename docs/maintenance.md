@@ -19,6 +19,10 @@ STABLE (in code, rarely changes)        VOLATILE (in baselines/, sync-regenerate
                                             presence is read from the asar; the value is
                                             the pinned KNOWN_WEBFETCH_VENDOR_DENY, and a
                                             build with any other list stops the sync)
+                                          - hostLoopFence (Desktop 4.16336.0+; the host
+                                            CLI floor of the outside-folder fence, read
+                                            from the asar; null before it, and a build at
+                                            or above it without one stops the sync)
 
 HAND-AUTHORED (in baselines/, drift-guarded — sync does NOT extract these; they carry
 forward from the previous baseline untouched)
@@ -138,7 +142,7 @@ Another runtime knob in the same family: `COWORK_HARNESS_RESOURCE_INTERVAL_MS` s
 Old staged binaries are re-downloadable from Anthropic's own release channel. For the **container/microvm** tiers the harness needs the **Linux/arm64 ELF**, so download it directly and point the resolver at it:
 
 ```bash
-V=2.1.309   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
+V=2.1.317   # your baseline's agentVersion (read it from baselines/desktop-<latest>.json)
 # The release channel is NOT always the stable one — Desktop also stages release CANDIDATES, served only
 # from .../claude-code-releases/rc/<commit>/, and the commit cannot be discovered from the network (the
 # `stable` and `latest` pointers name other versions). Read it from the same baseline; every baseline

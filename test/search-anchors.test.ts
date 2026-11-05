@@ -390,7 +390,11 @@ describe("sync wiring (source text): every anchor path goes through searchAnchor
     expect(cli.indexOf("const elfStaged = stagedForAnchors(resolvedDerived);")).toBeLessThan(
       cli.indexOf('shaProvenance: "measured-local"'),
     );
-    expect(cli).toMatch(/native: stagedForAnchors\(nativeResolved\),/);
+    // The native agent is read once, through the same wrap, and that one buffer feeds both the anchor table and the
+    // fence's permission-key tripwire.
+    expect(cli).toMatch(/const nativeStaged = stagedForAnchors\(nativeResolved\);/);
+    expect(cli.match(/native: nativeStaged,/g)?.length).toBe(2);
+    expect(cli.match(/stagedForAnchors\(nativeResolved\)/g)?.length).toBe(1);
   });
   it("never assigns the base's anchors outside the helper", () => {
     expect(cli).not.toMatch(/searchAnchors = baseSearchAnchors/);

@@ -38,6 +38,7 @@ import {
 } from "./baseline.js";
 import { createHash } from "node:crypto";
 import { searchAnchorsForSync, searchAnchorsRefusal, stagedForAnchors } from "./sync/search-anchors.js";
+import { hostLoopPermissionKeyFlags } from "./sync/hostloop-fence.js";
 import { checkCaptureOrg, LOCAL_ORG_RECORD, readLocalOrg, recordCaptureOrg } from "./sync/capture-org.js";
 import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
 import {
@@ -3482,9 +3483,20 @@ async function cmdSync(args: string[]) {
   // no native is staged; the base's are carried only for an unchanged version with nothing readable. Its `refuse` is
   // sync's own refusal, acted on after the --diff decision (searchAnchorsRefusal below), never an unknown delta.
   const nativeResolved = derivedNativeStagedPath.replace(/^~(?=$|\/)/, homeDir);
+  const nativeStaged = stagedForAnchors(nativeResolved);
+  // The fence's permissions-key tripwire, over the native agent the fence is sent to and the VM ELF (they stage on
+  // separate cadences). Its flags are unknown deltas, refused below unless --diff.
+  const fenceKeys = hostLoopPermissionKeyFlags(res.hostLoopFenceWriters, {
+    native: nativeStaged,
+    elf: elfStaged,
+    nativeLabel: nativeResolved || "(none derived)",
+    elfLabel: resolvedDerived,
+  });
+  res.unknownDeltas.push(...fenceKeys.flags);
+  res.notes.push(...fenceKeys.notes);
   const anchored = searchAnchorsForSync({
     elf: elfStaged,
-    native: stagedForAnchors(nativeResolved),
+    native: nativeStaged,
     elfVersion: res.agentVersion,
     nativeVersion: nativeDerived.version,
     baseAgentVersion: base.agentVersion as string | undefined,
@@ -3655,7 +3667,7 @@ async function cmdSync(args: string[]) {
   const next = withSyncedCloudBlock(
     {
       ...(base as Record<string, unknown>),
-      $comment: `Platform baseline auto-derived by \`cowork-harness sync\` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. Captured ${capturedAt} on macOS arm64.`,
+      $comment: `Platform baseline auto-derived by \`cowork-harness sync\` from a live Claude Desktop install + app.asar. VOLATILE per-release facts only. Regenerate per release; review the diff. \`hostLoopFence\` is re-read from the asar each sync (null before Desktop 4.16336.0). Captured ${capturedAt} on macOS arm64.`,
       baselineVersion: 1,
       appVersion: res.appVersion,
       capturedAt,
@@ -3668,6 +3680,7 @@ async function cmdSync(args: string[]) {
         res.webFetchVendorDeny,
       ),
       requireFullVmSandbox: res.requireFullVmSandbox,
+      hostLoopFence: res.hostLoopFence,
       // spawn.env AND spawn.effortByModel/effortRegexDefault are the GENERATED tier: re-derived from the asar
       // each sync, canonically ordered so a benign source-reorder is a zero-line diff. All the hand-curated
       // spawn fields (tools, allowedTools, scalars, prompt pointers, $comment*) carry forward from base

@@ -21,14 +21,14 @@ For how the harness *enforces* the limitations it does reproduce (sealed filesys
 
 ## On this page
 
-Every `##` below is one gap (or one scoping note). Grouped, since there are 41 of them.
+Every `##` below is one gap (or one scoping note). Grouped, since there are 44 of them.
 
 - **Read first** — [Which Cowork LANE this harness models](#which-cowork-lane-this-harness-models--read-first-it-scopes-everything-below) · [Fidelity tier differences](#fidelity-tier-differences)
 - **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [A workspace fixture starts with a fresh conversation](#a-workspace-fixture-starts-with-a-fresh-conversation) · [Deletes in `outputs/` follow the baseline's recorded mount mode](#deletes-in-outputs-follow-the-baselines-recorded-mount-mode) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
-- **Files & delivery** — [Artifacts](#artifacts--two-mechanisms-neither-modeled) · [File delivery](#file-delivery--present_files-here-senduserfile-on-remote-cowork) · [Browser↔webview↔human-interaction boundary (interactive artifacts)](#browserwebviewhuman-interaction-boundary-interactive-artifacts)
+- **Files & delivery** — [Artifacts](#artifacts--two-mechanisms-neither-modeled) · [The agent's own Artifacts server is not attached](#the-agents-own-artifacts-server-is-not-attached) · [File delivery](#file-delivery--present_files-here-senduserfile-on-remote-cowork) · [Browser↔webview↔human-interaction boundary (interactive artifacts)](#browserwebviewhuman-interaction-boundary-interactive-artifacts)
 - **Tools, skills & plugins** — [A plugin's declared MCP servers run here; production stubs them conditionally](#a-plugins-declared-mcp-servers-run-here-production-stubs-them-under-conditions-the-harness-cannot-see) · [Skill/plugin discovery SDK-MCP servers](#skillplugin-discovery-sdk-mcp-servers--modeled-on-containerhostloop-microvmprotocol-pending) · [Skill argument collection](#skill-argument-collection--the-elicitation-form-branch-is-not-reachable-here) · [Skill authoring](#skill-authoring--save_skill-and-propose_skills-are-not-modeled) · [Anthropic's built-in skills are not staged](#anthropics-built-in-skills-anthropic-skills-are-not-staged) · [Hooks](#hooks--the-harness-installs-one-of-productions-six) · [Browser tools are not served](#browser-tools-are-not-served--and-egress-assertions-say-nothing-about-that-path) · [VM tiers have no workspace tool aliases](#vm-tiers-have-no-workspace-tool-aliases) · [Hostloop: the substituted plugin path shares the VM path's suffix](#hostloop-the-substituted-plugin-path-shares-the-vm-paths-suffix-real-coworks-does-not)
 - **Prompt & model** — [System-prompt reconstruction](#system-prompt-reconstruction) · [Server-driven system-prompt patches (`coworkSyspromptMap`)](#server-driven-system-prompt-patches-coworksyspromptmap) · [Model selection](#model-selection--the-harness-inherits-the-local-cli-default) · [Thinking forced on for managed-config models](#thinking-forced-on-for-managed-config-models-thinkingalwaysonmodels) · [Protocol-tier sub-agents get no Cowork environment append](#protocol-tier-sub-agents-get-no-cowork-environment-append) · [The silent-turn reminder is served by capability, and it lands in the graded corpus](#the-silent-turn-reminder-is-served-by-capability-and-it-lands-in-the-graded-corpus)
-- **Identity & environment** — [Auto-memory: the off switch is modeled, the memory keys are not](#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not) · [Background tasks are off on every tier](#background-tasks-are-off-on-every-tier) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn)
+- **Identity & environment** — [Auto-memory: the off switch is modeled, the memory keys are not](#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not) · [Background tasks are off on every tier](#background-tasks-are-off-on-every-tier) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn) · [Host-loop outside-folder fence](#host-loop-outside-folder-fence-configured-behaviour-not-measured)
 - **Sandbox & egress** — [`--raw` mode bypasses the egress sandbox](#--raw-mode-bypasses-the-egress-sandbox) · [HIPAA restriction is a process-global latch](#hipaa-restriction-is-a-process-global-latch) · [Booting the real rootfs image under a generic VZ host](#booting-the-real-rootfs-image-under-a-generic-vz-host) · [Stopping a host-tier run stops the processes the agent started](#stopping-a-host-tier-run-stops-the-processes-the-agent-started)
 - **Permissions & limits** — [A frozen search corpus is not live search](#a-frozen-search-corpus-is-not-live-search) · [`answer_channel: none` has no Cowork counterpart](#answer_channel-none-has-no-cowork-counterpart) · [Auto-mode permission rubric is not modeled](#auto-mode-permission-rubric-is-not-modeled) · [Gate `1648655587` is the scheduled-task session limiter](#gate-1648655587-is-the-scheduled-task-session-limiter--distinct-from-the-agent-side-task-fan-out-cap)
 
@@ -244,6 +244,12 @@ their sub-agent spend) do not run.
   built-in memory-tidy skill gated on the same id. Production also skips the directory for a session whose
   server-delivered `memoryEnabled` flag is false, which the harness cannot read. `sync` prints a WARNING note when it
   reads the gate ON.
+- **claude.ai memory reset (Desktop 4.16336.0 and later).** Desktop now also asks claude.ai whether a memory reset is
+  owed before it gives the session a directory. While a reset is owed, or while that check has not answered, it
+  withholds the directory: the check fails closed. With no signed-in account or org the check answers yes and the
+  resolver's own no-account guard then yields no directory. After a reset, Desktop deletes the local Cowork memory.
+  The harness models neither the check nor the deletion. Its modeled session is the one where claude.ai answered "no
+  reset owed", which with the gate off sends the same disable switch as before.
 - **No gate row.** Baselines before 1.18286.0 predate the gate pin and are treated as off. That is an assumption:
   every baseline that records the gate records it off, and no Desktop bundle older than 1.18286.2 was available to
   check.
@@ -423,6 +429,21 @@ This is **not a harness gap**. Startup folder access works in both commands; the
 
 ---
 
+## The agent's own Artifacts server is not attached
+
+**Real Cowork behaviour.** From Desktop 4.16336.0 (agent 2.1.317 and later), Desktop's base spawn env sets
+`CLAUDE_CODE_HOST_GUARDS_ARTIFACTS_MCP` to `"1"`. With that, the agent attaches its own `claude-artifacts` HTTP MCP
+server, which reads and writes the signed-in user's claude.ai Artifacts. The Cowork spawn turns it back to `"0"` only
+for a session that has the frame-artifacts tools and an artifact host grant, and the Code tab does the same when it
+cannot launch tools. An ordinary Cowork session therefore lists `claude-artifacts` among its MCP servers.
+
+**Harness behaviour.** The harness leaves the key unset on every tier. Without it, an agent started with the
+`local-agent` entrypoint skips the server as Desktop-hosted, as it did before 4.16336.0, so a test run cannot read
+or write the operator's real Artifacts. A skill that uses `claude-artifacts` will find it missing here and present
+in Cowork. `sync` pins the three places Desktop sets the key and flags a fourth, a changed value, or an override that
+loses its condition. The harness never passes `--strict-mcp-config` to the agent under test, so that `desktop_host`
+skip is the only thing keeping the server off; a change to the harness's agent flags could reopen it.
+
 ## Artifacts — two mechanisms, neither modeled
 
 > **Third layer, added in Desktop 2.2553.1 and also not modeled.** Alongside the two mechanisms below,
@@ -433,7 +454,8 @@ This is **not a harness gap**. Startup folder access works in both commands; the
 > resolver error. It is inert for the session this harness models — no Artifact tool is registered when the
 > frame-artifacts flag is off — which is why it is recorded rather than built. The harness's own
 > `src/hostloop/pretooluse-path-hook.ts` models no part of it. **Since Desktop 3.6556.1** the matcher also covers
-> every tool of the `claude-artifacts` MCP server (a remote server Desktop connects), and for that server's file
+> every tool of the `claude-artifacts` MCP server (since Desktop 4.16336.0, the agent's own HTTP server, which it
+> attaches when Desktop's env key allows it; see the next section), and for that server's file
 > publishing the hook records each file's identity before the approval card; the permission check re-verifies it
 > after approval, content hash included, and refuses files whose drive cannot identify them. Also not modeled.
 > `sync` checks how the recorded identity reaches the permission check, the widened matcher and that refusal, not
@@ -1120,6 +1142,49 @@ default loop) or container for sub-agent environment fidelity.
 
 ---
 
+## Host-loop outside-folder fence: configured, behaviour not measured
+
+**Real Cowork behaviour.** From Desktop 4.16336.0, a host-loop task whose host CLI is at or above a floor (2.1.315 in
+that release; recorded per baseline as `hostLoopFence.minCli`) turns on the agent's own blocks on file reads and
+writes outside its working directories. Every connected folder, read-only or not, becomes a working directory; the
+roots Desktop owns (uploads, the spooled tool results, the skills plugin, read-only plugins) are exempt from the read
+block, each listed as written and as its realpath. Desktop sends these settings at spawn, again right after it, and
+again when a folder is connected or an artifact folder is granted mid-session. Below the floor it leaves the fence
+off. A third-party deployment below the floor also loses its `autoMode` settings at spawn; the harness models a
+first-party deployment and does not reproduce that.
+
+**Harness behaviour.** When the baseline records a fence and the native agent that runs is at or above its floor
+(its version is read from Desktop's staging layout, or else from the binary's own `--version`; a binary
+that gives neither is not fenced, with a warning, as Desktop fails closed), the harness sends the same settings once, in its one `--settings`
+object: outputs and every connected folder as working directories, the read exemptions for uploads, the spool,
+skills and staged plugins (given and realpath spellings), and the two blocks. Outputs, the process cwd and
+auto-memory are not exempt, as in production. Below the floor, or on a baseline without a fence, nothing changes.
+
+What is shown, per channel:
+- **Spawn settings:** unit-tested, including the exact members and the rule that every entry is an absolute path
+  with no trailing separator. A $0 probe against the staged agent shows it keeps every entry the harness sends, and
+  pins what it drops (each logged as ignored, at startup and on every settings change): a relative path, a
+  filesystem root or a `..` segment in the read exemptions, and a working directory spelled with a trailing
+  separator. An exemption with a trailing separator is normalized and kept, so the harness's rule is stricter than
+  the agent's there.
+- **The post-spawn push:** not sent separately. The probe shows each push is unioned with the `--settings` value and
+  replaces any earlier push; production's push carries the full set, so one `--settings` ends in the same set
+  production's two messages do. That ordering does not matter is an assumption.
+- **Mid-session pushes:** the harness has no mid-session folder connect or artifact grant, so there is nothing to push.
+- **Behaviour:** not measured. What a Read or Write inside and outside these roots does under the fence needs a live
+  host-loop run, which has not been made. Until then the fence is configured and acceptance-verified only. One open
+  question changes existing verdicts: whether the agent's fence refuses before or after the harness's PreToolUse path
+  hook. If the fence runs first, an outside-folder write on a fenced baseline is refused by the agent with no hook
+  frame, so a scenario that asserts the hook's refusal (`hook_decision`, `no_hook_event_blocked`) can change verdict
+  between `desktop-4.4212.0` and `desktop-4.16336.0` with no harness bug and no skill change. If the hook runs first,
+  nothing changes. The live run measures this first.
+
+Connected folders being working directories also matters for CLAUDE.md. Production sets
+`CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD` from the claude.ai account config, so a CLAUDE.md inside a connected
+folder reaches the model. The harness leaves that key unset, so on host-loop such a file is not loaded.
+
+---
+
 ## Path-gate roots are frozen at spawn
 
 **Real Cowork behaviour:** the host-loop path gate recomputes folder-permission and mid-session
@@ -1144,6 +1209,9 @@ absent from chat roots entirely.
 writes are gated by `allow_host_writes` consent instead of scratch containment; spooled-projects
 read-roots exist only as the task-lane spool dir; connected-folder scope differs. The task-lane
 read-only categories (uploads hardlink write-block, spool, plugin) ARE modeled.
+On a baseline with the host-loop outside-folder fence, a `chat` session gets the task-shaped fence too (outputs and
+connected folders as working directories, the task-lane roots exempt), since it spawns through the same path;
+Desktop's chat sessions build their roots differently.
 
 From Desktop 4.29.0, Desktop's own chat-typed sessions also get the typed-artifact tools of its `cowork` server (see
 the frame-artifacts section above). The harness models neither those sessions nor those tools, in the `chat` command
