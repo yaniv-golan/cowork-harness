@@ -6,13 +6,7 @@ import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import * as acorn from "acorn";
 import { BASELINES_DIR, cmpVersionStrings } from "../baseline.js";
-import {
-  checkHostLoopPermissionKeys,
-  fenceFloorFlag,
-  permissionsSchemaKeys,
-  readHostLoopFence,
-  type HostLoopFence,
-} from "./hostloop-fence.js";
+import { fenceFloorFlag, readHostLoopFence, type HostLoopFence } from "./hostloop-fence.js";
 import { MODELED_PLACEHOLDER_NAMES, INTENTIONALLY_UNMODELED_PLACEHOLDERS } from "../prompt.js";
 import {
   ObservedSpawnEnv,
@@ -59,6 +53,9 @@ export interface SyncResult {
   webFetchVendorDeny: string[] | null;
   /** The host-loop CLI fence's version floor (src/sync/hostloop-fence.ts); null = this build has no fence. */
   hostLoopFence: HostLoopFence | null;
+  /** The fence's permission-writer sources, for the permissions-key tripwire `sync` runs once it knows both staged
+   *  binaries (src/sync/hostloop-fence.ts `hostLoopPermissionKeyFlags`). */
+  hostLoopFenceWriters: string[];
   networkMode: string | null;
   requireFullVmSandbox: unknown;
   asarFingerprint: string;
@@ -972,16 +969,11 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
     hostLoopFenceWriters,
     notes,
   } = extractFromAsar(unknown, gates, appVersion);
-  // The fence: monotonic — from HOSTLOOP_FENCE_MIN_VERSION on, a build must carry it, and a missing read
-  // refuses the write rather than recording "no fence". Its permissions-key tripwire reads the agent's own settings
-  // schema from the staged VM agent binary.
+  // The fence: monotonic — from HOSTLOOP_FENCE_MIN_VERSION on, a build must carry it, and a missing read refuses the
+  // write rather than recording "no fence". Its permissions-key tripwire runs in the sync command, which resolves the
+  // native agent hostloop runs as well as the VM ELF.
   const floor = fenceFloorFlag(appVersion, hostLoopFence);
   if (floor) flag(unknown, floor);
-  if (hostLoopFenceWriters.length > 0) {
-    const elfPath = agentVersion ? join(SUPPORT, "claude-code-vm", agentVersion, "claude") : "";
-    const elf = elfPath && existsSync(elfPath) ? readFileSync(elfPath) : null;
-    for (const f of checkHostLoopPermissionKeys(hostLoopFenceWriters, elf ? permissionsSchemaKeys(elf) : null)) flag(unknown, f);
-  }
 
   // 6. Desktop's own server tool surface, from real Desktop init frames of THIS release (see
   // desktop-init-surface.ts). An unobserved surface is a WARNING, never an unknown delta: every Desktop
@@ -1058,6 +1050,7 @@ export function sync(opts: { declareUnobservable?: ObservedSpawnEnvDeclaration |
     allowDomains,
     webFetchVendorDeny,
     hostLoopFence,
+    hostLoopFenceWriters,
     networkMode,
     requireFullVmSandbox,
     asarFingerprint: fingerprint,

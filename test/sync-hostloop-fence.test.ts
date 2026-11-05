@@ -1,7 +1,13 @@
 // The host-loop CLI fence detector (Desktop 4.16336.0). Fixtures are synthetic minified shapes built from that
 // release's structure, never Desktop text.
 import { describe, expect, it } from "vitest";
-import { checkHostLoopPermissionKeys, fenceFloorFlag, permissionsSchemaKeys, readHostLoopFence } from "../src/sync/hostloop-fence.js";
+import {
+  checkHostLoopPermissionKeys,
+  fenceFloorFlag,
+  hostLoopPermissionKeyFlags,
+  permissionsSchemaKeys,
+  readHostLoopFence,
+} from "../src/sync/hostloop-fence.js";
 
 const SPAWN =
   'const t=require("./index.chunk-T.js"),n=require("./index.chunk-PERM.js");' +
@@ -118,5 +124,34 @@ describe("permissions-key tripwire", () => {
   it("an unreadable schema flags while there is a fence to guard", () => {
     expect(checkHostLoopPermissionKeys(["{}"], null).join("\n")).toMatch(/could not be read/);
     expect(checkHostLoopPermissionKeys([], null)).toEqual([]);
+  });
+});
+
+describe("permissions-key tripwire over both staged binaries", () => {
+  const schemaWith = (extra: string) =>
+    Buffer.from(
+      `\u0000function bc(e){return u({allow:R(rc()).optional(),${extra}blockReadsExemptPaths:R(o()).optional(),deny:R(rc()).optional()}).passthrough()}\u0000`,
+    );
+  const writers = ["{allow:[],deny:[],ask:[...r.ask]}"];
+  const labels = { nativeLabel: "/N/claude", elfLabel: "/V/claude" };
+  it("a key only the native agent's schema has is still caught (the binary the fence is sent to)", () => {
+    const r = hostLoopPermissionKeyFlags(writers, { native: schemaWith("ask:R(o()).optional(),"), elf: schemaWith(""), ...labels });
+    expect(r.flags.join("\n")).toMatch(/permissions\.ask/);
+    expect(r.notes).toEqual([]);
+  });
+  it("a key only the VM ELF's schema has is caught too", () => {
+    const r = hostLoopPermissionKeyFlags(writers, { native: schemaWith(""), elf: schemaWith("ask:R(o()).optional(),"), ...labels });
+    expect(r.flags.join("\n")).toMatch(/permissions\.ask/);
+  });
+  it("no native agent staged: the ELF stands in, and a note says the native was not read", () => {
+    const r = hostLoopPermissionKeyFlags(writers, { native: null, elf: schemaWith("ask:R(o()).optional(),"), ...labels });
+    expect(r.flags.join("\n")).toMatch(/permissions\.ask/);
+    expect(r.notes.join("\n")).toMatch(/\/N\/claude is not staged; .* the VM ELF \/V\/claude only/);
+  });
+  it("neither readable: refuses; no writers: nothing to guard", () => {
+    expect(hostLoopPermissionKeyFlags(writers, { native: { unreadable: "EACCES" }, elf: null, ...labels }).flags.join("")).toMatch(
+      /could not be read/,
+    );
+    expect(hostLoopPermissionKeyFlags([], { native: null, elf: null, ...labels })).toEqual({ flags: [], notes: [] });
   });
 });

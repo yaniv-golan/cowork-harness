@@ -243,3 +243,29 @@ export function checkHostLoopPermissionKeys(writers: string[], schemaKeys: strin
   }
   return out;
 }
+
+/** A staged binary as sync reads it: its bytes, an unreadable marker, or null when it is not staged. */
+export type StagedBinary = Buffer | { unreadable: string } | null;
+
+/** The permissions-key tripwire over the binaries a fence can reach: the native agent hostloop runs, and the VM ELF.
+ *  The two stage on separate cadences, so each readable schema is checked and their keys are unioned; the tripwire
+ *  refuses only when neither schema reads, and notes when the native one, the binary the fence is sent to, was not
+ *  read. */
+export function hostLoopPermissionKeyFlags(
+  writers: string[],
+  bins: { native: StagedBinary; elf: StagedBinary; nativeLabel: string; elfLabel: string },
+): { flags: string[]; notes: string[] } {
+  if (writers.length === 0) return { flags: [], notes: [] };
+  const keysOf = (b: StagedBinary) => (Buffer.isBuffer(b) ? permissionsSchemaKeys(b) : null);
+  const why = (b: StagedBinary) =>
+    b === null ? "not staged" : Buffer.isBuffer(b) ? "no permissions schema found" : `unreadable (${b.unreadable})`;
+  const native = keysOf(bins.native);
+  const elf = keysOf(bins.elf);
+  const notes: string[] = [];
+  if (!native)
+    notes.push(
+      `hostloop-fence: the native agent ${bins.nativeLabel} is ${why(bins.native)}; its permission keys were checked against ${elf ? `the VM ELF ${bins.elfLabel} only` : "nothing"}`,
+    );
+  const keys = native || elf ? [...new Set([...(native ?? []), ...(elf ?? [])])] : null;
+  return { flags: checkHostLoopPermissionKeys(writers, keys), notes };
+}
