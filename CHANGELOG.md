@@ -6,6 +6,21 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **Cassettes: re-stamp or re-record.** `latest` moves to `desktop-4.16336.0`, so a cassette recorded through
+  `baseline: latest` reports `[stale] baseline moved 4.4212.0 → 4.16336.0 since record — re-record`; re-stamping
+  `fingerprint.baseline` clears that. The agent moves from 2.1.309 to 2.1.317, so a re-stamped cassette recorded on
+  2.1.309 gets an `agent-version:` note; re-record it to clear the note. Separately, the sub-agent prompt text the
+  harness generates now includes the host-loop retry sentence, which moves `promptAssetsHash` on every tier and every
+  baseline: a cassette that recorded one reports that the baseline's prompt assets changed since record, and
+  `verify-cassettes` fails on it. Re-record to clear it. The bundled cassettes are re-stamped and re-hashed: none of
+  them dispatches a host-loop sub-agent, so none rendered the new sentence.
+- **On `hostloop`, an agent binary outside Desktop's staging layout is now run once with `--version`** when the baseline
+  records the outside-folder fence, typically a `COWORK_HOST_AGENT_BINARY` override. Its answer decides whether the
+  fence is sent; if it gives no version, the fence is not sent and a warning says so. A baseline without a fence runs
+  nothing.
+
 ### Added
 
 - **Baseline for Claude Desktop 4.16336.0 (agent 2.1.317).** `desktop-4.16336.0` is the new newest baseline. It has
