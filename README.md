@@ -249,7 +249,11 @@ L2  microvm parity    Optional. Agent inside a real Linux microVM (Lima/Apple-VZ
                       server — an in-process MCP server the Agent SDK talks to directly (tool name
                       mcp__workspace__bash), whose bash calls route into a Docker VM sidecar; web_fetch
                       routes via host curl. A PreToolUse path-containment hook is the security boundary
-                      for real filesystem access at this tier — see docs/boundary.md.
+                      for real filesystem access at this tier — see docs/boundary.md. From Desktop
+                      4.16336.0 (with an agent at or above the baseline's fence floor), the agent also
+                      refuses file reads and writes outside the task's folders itself, as a second layer
+                      on top of the hook. That is configured and acceptance-verified, not measured in a
+                      live run — see docs/fidelity-gaps.md.
 
     Both container and hostloop also declare the skills/plugins skill/plugin-discovery SDK-MCP servers
     (mcp__skills__list_skills/suggest_skills, mcp__plugins__list_plugins/search_plugins/

@@ -46,7 +46,6 @@ All notable changes to this project are documented here. The format is based on
 - **`hook_decision` and the hook-block keys follow agent 2.1.317**, which lets an SDK callback hook with
   `onFailure: "block"` block on failure, as http hooks already could. No hook a plugin or settings file declares is
   affected.
-
 - **A test that hangs now fails with evidence instead of running to the CI time limit.** A synchronous child call
   blocks its vitest process, so `testTimeout` could never fire on it, and on Node 24 and later a CLI process can
   deadlock inside its own exit (an upstream Node bug, nodejs/node#64274). A run then sat until the job limit and lost
