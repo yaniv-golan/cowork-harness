@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.14.0] - 2026-11-05
+
 ### Upgrade notes
 
 - **Cassettes: re-stamp or re-record.** `latest` moves to `desktop-4.16336.0`, so a cassette recorded through
@@ -30,13 +32,13 @@ All notable changes to this project are documented here. The format is based on
 - **A host-loop agent now receives Cowork's outside-folder blocks** (configured and acceptance-verified; behaviour not
   measured). From Desktop 4.16336.0, Desktop turns on the agent's own refusal of file reads and writes outside the
   task's folders when the host CLI is new enough. The baseline records that floor as `hostLoopFence.minCli`, and on
-  `hostloop` (and `chat`, which spawns the same way) the harness sends the same settings when the agent it runs is at or above it: outputs and every
-  connected folder as working directories, and uploads, the spooled tool results, skills and staged plugins as
-  readable roots. A probe against the staged agent shows it accepts these settings. What a tool call then does has
-  not been measured in a live run. See docs/fidelity-gaps.md.
-- **The host-loop sub-agent append gains Desktop's retry sentence for a workspace that is not ready yet.** On a 4.16336.0 or
-  later baseline, `hostloop` sub-agents receive it between the folder list and the skill sentence, with the
-  download-status instruction when the baseline records that gate on. VM tiers and older baselines are unchanged.
+  `hostloop` (and `chat`, which spawns the same way) the harness sends the same settings when the agent it runs is at
+  or above it: outputs and every connected folder as working directories, and uploads, the spooled tool results,
+  skills and staged plugins as readable roots. A probe against the staged agent shows it accepts these settings. What
+  a tool call then does has not been measured in a live run. See docs/fidelity-gaps.md.
+- **The host-loop sub-agent append gains Desktop's retry sentence for a workspace that is not ready yet.** On a
+  4.16336.0 or later baseline, `hostloop` sub-agents receive it between the folder list and the skill sentence, with
+  the download-status instruction when the baseline records that gate on. VM tiers and older baselines are unchanged.
 
 ### Changed
 
