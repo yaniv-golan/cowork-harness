@@ -1,5 +1,6 @@
 // The host-loop CLI fence detector (Desktop 4.16336.0). Fixtures are synthetic minified shapes built from that
 // release's structure, never Desktop text.
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   checkHostLoopPermissionKeys,
@@ -153,5 +154,34 @@ describe("permissions-key tripwire over both staged binaries", () => {
       /could not be read/,
     );
     expect(hostLoopPermissionKeyFlags([], { native: null, elf: null, ...labels })).toEqual({ flags: [], notes: [] });
+  });
+});
+
+// Both guards are pure functions with their own red tests; these calls are the only thing that turns their flags into
+// a refused write, so each is pinned in the source (comment lines stripped), in order.
+describe("sync wiring (source text): the fence's guards reach the refused-write path", () => {
+  const src = (f: string) =>
+    readFileSync(f, "utf8")
+      .split("\n")
+      .filter((l) => !l.trimStart().startsWith("//"))
+      .join("\n");
+  it("sync flags a missing fence at or above the floor as an unknown delta", () => {
+    const s = src("src/sync/cowork-sync.ts");
+    const extract = s.indexOf("= extractFromAsar(unknown, gates, appVersion);");
+    const floor = s.indexOf("const floor = fenceFloorFlag(appVersion, hostLoopFence);");
+    const flagged = s.indexOf("if (floor) flag(unknown, floor);");
+    expect(extract).toBeGreaterThan(0);
+    expect(floor).toBeGreaterThan(extract);
+    expect(flagged).toBeGreaterThan(floor);
+    expect(s.split("fenceFloorFlag(").length - 1).toBe(1);
+  });
+  it("the sync command adds the permission-key tripwire's flags to the unknown deltas before deciding the write", () => {
+    const s = src("src/cli.ts");
+    const read = s.indexOf("= hostLoopPermissionKeyFlags(res.hostLoopFenceWriters, {");
+    const push = s.indexOf("res.unknownDeltas.push(...fenceKeys.flags);");
+    const decide = s.indexOf("if (res.unknownDeltas.length) {");
+    expect(read).toBeGreaterThan(0);
+    expect(push).toBeGreaterThan(read);
+    expect(decide).toBeGreaterThan(push);
   });
 });
