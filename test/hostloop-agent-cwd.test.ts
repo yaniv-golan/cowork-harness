@@ -168,8 +168,8 @@ describe("spawnHostLoop uses the contract for the spawn, the argv and the gate",
   it.each([
     "= hostLoopProcessContract(baseline, outDir, sessionRoot, hostOutputsDir, {",
     // The fence reads the same roots the path gate does, derived once, and the version of the binary that runs.
-    "roots: { folders: folderHostPaths, readOnlyRoots: [uploadsRoot, spoolRoot, skillsRoot, ...pluginRoots] },",
-    "agentBinary: agentNativeHost,",
+    "= hostLoopAppRoots(plan, mntHost);",
+    "fence: { roots: fence, agentBinary: agentNativeHost },",
     "uploadsRoots: [uploadsRoot],",
     "spooledProjectsRoots: [spoolRoot],",
     "readOnlyPluginRoots: [skillsRoot, ...pluginRoots],",

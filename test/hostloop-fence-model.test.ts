@@ -1,8 +1,8 @@
 // The host-loop outside-folder fence as the harness emits it (Desktop >=4.16336.0): the predicate, the exact
 // members of the one --settings object, and the three-set invariant over real directories.
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { loadBaseline, resolveHostAgentBinary } from "../src/baseline.js";
 import {
@@ -11,7 +11,10 @@ import {
   hostLoopFencePermissions,
   hostLoopPermissionArgs,
 } from "../src/hostloop/process-cwd.js";
-import { hostLoopProcessContract } from "../src/runtime/hostloop.js";
+import { pluginDirArgs } from "../src/runtime/argv.js";
+import { hostLoopAppRoots, hostLoopProcessContract } from "../src/runtime/hostloop.js";
+import { stageHostLoopWorkspace } from "../src/runtime/hostloop-stage.js";
+import { buildLaunchPlan, loadSession } from "../src/session.js";
 
 const settingsOf = (extraArgs: string[]) =>
   JSON.parse(extraArgs[extraArgs.indexOf("--settings") + 1]!) as { permissions: Record<string, unknown> };
@@ -167,52 +170,80 @@ describe("hostLoopProcessContract: the fence follows the baseline and the binary
   });
 });
 
-// Every root the host-loop stager writes lands in exactly one of {process cwd, working directories, read
-// exemptions} — or in none, for the roots production leaves out (none here). Real directories under os.tmpdir(), so
-// on macOS the /private realpath spelling is exercised.
-describe("fence invariant over a staged layout", () => {
-  const top = mkdtempSync(join(tmpdir(), "cwh-fence-inv-"));
+// The invariant over what the harness REALLY stages: a plan built from a session (two folders, an upload, a local and a
+// remote plugin) is staged by stageHostLoopWorkspace, and every place the agent's tools can be pointed at — each
+// entry under mnt (a parent of per-mount dirs counts through its children), each --plugin-dir, the spool and
+// skills — lands in exactly one of {working directories, read exemptions}. The roots come from hostLoopAppRoots, the
+// function the spawn uses, so a new stager root or a --plugin-dir that drifts from the fence's filter goes red here.
+describe("fence invariant over the real stager's layout", () => {
+  const top = realpathSync(mkdtempSync(join(tmpdir(), "cwh-fence-inv-")));
   afterAll(() => rmSync(top, { recursive: true, force: true }));
   const d = (...p: string[]) => {
     const x = join(top, ...p);
     mkdirSync(x, { recursive: true });
     return x;
   };
-  const outputs = d("session", "mnt", "outputs");
-  const uploads = d("session", "mnt", "uploads");
-  const plugin = d("session", "mnt", "plugin-a");
-  const spool = d("config", "projects");
-  const skills = d("config", "skills");
   const rw = d("user", "rw-folder");
   const ro = d("user", "ro-folder");
-  const processCwd = d("work", "host-cwd");
-  const perms = hostLoopFencePermissions(outputs, { folders: [rw, ro], readOnlyRoots: [uploads, spool, skills, plugin] });
-  const wd = perms.additionalDirectories as string[];
-  const ex = perms.blockReadsExemptPaths as string[];
+  const upload = join(d("user", "inbox"), "report.txt");
+  writeFileSync(upload, "x");
+  const local = d("user", "local-plugin");
+  mkdirSync(join(local, ".claude-plugin"), { recursive: true });
+  writeFileSync(join(local, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "local-p" }));
+  const remote = d("user", "remote-plugin");
+  const plan = buildLaunchPlan(
+    loadSession({
+      folders: [{ from: rw }, { from: ro, mode: "r" }],
+      uploads: [upload],
+      plugins: { local_plugins: [local], remote_plugins: [remote] },
+    }),
+    loadBaseline("latest"),
+    d("out"),
+  );
+  const mntHost = join(top, "session", "mnt");
+  mkdirSync(mntHost, { recursive: true });
+  stageHostLoopWorkspace(plan, mntHost, { sessionRoot: join(top, "session"), vmSessionRoot: "/sessions/t" });
+  const outputs = join(mntHost, "outputs");
+  const perms = hostLoopFencePermissions(outputs, hostLoopAppRoots(plan, mntHost).fence);
+  const wd = (perms.additionalDirectories as string[]).map((p) => realpathSync(p));
+  const ex = (perms.blockReadsExemptPaths as string[]).filter((p) => existsSync(p)).map((p) => realpathSync(p));
+  const under = (p: string, roots: string[]) => roots.some((r) => p === r || p.startsWith(r + sep));
+  /** Which sets cover `p` (by real path): "wd", "ex", or both/neither. */
+  const sets = (p: string) => {
+    const r = realpathSync(p);
+    return [under(r, wd) && "wd", under(r, ex) && "ex"].filter(Boolean);
+  };
 
-  it("is exercised: tmpdir realpaths differ from their given spelling on this machine, or the test says so", () => {
-    if (process.platform === "darwin") expect(realpathSync(uploads)).not.toBe(uploads);
+  it("the plan exercises every mount kind the fence filters on", () => {
+    const kinds = new Set(plan.mounts.map((m) => m.kind));
+    expect([...kinds].sort()).toEqual(expect.arrayContaining(["folder", "upload"]));
+    expect(plan.pluginDirs.length).toBeGreaterThanOrEqual(2);
   });
-  it.each([
-    ["outputs", outputs, "wd"],
-    ["rw folder", rw, "wd"],
-    ["ro folder", ro, "wd"],
-    ["uploads", uploads, "ex"],
-    ["spool", spool, "ex"],
-    ["skills", skills, "ex"],
-    ["plugin", plugin, "ex"],
-  ])("%s is in exactly one set", (_n, root, where) => {
-    const inWd = wd.includes(root);
-    const inEx = ex.includes(root);
-    expect([inWd, inEx, root === processCwd].filter(Boolean)).toHaveLength(1);
-    expect(where === "wd" ? inWd : inEx).toBe(true);
-    if (where === "ex") expect(ex).toContain(realpathSync(root));
+  it("everything the stager made under mnt is covered by exactly one set (a parent of per-mount dirs through its children)", () => {
+    expect(readdirSync(mntHost)).toEqual(expect.arrayContaining(["outputs", "uploads", ".local-plugins", ".remote-plugins"]));
+    const walk = (p: string, rel: string) => {
+      const own = sets(p);
+      if (own.length === 1) return;
+      expect(own, `${rel} is in both sets`).toEqual([]);
+      const kids = statSync(p).isDirectory() ? readdirSync(p) : [];
+      expect(kids.length, `${rel} is covered by neither set and holds no covered per-mount dir`).toBeGreaterThan(0);
+      for (const k of kids) walk(join(p, k), `${rel}/${k}`);
+    };
+    for (const e of readdirSync(mntHost)) walk(join(mntHost, e), e);
   });
-  it("the process cwd is in neither list", () => {
-    expect(wd).not.toContain(processCwd);
-    expect(ex).not.toContain(processCwd);
+  it("every --plugin-dir the agent is given is a read exemption", () => {
+    const dirs = pluginDirArgs(plan, mntHost).filter((_, i) => i % 2 === 1);
+    expect(dirs).toHaveLength(plan.pluginDirs.length);
+    for (const p of dirs) expect(sets(p), p).toEqual(["ex"]);
   });
-  it("the three sets are disjoint", () => {
+  it("the spool and skills are read exemptions; outputs and the folders are working directories", () => {
+    mkdirSync(join(plan.configDir, "skills"), { recursive: true });
+    const again = hostLoopFencePermissions(outputs, hostLoopAppRoots(plan, mntHost).fence);
+    const ex2 = (again.blockReadsExemptPaths as string[]).filter((p) => existsSync(p)).map((p) => realpathSync(p));
+    for (const p of [join(plan.configDir, "projects"), join(plan.configDir, "skills")]) expect(under(realpathSync(p), ex2), p).toBe(true);
+    for (const p of [outputs, rw, ro]) expect(sets(p), p).toEqual(["wd"]);
+  });
+  it("the working directories and the exemptions are disjoint", () => {
     expect(wd.filter((w) => ex.includes(w))).toEqual([]);
   });
 });

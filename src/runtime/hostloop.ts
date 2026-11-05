@@ -389,16 +389,9 @@ function spawnHostLoopTracked(
   // `outDir` is stable across a resume, so both turns run at the same cwd (the agent keys its transcript
   // on it).
   // The app-owned roots, derived once: the path gate below and the outside-folder fence read the same values.
-  const uploadsRoot = join(mntHost, "uploads");
-  const spoolRoot = join(plan.configDir, "projects"); // production's spooled-tool-results dir analog: the staged config dir's own "projects" subdir
-  const skillsRoot = join(plan.configDir, "skills");
-  const pluginRoots = plan.mounts.filter((mt) => mt.kind !== "folder" && mt.kind !== "upload").map((mt) => join(mntHost, mt.mountPath));
-  const folderHostPaths = plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => mt.hostPath);
+  const { uploadsRoot, spoolRoot, skillsRoot, pluginRoots, fence } = hostLoopAppRoots(plan, mntHost);
   const { processCwd, permission, cwds } = hostLoopProcessContract(baseline, outDir, sessionRoot, hostOutputsDir, {
-    fence: {
-      roots: { folders: folderHostPaths, readOnlyRoots: [uploadsRoot, spoolRoot, skillsRoot, ...pluginRoots] },
-      agentBinary: agentNativeHost,
-    },
+    fence: { roots: fence, agentBinary: agentNativeHost },
   });
   // `lane: remote` serves no cowork server, so the tool must not be advertised or pre-approved either:
   // a registered tool with no backing server is a phantom capability the model can try and fail to use.
@@ -794,6 +787,28 @@ export function watchHostLoopSidecar(
  *  sidecar's extraBinds mounts into the VM and the native `--plugin-dir` argv references. 2+ configured
  *  plugins keep the unresolvable sentinel for both consumers — a pre-existing per-plugin-hook scoping
  *  limitation, not something introduced here. */
+/** The roots the host-loop agent's file tools may reach besides outputs, as `spawnHostLoop` derives them for both
+ *  the path gate and the outside-folder fence: uploads, the spool (the staged config dir's own `projects`, production's
+ *  spooled-tool-results analog), skills, every staged plugin mount, and the connected folders' real host paths.
+ *  Exported so a test can check them against what `stageHostLoopWorkspace` and `--plugin-dir` actually produce. */
+export function hostLoopAppRoots(
+  plan: Pick<LaunchPlan, "configDir" | "mounts">,
+  mntHost: string,
+): { uploadsRoot: string; spoolRoot: string; skillsRoot: string; pluginRoots: string[]; fence: HostLoopFenceRoots } {
+  const uploadsRoot = join(mntHost, "uploads");
+  const spoolRoot = join(plan.configDir, "projects");
+  const skillsRoot = join(plan.configDir, "skills");
+  const pluginRoots = plan.mounts.filter((mt) => mt.kind !== "folder" && mt.kind !== "upload").map((mt) => join(mntHost, mt.mountPath));
+  const folders = plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => mt.hostPath);
+  return {
+    uploadsRoot,
+    spoolRoot,
+    skillsRoot,
+    pluginRoots,
+    fence: { folders, readOnlyRoots: [uploadsRoot, spoolRoot, skillsRoot, ...pluginRoots] },
+  };
+}
+
 function resolveClaudePluginRootHostPath(plan: LaunchPlan, mntHost: string): string | undefined {
   const pluginMounts = plan.mounts.filter(
     (mt) => mt.kind === "local-plugin" || mt.kind === "remote-plugin" || mt.kind === "marketplace-plugin",
