@@ -15,6 +15,7 @@ import {
   recordedLayoutDivergence,
   sha256File,
   countStringInFile,
+  cmpVersionStrings,
 } from "../src/baseline.js";
 import { createHash } from "node:crypto";
 import type { PlatformBaseline } from "../src/types.js";
@@ -37,6 +38,7 @@ import {
   checkSyspromptMapFacts,
   checkSubagentOverrideGate,
   checkAutoMemoryFacts,
+  checkArtifactsMcpGuardFacts,
   checkAutoMemoryGate,
   checkCodeTripwires,
   PINNED_GATES,
@@ -63,6 +65,8 @@ import {
 } from "../src/sync/cowork-sync.js";
 import { checkNormalizationSanity, checkEgressContractFacts, extractAsarGateIds } from "../src/sync/cowork-sync.js";
 import { hostLoopCwds } from "../src/runtime/hostloop.js";
+import { permissionsSchemaKeys, readHostLoopFence } from "../src/sync/hostloop-fence.js";
+import { homedir } from "node:os";
 import { fidelityOmitted } from "../src/run/execute.js";
 import { buildJudgedDocument } from "../src/assert.js";
 import { renderPrompts } from "../src/prompt.js";
@@ -566,6 +570,7 @@ describe.skipIf(!ASAR_BACKUPS)("checkPathHookFacts oracle over saved Desktop asa
     ["3.6556.2", true],
     ["4.29.0", true],
     ["4.4212.0", true],
+    ["4.16336.0", true],
   ])("%s: clean = %s", (version, clean) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
     expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
@@ -580,12 +585,66 @@ describe.skipIf(!ASAR_BACKUPS)("checkPathHookFacts oracle over saved Desktop asa
 // The scheduled-session facts over saved asars: the frame-tool list, its read-only export and the host loop's spread
 // have had the same shape in every build that has the frame-tools predicate, before and after the chat arm (4.29.0).
 describe.skipIf(!ASAR_BACKUPS)("checkScheduledSessionFacts oracle over saved Desktop asars (COWORK_ASAR_BACKUP_DIR)", () => {
-  it.each(["3.6556.2", "4.29.0", "4.4212.0"])("%s: clean", (version) => {
+  it.each(["3.6556.2", "4.29.0", "4.4212.0", "4.16336.0"])("%s: clean", (version) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
     expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
     const files = readAsarBuildFiles(asar);
     expect(files.size).toBeGreaterThan(100);
     expect(checkScheduledSessionFacts(files)).toEqual([]);
+  });
+});
+
+// The host-loop fence and the Artifacts-server key over saved asars: the fence reads as null before Desktop 4.16336.0 and
+// as its 2.1.315 floor from it, with no flags either way, and the key's three constructions read clean where it exists.
+describe.skipIf(!ASAR_BACKUPS)("readHostLoopFence + checkArtifactsMcpGuardFacts oracle over saved Desktop asars", () => {
+  it.each([
+    ["4.4212.0", null],
+    ["4.16336.0", { minCli: "2.1.315" }],
+  ])("%s: fence %j, no flags; the Artifacts-key guard is clean", (version, fence) => {
+    const asar = join(ASAR_BACKUPS!, version, "app.asar");
+    expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
+    const files = readAsarBuildFiles(asar);
+    expect(files.size).toBeGreaterThan(100);
+    const r = readHostLoopFence(files);
+    expect(r.fence).toEqual(fence);
+    expect(r.flags).toEqual([]);
+    expect(r.writers.length).toBe(fence ? 4 : 0);
+    expect(checkArtifactsMcpGuardFacts(files)).toEqual([]);
+  });
+});
+
+// The permissions schema in the staged agents (local only): both the VM ELF and the native agent hostloop runs carry
+// the 11 keys the fence's tripwire was reviewed against, from agent 2.1.315 on.
+describe("permissionsSchemaKeys over the staged agents", () => {
+  const KEYS = [
+    "allow",
+    "deny",
+    "ask",
+    "defaultMode",
+    "disableBypassPermissionsMode",
+    "blockReadsOutsideWorkingDirectories",
+    "blockWritesOutsideWorkingDirectories",
+    "blockReadsExemptPaths",
+    "workingDirectoriesAsGiven",
+    "disableAutoMode",
+    "additionalDirectories",
+  ];
+  const vmRoot = join(homedir(), "Library", "Application Support", "Claude", "claude-code-vm");
+  const vmVer = existsSync(join(vmRoot, ".sdk-version")) ? readFileSync(join(vmRoot, ".sdk-version"), "utf8").trim() : "";
+  const elf = vmVer ? join(vmRoot, vmVer, "claude") : "";
+  it.skipIf(!elf || !existsSync(elf) || cmpVersionStrings(vmVer, "2.1.315") < 0)("the staged VM ELF", () => {
+    expect(permissionsSchemaKeys(readFileSync(elf))?.sort()).toEqual([...KEYS].sort());
+  });
+  const native = (() => {
+    if (process.platform !== "darwin") return "";
+    try {
+      return resolveHostAgentBinary(loadBaseline("latest"));
+    } catch {
+      return "";
+    }
+  })();
+  it.skipIf(!native || cmpVersionStrings(loadBaseline("latest").agentVersion ?? "0", "2.1.315") < 0)("the staged native agent", () => {
+    expect(permissionsSchemaKeys(readFileSync(native))?.sort()).toEqual([...KEYS].sort());
   });
 });
 
