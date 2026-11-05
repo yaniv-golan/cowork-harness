@@ -1161,10 +1161,14 @@ auto-memory are not exempt, as in production. Below the floor, or on a baseline 
 
 What is shown, per channel:
 - **Spawn settings:** unit-tested, including the exact members and the rule that every entry is an absolute path
-  with no trailing separator (the agent drops an entry that ends in one).
-- **The post-spawn push:** not sent separately. A $0 probe against the staged agent shows it merges a later push into
-  the same settings source, so one `--settings` ends in the same set production's two messages do. That ordering
-  does not matter is an assumption.
+  with no trailing separator. A $0 probe against the staged agent shows it keeps every entry the harness sends, and
+  pins what it drops (each logged as ignored, at startup and on every settings change): a relative path, a
+  filesystem root or a `..` segment in the read exemptions, and a working directory spelled with a trailing
+  separator. An exemption with a trailing separator is normalized and kept, so the harness's rule is stricter than
+  the agent's there.
+- **The post-spawn push:** not sent separately. The probe shows each push is unioned with the `--settings` value and
+  replaces any earlier push; production's push carries the full set, so one `--settings` ends in the same set
+  production's two messages do. That ordering does not matter is an assumption.
 - **Mid-session pushes:** the harness has no mid-session folder connect or artifact grant, so there is nothing to push.
 - **Behaviour:** not measured. What a Read or Write inside and outside these roots does under the fence needs a live
   host-loop run, which has not been made. Until then the fence is configured and acceptance-verified only.

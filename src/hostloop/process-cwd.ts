@@ -150,9 +150,9 @@ export function hostLoopPermissionArgs(opts: {
  * `hostLoopFence.minCli`). Desktop turns on the agent's own blocks on file reads and writes outside its working
  * directories, adds every connected folder as a working directory, and lets reads through to the roots it owns
  * (uploads, the spooled tool results, the skills plugin, read-only plugins), each listed as written and as its
- * realpath. It does this at spawn and again in a post-spawn settings push that the agent merges into the same
- * flag-settings source (measured with apply_flag_settings), so the harness sends the union once, in its one
- * `--settings` object. Not exempt, as in production: outputs (a working directory), the process cwd, auto-memory.
+ * realpath. It does this at spawn and again in a post-spawn push of the full set, which the agent unions with the
+ * `--settings` value (each push replaces the previous one; measured with apply_flag_settings), so the harness sends
+ * the set once, in its one `--settings` object. Not exempt, as in production: outputs (a working directory), the process cwd, auto-memory.
  */
 export interface HostLoopFenceRoots {
   /** Connected folders' host paths, read-only and read-write alike; their read-only-ness is the path gate's job. */
