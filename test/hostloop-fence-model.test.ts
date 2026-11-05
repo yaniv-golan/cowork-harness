@@ -206,6 +206,9 @@ describe("hostLoopProcessContract: a baseline without a fence never asks the bin
 // skills — lands in exactly one of {working directories, read exemptions}. The roots come from hostLoopAppRoots, the
 // function the spawn uses, so a new stager root or a --plugin-dir that drifts from the fence's filter goes red here.
 describe("fence invariant over the real stager's layout", () => {
+  // Realpathed up front, so the given and real spellings coincide here and coverage is compared by real path. The
+  // dual spelling (macOS /var vs /private/var) is exercised by the $0 probe, whose roots sit under the raw tmpdir, and
+  // by the fake-realpath case in "hostLoopFencePermissions (exact members)".
   const top = realpathSync(mkdtempSync(join(tmpdir(), "cwh-fence-inv-")));
   afterAll(() => rmSync(top, { recursive: true, force: true }));
   const d = (...p: string[]) => {
@@ -267,6 +270,8 @@ describe("fence invariant over the real stager's layout", () => {
     for (const p of dirs) expect(sets(p), p).toEqual(["ex"]);
   });
   it("the spool and skills are read exemptions; outputs and the folders are working directories", () => {
+    // The spawn's config-dir setup creates skills before the roots are derived; this test builds the plan without it,
+    // so it creates the dir itself to exercise the realpath spelling.
     mkdirSync(join(plan.configDir, "skills"), { recursive: true });
     const again = hostLoopFencePermissions(outputs, hostLoopAppRoots(plan, mntHost).fence);
     const ex2 = (again.blockReadsExemptPaths as string[]).filter((p) => existsSync(p)).map((p) => realpathSync(p));
