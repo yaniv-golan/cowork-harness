@@ -19,6 +19,10 @@ STABLE (in code, rarely changes)        VOLATILE (in baselines/, sync-regenerate
                                             presence is read from the asar; the value is
                                             the pinned KNOWN_WEBFETCH_VENDOR_DENY, and a
                                             build with any other list stops the sync)
+                                          - hostLoopFence (Desktop 4.16336.0+; the host
+                                            CLI floor of the outside-folder fence, read
+                                            from the asar; null before it, and a build at
+                                            or above it without one stops the sync)
 
 HAND-AUTHORED (in baselines/, drift-guarded — sync does NOT extract these; they carry
 forward from the previous baseline untouched)

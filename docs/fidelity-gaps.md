@@ -21,7 +21,7 @@ For how the harness *enforces* the limitations it does reproduce (sealed filesys
 
 ## On this page
 
-Every `##` below is one gap (or one scoping note). Grouped, since there are 41 of them.
+Every `##` below is one gap (or one scoping note). Grouped, since there are 44 of them.
 
 - **Read first** — [Which Cowork LANE this harness models](#which-cowork-lane-this-harness-models--read-first-it-scopes-everything-below) · [Fidelity tier differences](#fidelity-tier-differences)
 - **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [A workspace fixture starts with a fresh conversation](#a-workspace-fixture-starts-with-a-fresh-conversation) · [Deletes in `outputs/` follow the baseline's recorded mount mode](#deletes-in-outputs-follow-the-baselines-recorded-mount-mode) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
@@ -1204,6 +1204,9 @@ absent from chat roots entirely.
 writes are gated by `allow_host_writes` consent instead of scratch containment; spooled-projects
 read-roots exist only as the task-lane spool dir; connected-folder scope differs. The task-lane
 read-only categories (uploads hardlink write-block, spool, plugin) ARE modeled.
+On a baseline with the host-loop outside-folder fence, a `chat` session gets the task-shaped fence too (outputs and
+connected folders as working directories, the task-lane roots exempt), since it spawns through the same path;
+Desktop's chat sessions build their roots differently.
 
 From Desktop 4.29.0, Desktop's own chat-typed sessions also get the typed-artifact tools of its `cowork` server (see
 the frame-artifacts section above). The harness models neither those sessions nor those tools, in the `chat` command
