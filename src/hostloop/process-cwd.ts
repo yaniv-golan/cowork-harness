@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { closeSync, constants, fsyncSync, mkdirSync, openSync, realpathSync, statSync, writeSync } from "node:fs";
 import { join, parse, resolve, sep } from "node:path";
 import { cmpVersionStrings, HOSTLOOP_SYSTEM_EMPTY_CWD_MIN_VERSION } from "../baseline.js";
@@ -161,17 +162,37 @@ export interface HostLoopFenceRoots {
   readOnlyRoots: string[];
 }
 
-/** The version of the agent binary at `binaryPath`: the nearest enclosing directory named like a version
- *  (Desktop stages the native agent at `claude-code/<ver>/[<build>/]claude.app/…`). Under an override whose path
- *  names no version, the baseline's own agent version stands in, with a warning. */
-export function agentVersionOfBinary(binaryPath: string, fallback: string | undefined, warn: (m: string) => void): string | undefined {
-  const named = binaryPath
-    .split(sep)
-    .reverse()
-    .find((c) => /^\d+\.\d+\.\d+$/.test(c));
-  if (named) return named;
+/** Desktop's staging layout for the native agent: `claude-code/<ver>/[<build-sha12>/]claude.app/…`. */
+const STAGED_NATIVE_AGENT = /(?:^|\/)claude-code\/(\d+\.\d+\.\d+)\/(?:[0-9a-f]{12}\/)?claude\.app\//;
+
+/** Ask the binary itself (`<binary> --version`, $0, a few milliseconds). Throws when it cannot run. */
+function binaryVersionOutput(binaryPath: string): string {
+  return execFileSync(binaryPath, ["--version"], { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] });
+}
+
+/** The version of the agent binary at `binaryPath`. A path in Desktop's staging layout names it; any other path
+ *  (an override, a CLI on PATH) is asked with `--version`, since a version-shaped directory elsewhere (a Node or
+ *  Homebrew install, say) says nothing about the agent. When neither yields a version, the baseline's own agent
+ *  version stands in, with a warning. */
+export function agentVersionOfBinary(
+  binaryPath: string,
+  fallback: string | undefined,
+  warn: (m: string) => void,
+  askBinary: (p: string) => string = binaryVersionOutput,
+): string | undefined {
+  const staged = STAGED_NATIVE_AGENT.exec(binaryPath.split(sep).join("/"));
+  if (staged) return staged[1];
+  let why: string;
+  try {
+    const out = askBinary(binaryPath);
+    const v = /^\s*(\d+\.\d+\.\d+)\b/.exec(out);
+    if (v) return v[1];
+    why = `its --version printed no version (${JSON.stringify(out.slice(0, 80))})`;
+  } catch (e) {
+    why = `its --version failed (${(e as Error).message.split("\n")[0]})`;
+  }
   warn(
-    `::warning:: [hostloop] the agent binary ${binaryPath} names no version; deciding the outside-folder fence by the baseline's agent version ${fallback ?? "(none)"}\n`,
+    `::warning:: [hostloop] the agent binary ${binaryPath} is not in Desktop's staging layout and ${why}; deciding the outside-folder fence by the baseline's agent version ${fallback ?? "(none)"}\n`,
   );
   return fallback;
 }

@@ -1,10 +1,10 @@
 // The host-loop outside-folder fence as the harness emits it (Desktop >=4.16336.0): the predicate, the exact
 // members of the one --settings object, and the three-set invariant over real directories.
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { loadBaseline } from "../src/baseline.js";
+import { loadBaseline, resolveHostAgentBinary } from "../src/baseline.js";
 import {
   agentVersionOfBinary,
   hostLoopFenceApplies,
@@ -27,14 +27,60 @@ describe("hostLoopFenceApplies", () => {
     expect(hostLoopFenceApplies({}, "2.1.317")).toBe(false);
     expect(hostLoopFenceApplies(b, undefined)).toBe(false);
   });
-  it("reads the version from the staged path, in either layout; an unversioned override falls back, loudly", () => {
+  it("reads the version from Desktop's staging layout, in either form, without running the binary", () => {
     const warns: string[] = [];
-    const w = (m: string) => warns.push(m);
-    expect(agentVersionOfBinary("/A/claude-code/2.1.317/claude.app/Contents/MacOS/claude", "x", w)).toBe("2.1.317");
-    expect(agentVersionOfBinary("/A/claude-code/2.1.317/abcdef123456/claude.app/Contents/MacOS/claude", "x", w)).toBe("2.1.317");
+    const ask = () => {
+      throw new Error("must not run");
+    };
+    const app = "claude.app/Contents/MacOS/claude";
+    expect(agentVersionOfBinary(`/A/claude-code/2.1.317/${app}`, "x", (m) => warns.push(m), ask)).toBe("2.1.317");
+    expect(agentVersionOfBinary(`/A/claude-code/2.1.317/abcdef123456/${app}`, "x", (m) => warns.push(m), ask)).toBe("2.1.317");
     expect(warns).toEqual([]);
-    expect(agentVersionOfBinary("/opt/bin/claude", "2.1.309", w)).toBe("2.1.309");
-    expect(warns.join("")).toMatch(/names no version/);
+  });
+  it("asks any other binary for its version: a version-shaped directory elsewhere is not the agent's", () => {
+    const warns: string[] = [];
+    const asked: string[] = [];
+    const ask = (p: string) => (asked.push(p), "2.1.300 (Claude Code)\n");
+    expect(agentVersionOfBinary("/opt/homebrew/Cellar/node/25.2.1/bin/claude", "2.1.317", (m) => warns.push(m), ask)).toBe("2.1.300");
+    expect(agentVersionOfBinary("/A/claude-code/2.1.317/claude", "2.1.317", (m) => warns.push(m), ask)).toBe("2.1.300");
+    expect(asked).toHaveLength(2);
+    expect(warns).toEqual([]);
+  });
+  it("falls back to the baseline's version, loudly, when the binary cannot say", () => {
+    const warns: string[] = [];
+    const fail = () => {
+      throw new Error("ENOENT");
+    };
+    expect(agentVersionOfBinary("/opt/bin/claude", "2.1.309", (m) => warns.push(m), fail)).toBe("2.1.309");
+    expect(
+      agentVersionOfBinary(
+        "/opt/bin/claude",
+        "2.1.309",
+        (m) => warns.push(m),
+        () => "garbage",
+      ),
+    ).toBe("2.1.309");
+    expect(warns).toHaveLength(2);
+    expect(warns[0]).toMatch(/--version failed \(ENOENT\)/);
+    expect(warns[1]).toMatch(/printed no version/);
+  });
+  it.skipIf(process.platform !== "darwin")("runs --version on a real staged agent reached through an unversioned path", () => {
+    let native: string;
+    try {
+      native = resolveHostAgentBinary(loadBaseline("latest"));
+    } catch {
+      return;
+    }
+    const dir = mkdtempSync(join(tmpdir(), "cwh-agent-link-"));
+    try {
+      const link = join(dir, "claude");
+      symlinkSync(native, link);
+      const warns: string[] = [];
+      expect(agentVersionOfBinary(link, "0.0.0", (m) => warns.push(m))).toBe(loadBaseline("latest").agentVersion);
+      expect(warns).toEqual([]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -91,16 +137,31 @@ describe("hostLoopProcessContract: the fence follows the baseline and the binary
     "blockReadsOutsideWorkingDirectories" in settingsOf(c.permission!.extraArgs).permissions;
   it("fenced at/above the floor", () => {
     expect(
-      fenced(hostLoopProcessContract(withFence, out, "/S", "/S/mnt/outputs", { stat, fence: fence("/A/claude-code/2.1.317/claude") })),
+      fenced(
+        hostLoopProcessContract(withFence, out, "/S", "/S/mnt/outputs", {
+          stat,
+          fence: fence("/A/claude-code/2.1.317/claude.app/Contents/MacOS/claude"),
+        }),
+      ),
     ).toBe(true);
   });
   it("unfenced below the floor, with no recorded fence, or with no fence roots passed", () => {
     expect(
-      fenced(hostLoopProcessContract(withFence, out, "/S", "/S/mnt/outputs", { stat, fence: fence("/A/claude-code/2.1.309/claude") })),
+      fenced(
+        hostLoopProcessContract(withFence, out, "/S", "/S/mnt/outputs", {
+          stat,
+          fence: fence("/A/claude-code/2.1.309/claude.app/Contents/MacOS/claude"),
+        }),
+      ),
     ).toBe(false);
     const older = loadBaseline("desktop-4.4212.0");
     expect(
-      fenced(hostLoopProcessContract(older, out, "/S", "/S/mnt/outputs", { stat, fence: fence("/A/claude-code/2.1.317/claude") })),
+      fenced(
+        hostLoopProcessContract(older, out, "/S", "/S/mnt/outputs", {
+          stat,
+          fence: fence("/A/claude-code/2.1.317/claude.app/Contents/MacOS/claude"),
+        }),
+      ),
     ).toBe(false);
     expect(fenced(hostLoopProcessContract(withFence, out, "/S", "/S/mnt/outputs", { stat }))).toBe(false);
   });
