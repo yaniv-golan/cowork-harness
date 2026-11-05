@@ -32,6 +32,27 @@ const settingsOf = (extraArgs: string[]) =>
   JSON.parse(extraArgs[extraArgs.indexOf("--settings") + 1]!) as { permissions: Record<string, unknown> };
 const id = (p: string) => p;
 
+/** The staged native agent and the version its staged path names, or null (skipped loudly) when none is staged in
+ *  Desktop's layout on this machine. */
+const STAGED_NATIVE = (() => {
+  if (process.platform !== "darwin") return null;
+  try {
+    const path = resolveHostAgentBinary(loadBaseline("latest"));
+    const version = agentVersionOfBinary(
+      path,
+      () => {},
+      () => {
+        throw new Error("not in the staging layout");
+      },
+    );
+    if (version) return { path, version };
+    console.warn(`[hostloop-fence-model] SKIPPED --version case: ${path} is not in Desktop's staging layout`);
+  } catch (e) {
+    console.warn(`[hostloop-fence-model] SKIPPED --version case: no staged native agent (${(e as Error).message.split("\n")[0]})`);
+  }
+  return null;
+})();
+
 describe("hostLoopFenceApplies", () => {
   const b = { hostLoopFence: { minCli: "2.1.315" } };
   it("on at and above the floor, off below it and with no fence recorded", () => {
@@ -78,19 +99,15 @@ describe("hostLoopFenceApplies", () => {
     expect(warns[0]).toMatch(/--version failed \(ENOENT\).*fence is not sent/);
     expect(warns[1]).toMatch(/printed no version.*fence is not sent/);
   });
-  it.skipIf(process.platform !== "darwin")("runs --version on a real staged agent reached through an unversioned path", () => {
-    let native: string;
-    try {
-      native = resolveHostAgentBinary(loadBaseline("latest"));
-    } catch {
-      return;
-    }
+  it.skipIf(!STAGED_NATIVE)("runs --version on a real staged agent reached through an unversioned path", () => {
+    const { path, version } = STAGED_NATIVE!;
     const dir = mkdtempSync(join(tmpdir(), "cwh-agent-link-"));
     try {
       const link = join(dir, "claude");
-      symlinkSync(native, link);
+      symlinkSync(path, link);
       const warns: string[] = [];
-      expect(agentVersionOfBinary(link, (m) => warns.push(m))).toBe(loadBaseline("latest").agentVersion);
+      // The binary's own answer must equal the version its staged path names (the resolver's pick, patch builds too).
+      expect(agentVersionOfBinary(link, (m) => warns.push(m))).toBe(version);
       expect(warns).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
