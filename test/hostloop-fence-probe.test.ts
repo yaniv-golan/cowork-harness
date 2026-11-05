@@ -47,7 +47,15 @@ describe.skipIf(!NATIVE)("hostloop fence: the agent accepts and merges the harne
   const agent = (extraArgs: string[]) => {
     const log = join(top, `debug-${++n}.log`);
     // A fresh env: nothing from the operator's, so no credential reaches the child.
-    const env = { PATH: "/usr/bin:/bin", HOME: d("home"), CLAUDE_CONFIG_DIR: d("cfg"), CLAUDE_CODE_ENTRYPOINT: "local-agent" };
+    const env = {
+      PATH: "/usr/bin:/bin",
+      HOME: d("home"),
+      CLAUDE_CONFIG_DIR: d("cfg"),
+      CLAUDE_CODE_ENTRYPOINT: "local-agent",
+      // No traffic the probe does not need: no update check, no telemetry.
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1",
+      DISABLE_AUTOUPDATER: "1",
+    };
     const child = spawn(
       NATIVE!,
       ["--output-format", "stream-json", "--input-format", "stream-json", "--verbose", "--debug-file", log, ...extraArgs],
@@ -120,6 +128,8 @@ describe.skipIf(!NATIVE)("hostloop fence: the agent accepts and merges the harne
       const given = passed.permissions!.blockReadsExemptPaths as string[];
       expect(flagSource(await a.req("6", { subtype: "get_settings" })).blockReadsExemptPaths).toEqual([...given, "relative/y"]);
       expect(await a.ignored("blockReadsExemptPaths", 1)).toEqual([`1 of ${given.length + 1}`]);
+      // A zero count returns on its first read, so it cannot wait for a late line; it is read only after the 1-count wait
+      // above, on the same settings change, by which point that change's log lines are written.
       expect(await a.ignored("workingDirectoriesAsGiven", 0)).toEqual([]);
     } finally {
       a.close();
