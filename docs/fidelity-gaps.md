@@ -1154,7 +1154,8 @@ off. A third-party deployment below the floor also loses its `autoMode` settings
 first-party deployment and does not reproduce that.
 
 **Harness behaviour.** When the baseline records a fence and the native agent that runs is at or above its floor
-(its version is read from the staged path), the harness sends the same settings once, in its one `--settings`
+(its version is read from Desktop's staging layout, or else from the binary's own `--version`; a binary
+that gives neither is not fenced, with a warning, as Desktop fails closed), the harness sends the same settings once, in its one `--settings`
 object: outputs and every connected folder as working directories, the read exemptions for uploads, the spool,
 skills and staged plugins (given and realpath spellings), and the two blocks. Outputs, the process cwd and
 auto-memory are not exempt, as in production. Below the floor, or on a baseline without a fence, nothing changes.

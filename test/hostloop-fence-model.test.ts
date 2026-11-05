@@ -36,36 +36,35 @@ describe("hostLoopFenceApplies", () => {
       throw new Error("must not run");
     };
     const app = "claude.app/Contents/MacOS/claude";
-    expect(agentVersionOfBinary(`/A/claude-code/2.1.317/${app}`, "x", (m) => warns.push(m), ask)).toBe("2.1.317");
-    expect(agentVersionOfBinary(`/A/claude-code/2.1.317/abcdef123456/${app}`, "x", (m) => warns.push(m), ask)).toBe("2.1.317");
+    expect(agentVersionOfBinary(`/A/claude-code/2.1.317/${app}`, (m) => warns.push(m), ask)).toBe("2.1.317");
+    expect(agentVersionOfBinary(`/A/claude-code/2.1.317/abcdef123456/${app}`, (m) => warns.push(m), ask)).toBe("2.1.317");
     expect(warns).toEqual([]);
   });
   it("asks any other binary for its version: a version-shaped directory elsewhere is not the agent's", () => {
     const warns: string[] = [];
     const asked: string[] = [];
     const ask = (p: string) => (asked.push(p), "2.1.300 (Claude Code)\n");
-    expect(agentVersionOfBinary("/opt/homebrew/Cellar/node/25.2.1/bin/claude", "2.1.317", (m) => warns.push(m), ask)).toBe("2.1.300");
-    expect(agentVersionOfBinary("/A/claude-code/2.1.317/claude", "2.1.317", (m) => warns.push(m), ask)).toBe("2.1.300");
+    expect(agentVersionOfBinary("/opt/homebrew/Cellar/node/25.2.1/bin/claude", (m) => warns.push(m), ask)).toBe("2.1.300");
+    expect(agentVersionOfBinary("/A/claude-code/2.1.317/claude", (m) => warns.push(m), ask)).toBe("2.1.300");
     expect(asked).toHaveLength(2);
     expect(warns).toEqual([]);
   });
-  it("falls back to the baseline's version, loudly, when the binary cannot say", () => {
+  it("refuses the fence, loudly, when the binary cannot say (no fallback to the baseline's version)", () => {
     const warns: string[] = [];
     const fail = () => {
       throw new Error("ENOENT");
     };
-    expect(agentVersionOfBinary("/opt/bin/claude", "2.1.309", (m) => warns.push(m), fail)).toBe("2.1.309");
+    expect(agentVersionOfBinary("/opt/bin/claude", (m) => warns.push(m), fail)).toBeUndefined();
     expect(
       agentVersionOfBinary(
         "/opt/bin/claude",
-        "2.1.309",
         (m) => warns.push(m),
         () => "garbage",
       ),
-    ).toBe("2.1.309");
+    ).toBeUndefined();
     expect(warns).toHaveLength(2);
-    expect(warns[0]).toMatch(/--version failed \(ENOENT\)/);
-    expect(warns[1]).toMatch(/printed no version/);
+    expect(warns[0]).toMatch(/--version failed \(ENOENT\).*fence is not sent/);
+    expect(warns[1]).toMatch(/printed no version.*fence is not sent/);
   });
   it.skipIf(process.platform !== "darwin")("runs --version on a real staged agent reached through an unversioned path", () => {
     let native: string;
@@ -79,7 +78,7 @@ describe("hostLoopFenceApplies", () => {
       const link = join(dir, "claude");
       symlinkSync(native, link);
       const warns: string[] = [];
-      expect(agentVersionOfBinary(link, "0.0.0", (m) => warns.push(m))).toBe(loadBaseline("latest").agentVersion);
+      expect(agentVersionOfBinary(link, (m) => warns.push(m))).toBe(loadBaseline("latest").agentVersion);
       expect(warns).toEqual([]);
     } finally {
       rmSync(dir, { recursive: true, force: true });

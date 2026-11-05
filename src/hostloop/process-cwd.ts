@@ -172,11 +172,10 @@ function binaryVersionOutput(binaryPath: string): string {
 
 /** The version of the agent binary at `binaryPath`. A path in Desktop's staging layout names it; any other path
  *  (an override, a CLI on PATH) is asked with `--version`, since a version-shaped directory elsewhere (a Node or
- *  Homebrew install, say) says nothing about the agent. When neither yields a version, the baseline's own agent
- *  version stands in, with a warning. */
+ *  Homebrew install, say) says nothing about the agent. When neither yields a version the result is undefined, so the
+ *  fence is not sent, with a warning: Desktop's own version check fails closed the same way. */
 export function agentVersionOfBinary(
   binaryPath: string,
-  fallback: string | undefined,
   warn: (m: string) => void,
   askBinary: (p: string) => string = binaryVersionOutput,
 ): string | undefined {
@@ -192,9 +191,9 @@ export function agentVersionOfBinary(
     why = `its --version failed (${(e as Error).message.split("\n")[0]})`;
   }
   warn(
-    `::warning:: [hostloop] the agent binary ${binaryPath} is not in Desktop's staging layout and ${why}; deciding the outside-folder fence by the baseline's agent version ${fallback ?? "(none)"}\n`,
+    `::warning:: [hostloop] the agent binary ${binaryPath} is not in Desktop's staging layout and ${why}; the outside-folder fence is not sent\n`,
   );
-  return fallback;
+  return undefined;
 }
 
 /** True when the fence applies: the baseline records one and the agent that runs is at or above its floor. */

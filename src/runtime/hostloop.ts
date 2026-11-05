@@ -187,7 +187,7 @@ export function hostLoopProcessContract(
     deps.fence !== undefined &&
     hostLoopFenceApplies(
       baseline,
-      agentVersionOfBinary(deps.fence.agentBinary, baseline.agentVersion, (m) => warn(m)),
+      agentVersionOfBinary(deps.fence.agentBinary, (m) => warn(m)),
     );
   const permission =
     processCwd !== undefined
