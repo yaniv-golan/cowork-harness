@@ -165,9 +165,19 @@ export interface HostLoopFenceRoots {
 /** Desktop's staging layout for the native agent: `claude-code/<ver>/[<build-sha12>/]claude.app/…`. */
 const STAGED_NATIVE_AGENT = /(?:^|\/)claude-code\/(\d+\.\d+\.\d+)\/(?:[0-9a-f]{12}\/)?claude\.app\//;
 
+/** The env the `--version` child gets: enough to start, nothing of the operator's (no credential reaches it). */
+export function versionProbeEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  return { PATH: env.PATH ?? "/usr/bin:/bin", HOME: env.HOME ?? "" };
+}
+
 /** Ask the binary itself (`<binary> --version`, $0, a few milliseconds). Throws when it cannot run. */
 function binaryVersionOutput(binaryPath: string): string {
-  return execFileSync(binaryPath, ["--version"], { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"] });
+  return execFileSync(binaryPath, ["--version"], {
+    encoding: "utf8",
+    timeout: 10_000,
+    stdio: ["ignore", "pipe", "ignore"],
+    env: versionProbeEnv(),
+  });
 }
 
 /** The version of the agent binary at `binaryPath`. A path in Desktop's staging layout names it; any other path

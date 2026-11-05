@@ -1,12 +1,24 @@
 // The host-loop outside-folder fence as the harness emits it (Desktop >=4.16336.0): the predicate, the exact
 // members of the one --settings object, and the three-set invariant over real directories.
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  readFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { loadBaseline, resolveHostAgentBinary } from "../src/baseline.js";
 import {
   agentVersionOfBinary,
+  versionProbeEnv,
   hostLoopFenceApplies,
   hostLoopFencePermissions,
   hostLoopPermissionArgs,
@@ -83,6 +95,18 @@ describe("hostLoopFenceApplies", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("versionProbeEnv", () => {
+  it("passes PATH and HOME only: no credential or other operator variable reaches the --version child", () => {
+    const env = { PATH: "/p", HOME: "/h", ANTHROPIC_API_KEY: "k", CLAUDE_CODE_OAUTH_TOKEN: "t", OTHER: "o" };
+    expect(versionProbeEnv(env)).toEqual({ PATH: "/p", HOME: "/h" });
+  });
+  it("is the env the --version child is spawned with (source text)", () => {
+    const src = readFileSync("src/hostloop/process-cwd.ts", "utf8");
+    const fn = src.slice(src.indexOf("function binaryVersionOutput("), src.indexOf("export function agentVersionOfBinary("));
+    expect(fn).toMatch(/execFileSync\(binaryPath, \["--version"\], \{[^}]*env: versionProbeEnv\(\),/);
   });
 });
 
