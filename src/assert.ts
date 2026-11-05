@@ -1756,9 +1756,11 @@ export const HOOK_DECISION_RULES: ReadonlyArray<{ rule: string; anchor: string }
   },
   { rule: "an MCP tool hook whose tool reports an error decides nothing (the frame exits 1)", anchor: "MCP tool returned an error" },
   // onFailure: "block" (2.1.295). The conversion runs AFTER the frame is emitted, so the frame keeps its raw outcome.
+  // 2.1.317 admits SDK `callback` hooks beside http. Only an SDK host registers those — here, the harness's own hooks,
+  // which never set onFailure — so no hook a run's plugins or settings declare becomes newly eligible.
   {
-    rule: 'a command hook (not async / asyncRewake) or an http hook with onFailure: "block" is eligible',
-    anchor: 'asyncRewake!==!0;case"http":return',
+    rule: 'a command hook (not async / asyncRewake), an http hook or an SDK callback hook with onFailure: "block" is eligible',
+    anchor: 'asyncRewake!==!0;case"http":case"callback":return',
   },
   {
     rule: "an eligible hook's failure (non-blocking error) or timeout (cancelled, not user-aborted) becomes a block",
