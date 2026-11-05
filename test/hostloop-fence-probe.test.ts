@@ -28,7 +28,14 @@ type GetSettings = { sources: { source: string; settings: Settings }[] };
 
 describe.skipIf(!NATIVE)("hostloop fence: the agent accepts and merges the harness's fenced settings ($0)", () => {
   const top = mkdtempSync(join(tmpdir(), "cwh-fence-probe-"));
-  afterAll(() => rmSync(top, { recursive: true, force: true }));
+  // Every agent this suite spawned, so cleanup can wait for all of them. A killed agent keeps writing for a few ms
+  // (its config file, a backup, the plugin store, the debug log), and recreates them if the dir is already gone; a
+  // removal racing that write fails with ENOTEMPTY. So the dir is removed only once every agent has exited.
+  const exits: Promise<void>[] = [];
+  afterAll(async () => {
+    await Promise.all(exits);
+    rmSync(top, { recursive: true, force: true, maxRetries: 3 }); // retries are a belt; the wait above is the fix
+  });
   const d = (...p: string[]) => {
     const x = join(top, ...p);
     mkdirSync(x, { recursive: true });
@@ -61,6 +68,12 @@ describe.skipIf(!NATIVE)("hostloop fence: the agent accepts and merges the harne
       ["--output-format", "stream-json", "--input-format", "stream-json", "--verbose", "--debug-file", log, ...extraArgs],
       { cwd: d("work", "host-cwd"), env, stdio: ["pipe", "pipe", "pipe"] },
     );
+    // A spawn that fails emits 'error' and may never emit 'exit'; either one ends the wait.
+    const exited = new Promise<void>((res) => {
+      child.once("exit", () => res());
+      child.once("error", () => res());
+    });
+    exits.push(exited);
     const pending = new Map<string, (r: { subtype: string; response?: unknown }) => void>();
     let buf = "";
     child.stdout.on("data", (chunk: Buffer) => {
@@ -91,9 +104,21 @@ describe.skipIf(!NATIVE)("hostloop fence: the agent accepts and merges the harne
       }
       return got;
     };
-    const close = () => {
+    /** Stop the agent and wait for it to exit: SIGTERM, then SIGKILL if it has not exited within 5 s. */
+    const close = async () => {
       child.stdin.end();
       child.kill();
+      let timer: NodeJS.Timeout | undefined;
+      const forced = new Promise<void>((res) => {
+        timer = setTimeout(() => {
+          child.kill("SIGKILL");
+          res();
+        }, 5_000);
+      });
+      await Promise.race([exited, forced]);
+      clearTimeout(timer);
+      await exited;
+      expect(child.exitCode ?? child.signalCode, "agent still running when close() returned").not.toBeNull();
     };
     return { req, ignored, close };
   };
@@ -132,7 +157,7 @@ describe.skipIf(!NATIVE)("hostloop fence: the agent accepts and merges the harne
       // above, on the same settings change, by which point that change's log lines are written.
       expect(await a.ignored("workingDirectoriesAsGiven", 0)).toEqual([]);
     } finally {
-      a.close();
+      await a.close();
     }
   }, 60_000);
 
@@ -145,7 +170,7 @@ describe.skipIf(!NATIVE)("hostloop fence: the agent accepts and merges the harne
       expect((await a.req("1", { subtype: "initialize" })).subtype).toBe("success");
       expect(await a.ignored("blockReadsExemptPaths", 1)).toEqual(["3 of 4"]);
     } finally {
-      a.close();
+      await a.close();
     }
   }, 60_000);
 
@@ -157,7 +182,7 @@ describe.skipIf(!NATIVE)("hostloop fence: the agent accepts and merges the harne
       expect((await a.req("1", { subtype: "initialize" })).subtype).toBe("success");
       expect(await a.ignored("blockReadsExemptPaths", 1)).toEqual(["1 of 3"]);
     } finally {
-      a.close();
+      await a.close();
     }
   }, 60_000);
 
@@ -170,7 +195,7 @@ describe.skipIf(!NATIVE)("hostloop fence: the agent accepts and merges the harne
       expect((await a.req("1", { subtype: "initialize" })).subtype).toBe("success");
       expect(await a.ignored("workingDirectoriesAsGiven", 1)).toEqual(["1 of 2"]);
     } finally {
-      a.close();
+      await a.close();
     }
   }, 60_000);
 });
