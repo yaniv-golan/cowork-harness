@@ -6,7 +6,31 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **Baseline for Claude Desktop 4.16336.0 (agent 2.1.317).** `desktop-4.16336.0` is the new newest baseline. It has
+  not had a live pass.
+- **A host-loop agent now receives Cowork's outside-folder blocks** (configured and acceptance-verified; behaviour not
+  measured). From Desktop 4.16336.0, Desktop turns on the agent's own refusal of file reads and writes outside the
+  task's folders when the host CLI is new enough. The baseline records that floor as `hostLoopFence.minCli`, and on
+  `hostloop` the harness sends the same settings when the agent it runs is at or above it: outputs and every
+  connected folder as working directories, and uploads, the spooled tool results, skills and staged plugins as
+  readable roots. A probe against the staged agent shows it accepts these settings. What a tool call then does has
+  not been measured in a live run. See docs/fidelity-gaps.md.
+- **The host-loop sub-agent append gains Desktop's retry sentence for a workspace that is not ready yet.** On a 4.16336.0 or
+  later baseline, `hostloop` sub-agents receive it between the folder list and the skill sentence, with the
+  download-status instruction when the baseline records that gate on. VM tiers and older baselines are unchanged.
+
 ### Changed
+
+- **`sync` reads the shapes Desktop 4.16336.0 moved.** It reads the empty-key cleanup's new fourth member, the
+  hoisted read-only tail in the path hook, and the claude.ai memory-reset check in front of the auto-memory switch.
+  It classifies four new spawn env keys, and pins where Desktop sets the key that lets the agent attach its own
+  claude.ai Artifacts server. The harness leaves that key unset, so a test run cannot reach the operator's real
+  Artifacts; a skill that uses that server finds it missing here (docs/fidelity-gaps.md).
+- **`hook_decision` and the hook-block keys follow agent 2.1.317**, which lets an SDK callback hook with
+  `onFailure: "block"` block on failure, as http hooks already could. No hook a plugin or settings file declares is
+  affected.
 
 - **A test that hangs now fails with evidence instead of running to the CI time limit.** A synchronous child call
   blocks its vitest process, so `testTimeout` could never fire on it, and on Node 24 and later a CLI process can

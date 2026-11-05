@@ -4432,7 +4432,10 @@ export function checkScheduledSessionFacts(files: Map<string, string>, appVersio
   // `<L>=[<ns>.<k>,…]`, the subset `<R>=<L>.filter(e=><T>[e].annotations?.readOnlyHint===!0).map(e=>\`mcp__${<srv>}__${e}\`)`.
   // Every name must be one this sync has read (KNOWN_COWORK_FRAME_TOOLS), and `<srv>` must be "cowork". From Desktop
   // 4.29.0 the host loop's allowed-tools list spreads `<R>` (`...<f>(<G>.<export of R>)`), pre-approving the read-only
-  // tools; any spread of this module into that list must be exactly `<R>`, never the whole list. Required under the same
+  // tools; any spread of this module into that list must be exactly `<R>`, never the whole list. From Desktop 4.16336.0
+  // the spawn can remove `<R>` from that list again (`<gate>&&!<x>&&(allowedTools=allowedTools.filter(…<R>…))`, where
+  // `<x>` is `<gate>&&<launcher-era session>`); on an ordinary session `<x>` equals `<gate>`, so it never fires, and
+  // nothing here pins it. Required under the same
   // dating signals as (5): every bundle that has the predicate has had this list (3.6556.2, 4.29.0, 4.4212.0).
   const roSites = all(
     /(?<![\w$.])([\w$]+)=\[((?:[\w$]+\.[\w$]+,)*[\w$]+\.[\w$]+)\],([\w$]+)=\1\.filter\(\(e=>[\w$]+\[e\]\.annotations\?\.readOnlyHint===!0\)\)\.map\(\(e=>`mcp__\$\{([\w$]+\.[\w$]+)\}__\$\{e\}`\)\)/g,
