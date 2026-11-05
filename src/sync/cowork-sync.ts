@@ -5856,6 +5856,20 @@ export const S14A_EMPTY_SENTINEL_KEYS: readonly string[] = [
   "CLAUDE_CODE_SESSIONS_OAUTH_TOKEN",
 ];
 
+/** What is wrong with one empty-sentinel helper's member list, or null. A member outside S14A_EMPTY_SENTINEL_KEYS is
+ *  unclassified; a known member is required when it is an ANTHROPIC_* key or when `bundle` constructs it as `""`. */
+export function s14aMemberDefect(members: readonly string[], bundle: string): string | null {
+  const extra = members.filter((k) => !S14A_EMPTY_SENTINEL_KEYS.includes(k));
+  const lost = S14A_EMPTY_SENTINEL_KEYS.filter(
+    (k) => !members.includes(k) && (k.startsWith("ANTHROPIC_") || new RegExp(`[{,]${reEsc(k)}:""`).test(bundle)),
+  );
+  if (extra.length === 0 && lost.length === 0) return null;
+  return (
+    `the empty-sentinel delete helper's member set changed${extra.length ? ` (+${extra.join(", ")})` : ""}` +
+    `${lost.length ? ` (-${lost.join(", ")}, still constructed as "" or an ANTHROPIC_* key)` : ""} — classify each key W2 builds as "" before re-pinning`
+  );
+}
+
 /** Every `for(<kw> <v> of["ANTHROPIC_API_KEY",…])<e>[<v>]===""&&delete <e>[<v>]` loop (or its `if(…)delete` form,
  *  as an unminified build writes it): the member lists, in order.
  *  The loop BODY is part of the match, so another loop over a list that happens to start with the same key (a scrub
@@ -6543,19 +6557,15 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
   // minifier choice too, hence `[\w$]+` (a `$`-initial name is legal and `\w` cannot match it).
   // Desktop 4.16336.0 added CLAUDE_CODE_SESSIONS_OAUTH_TOKEN as a fourth member. The MEMBER SET is the contract (each
   // member is a key W2 constructs as "" and relies on this helper to delete), so it is pinned as a set: a member outside
-  // S14A_EMPTY_SENTINEL_KEYS flags by name, and a missing ANTHROPIC_* member flags. The fourth member is optional so
-  // older baselines still read.
+  // S14A_EMPTY_SENTINEL_KEYS flags by name, and a member goes missing when it is an ANTHROPIC_* one or the bundle
+  // still constructs it as "" (a key built "" and no longer deleted reaches the agent as ""). Older baselines, which
+  // neither construct nor delete the fourth, still read.
   {
     const s14a = s14aEmptySentinelLists(bundle);
     if (s14a.length === 0) miss("S14a FnA definition", "the empty-ANTHROPIC_* delete helper is gone");
     for (const members of s14a) {
-      const extra = members.filter((k) => !S14A_EMPTY_SENTINEL_KEYS.includes(k));
-      const lost = S14A_EMPTY_SENTINEL_KEYS.filter((k) => k.startsWith("ANTHROPIC_") && !members.includes(k));
-      if (extra.length > 0 || lost.length > 0)
-        miss(
-          "S14a FnA definition",
-          `the empty-sentinel delete helper's member set changed${extra.length ? ` (+${extra.join(", ")})` : ""}${lost.length ? ` (-${lost.join(", ")})` : ""} — classify each key W2 builds as "" before re-pinning`,
-        );
+      const defect = s14aMemberDefect(members, bundle);
+      if (defect) miss("S14a FnA definition", defect);
     }
   }
   // The blank-empties helper must be CALLED on the same env object that just received ANTHROPIC_CUSTOM_HEADERS

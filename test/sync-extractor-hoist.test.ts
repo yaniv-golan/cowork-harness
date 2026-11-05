@@ -1,7 +1,7 @@
 // Extractor admissions for Desktop 4.16336.0: the empty-sentinel helper's member set (S14a) and the hoisted readOnly
 // tail in the path hook. Fixtures are synthetic minified shapes, never Desktop text.
 import { describe, expect, it } from "vitest";
-import { readOnlyTailHoistDefect, s14aEmptySentinelLists, S14A_EMPTY_SENTINEL_KEYS } from "../src/sync/cowork-sync.js";
+import { readOnlyTailHoistDefect, s14aEmptySentinelLists, s14aMemberDefect, S14A_EMPTY_SENTINEL_KEYS } from "../src/sync/cowork-sync.js";
 
 describe("S14a empty-sentinel helper", () => {
   const loop = (keys: string[]) => `function q(e){for(let t of[${keys.map((k) => `"${k}"`).join(",")}])e[t]===""&&delete e[t]}`;
@@ -21,6 +21,27 @@ describe("S14a empty-sentinel helper", () => {
   it("reports a fifth member, so the caller can flag it by name", () => {
     const got = s14aEmptySentinelLists(loop([...S14A_EMPTY_SENTINEL_KEYS, "CLAUDE_CODE_NEW_SECRET"]));
     expect(got[0]!.filter((k) => !S14A_EMPTY_SENTINEL_KEYS.includes(k))).toEqual(["CLAUDE_CODE_NEW_SECRET"]);
+  });
+});
+
+describe("S14a member set", () => {
+  const three = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS"];
+  const built = 'let e={CLAUDE_CODE_OAUTH_TOKEN:"",CLAUDE_CODE_SESSIONS_OAUTH_TOKEN:"",X:"1"};';
+
+  it("an older build that neither constructs nor deletes the fourth reads clean", () => {
+    expect(s14aMemberDefect(three, "let e={X:1};")).toBeNull();
+  });
+  it('a build that constructs it as "" and deletes it reads clean', () => {
+    expect(s14aMemberDefect([...S14A_EMPTY_SENTINEL_KEYS], built)).toBeNull();
+  });
+  it('a build that constructs it as "" but no longer deletes it flags it by name', () => {
+    expect(s14aMemberDefect(three, built)).toMatch(/-CLAUDE_CODE_SESSIONS_OAUTH_TOKEN/);
+  });
+  it("a lost ANTHROPIC_* member flags whatever the bundle builds", () => {
+    expect(s14aMemberDefect(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"], "")).toMatch(/-ANTHROPIC_CUSTOM_HEADERS/);
+  });
+  it("an unclassified member flags by name", () => {
+    expect(s14aMemberDefect([...three, "NEW_KEY"], "")).toMatch(/\+NEW_KEY/);
   });
 });
 

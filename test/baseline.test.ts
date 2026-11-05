@@ -5270,6 +5270,15 @@ describe("1.25927.0 bundler change: MUTATION — widened guards still fail on re
     expect(checkSpawnContractFacts(joined(m!), m!).some((x) => /S14a/.test(x))).toBe(true);
   });
 
+  it('MUTATION: the empty-sentinel helper loses its fourth member while W2 still builds it as "" → S14a flags it', () => {
+    const f = realFiles();
+    if (!f) return;
+    if (!joined(f).includes('"ANTHROPIC_CUSTOM_HEADERS","CLAUDE_CODE_SESSIONS_OAUTH_TOKEN"]')) return; // a build before the fourth
+    const m = mutateDefining(f, '"ANTHROPIC_CUSTOM_HEADERS","CLAUDE_CODE_SESSIONS_OAUTH_TOKEN"]', '"ANTHROPIC_CUSTOM_HEADERS"]');
+    expect(m).not.toBeNull();
+    expect(checkSpawnContractFacts(joined(m!), m!).some((x) => /S14a.*-CLAUDE_CODE_SESSIONS_OAUTH_TOKEN/.test(x))).toBe(true);
+  });
+
   // D6 (Desktop 2.2553.1): the gated set and the path keys both derive from ONE tool→path-key map, so the
   // old `["Read","Write","Edit","Glob","Grep"]` needle no longer exists and these mutate the MAP. Note the
   // `expect(m).not.toBeNull()` in each: when the shape moves again, the needle stops applying and these
