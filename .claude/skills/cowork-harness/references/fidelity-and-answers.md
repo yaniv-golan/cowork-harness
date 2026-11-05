@@ -1,6 +1,6 @@
 # Fidelity tiers & answer paths
 
-Self-contained reference. Tracks `cowork-harness 4.13.1` (baseline `desktop-4.16336.0`).
+Self-contained reference. Tracks `cowork-harness 4.14.0` (baseline `desktop-4.16336.0`).
 
 > **This page vs. the repo docs.** This is the **offline snapshot** that ships inside the installed
 > plugin — it is self-contained on purpose. The repo carries four other fidelity views, each answering a
@@ -60,6 +60,12 @@ and sees `/sessions/<id>/...` paths. Consequences an agent (or a debugging autho
   in addition to the path hook above. Uploads, the spooled tool results, skills and staged plugins are exempt from
   its read block. Such a refusal comes from the agent, so its wording is not the hook's message; a path the hook
   allows can still be refused here if it sits outside all of those roots. Older baselines and agents run without it.
+  An agent binary outside Desktop's staging layout (typically a `COWORK_HOST_AGENT_BINARY` override) is asked for its
+  version once; if it gives none, this layer is left off and the run warns that it is.
+- **The agent's own claude.ai Artifacts server (`claude-artifacts`) is not attached on any tier.** From
+  `desktop-4.16336.0`, an ordinary Cowork session lists it among its MCP servers; the harness leaves it off so a test
+  run cannot touch the operator's real Artifacts. A skill that calls it fails here and works in Cowork. See
+  [`docs/fidelity-gaps.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/fidelity-gaps.md) § "The agent's own Artifacts server is not attached."
 
 ### `microvm` prerequisites & lifecycle
 

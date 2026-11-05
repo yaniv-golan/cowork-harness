@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [4.14.0] - 2026-11-05
+
 ### Upgrade notes
 
 - **Cassettes: re-stamp or re-record.** `latest` moves to `desktop-4.16336.0`, so a cassette recorded through
@@ -30,13 +32,13 @@ All notable changes to this project are documented here. The format is based on
 - **A host-loop agent now receives Cowork's outside-folder blocks** (configured and acceptance-verified; behaviour not
   measured). From Desktop 4.16336.0, Desktop turns on the agent's own refusal of file reads and writes outside the
   task's folders when the host CLI is new enough. The baseline records that floor as `hostLoopFence.minCli`, and on
-  `hostloop` (and `chat`, which spawns the same way) the harness sends the same settings when the agent it runs is at or above it: outputs and every
-  connected folder as working directories, and uploads, the spooled tool results, skills and staged plugins as
-  readable roots. A probe against the staged agent shows it accepts these settings. What a tool call then does has
-  not been measured in a live run. See docs/fidelity-gaps.md.
-- **The host-loop sub-agent append gains Desktop's retry sentence for a workspace that is not ready yet.** On a 4.16336.0 or
-  later baseline, `hostloop` sub-agents receive it between the folder list and the skill sentence, with the
-  download-status instruction when the baseline records that gate on. VM tiers and older baselines are unchanged.
+  `hostloop` (and `chat`, which spawns the same way) the harness sends the same settings when the agent it runs is at
+  or above it: outputs and every connected folder as working directories, and uploads, the spooled tool results,
+  skills and staged plugins as readable roots. A probe against the staged agent shows it accepts these settings. What
+  a tool call then does has not been measured in a live run. See docs/fidelity-gaps.md.
+- **The host-loop sub-agent append gains Desktop's retry sentence for a workspace that is not ready yet.** On a
+  4.16336.0 or later baseline, `hostloop` sub-agents receive it between the folder list and the skill sentence, with
+  the download-status instruction when the baseline records that gate on. VM tiers and older baselines are unchanged.
 
 ### Changed
 
@@ -54,8 +56,9 @@ All notable changes to this project are documented here. The format is based on
   its log. The unit lane now watches for a blocked process: it saves stack dumps of the stuck children and the test
   process, kills the children, and fails the test, or the run for a hang in a hook. The CI test jobs and the release's
   Build + test also install gdb, take a job-level dump of every node process shortly before the test step's limit,
-  and upload the dumps and the test log when the step does not pass. This contains the hang; it does not fix the
-  upstream bug. Contributor knobs are in CONTRIBUTING.md.
+  and upload the dumps and the test log when the step fails or reaches its own time limit. A run whose runner stops
+  responding keeps neither. This contains the hang; it does not fix the upstream bug. Contributor knobs are in
+  CONTRIBUTING.md.
 
 ## [4.13.1] - 2026-11-02
 
