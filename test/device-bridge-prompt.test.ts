@@ -95,11 +95,19 @@ describe("wiring: the bridge flag reaches the render and both fingerprint sites"
   it("execute.ts renders with it and fingerprints with it", () => {
     const s = read("run/execute.ts");
     expect(s).toMatch(/renderPrompts\([^;]*deviceBridge: scenario\.device_bridge === true/);
+    // Every record site passes the full prompt identity: a new buildFingerprint call without it goes red here.
+    const sites = s.match(/buildFingerprint\(/g) ?? [];
+    expect(sites).toHaveLength(2);
     expect(
       s.match(
         /buildFingerprint\([^;]*\{\s*deviceBridge: scenario\.device_bridge === true,\s*deviceBridgeNote: bridgeNote,\s*hostLoop: effectiveFidelity === "hostloop",?\s*\}\)/g,
       ),
-    ).toHaveLength(2);
+    ).toHaveLength(sites.length);
+  });
+  it("the one verify site hashes with the recorded tier", () => {
+    const s = read("run/cassette.ts");
+    expect(s.match(/promptAssetStaleness\(fp,/g)).toHaveLength(1);
+    expect(s.match(/hostLoop: \(cassette\.effectiveFidelity \?\? cassette\.scenario\.fidelity\) === "hostloop"/g)).toHaveLength(1);
   });
   it("replay staleness reads it off the frozen scenario", () => {
     expect(read("run/cassette.ts")).toMatch(

@@ -1,6 +1,3 @@
-import { cmpVersionStrings } from "../baseline.js";
-import { readGateFlag } from "../loop-decision.js";
-import type { PlatformBaseline } from "../types.js";
 /**
  * The two parts of the Cowork sub-agent append that Desktop composes in CODE, outside the
  * server-overridable `## Cowork environment` section (Desktop >= 1.46388.3).
@@ -29,6 +26,10 @@ import type { PlatformBaseline } from "../types.js";
  * which hash production's own text — so a paraphrase that stops matching is a sync failure, not a
  * silent divergence.
  */
+
+import { cmpVersionStrings } from "../baseline.js";
+import { readGateFlag } from "../loop-decision.js";
+import type { PlatformBaseline } from "../types.js";
 
 /** One folder as the manifest sees it. */
 export interface SubagentManifestFolder {
@@ -158,6 +159,7 @@ export function subagentGeneratedPromptText(): string {
   // Between them these cover both prose variants, all three line shapes (outputs, reachable, unreachable) and the
   // trailing sentence. The retry part is NOT here: it reaches only some runs, so the hash mixes in
   // `subagentRetryText` per run instead. These parts are hashed on every tier although only host-loop renders the
-  // manifest; narrowing that would move every older cassette's hash, so it stays.
+  // manifest and protocol renders no sub-agent append at all; narrowing that would move every older cassette's
+  // hash, so it stays.
   return [listVariant, emptyVariant, SUBAGENT_SKILL_SENTENCE].join("\u0001");
 }

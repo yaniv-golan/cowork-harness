@@ -16,7 +16,8 @@ All notable changes to this project are documented here. The format is based on
   re-stamped `hostloop` cassette therefore also reports that the baseline's prompt assets changed since record, and
   `verify-cassettes` fails on it until it is re-recorded. A `container`, `microvm` or `protocol` cassette's hash is
   the same on 4.16336.0 as on 4.4212.0, so re-stamping its baseline is enough, and a cassette pinned to an older
-  baseline is unaffected on every tier. The bundled cassettes are re-stamped and re-hashed.
+  baseline is unaffected on every tier. The bundled cassettes are re-stamped and re-hashed; the `hostloop` one was
+  recorded before the sentence existed, so it is due a re-record on 4.16336.0.
 - **On `hostloop`, an agent binary outside Desktop's staging layout is now run once with `--version`** when the baseline
   records the outside-folder fence, typically a `COWORK_HOST_AGENT_BINARY` override. Its answer decides whether the
   fence is sent; if it gives no version, the fence is not sent and a warning says so. A baseline without a fence runs

@@ -170,7 +170,8 @@ export function renderPrompts(
   const workspaceFolder = firstFolderMountPath && !opts.deviceBridge ? `${mntRoot}/${firstFolderMountPath}` : `${mntRoot}/outputs`;
   // {{currentDateTime}}/{{currentTimezone}} are deliberately render-time-impure (wall clock, host
   // TZ) — that's what the real Desktop builder substitutes, and the rendered append never enters a
-  // cassette (fingerprint hashes baseline+skillHash only), so replay determinism is unaffected. Do
+  // cassette verbatim (`promptAssetsHash` covers the constant templates, not the substituted date/timezone), so
+  // replay determinism is unaffected. Do
   // not freeze these for testability; snapshot tests of the full rendered prompt would flake by design.
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
