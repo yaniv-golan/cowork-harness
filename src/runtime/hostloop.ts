@@ -167,6 +167,8 @@ export function hostLoopProcessContract(
     stat?: Parameters<typeof resolveHostProcessCwd>[0]["stat"];
     /** The roots the outside-folder fence needs and the agent binary that will run (its version decides it). */
     fence?: { roots: HostLoopFenceRoots; agentBinary: string };
+    /** Test seam: how the agent binary is asked for its version (default: run `<binary> --version`). */
+    askAgentVersion?: (binaryPath: string) => string;
   } = {},
 ): {
   processCwd: string | undefined;
@@ -183,11 +185,14 @@ export function hostLoopProcessContract(
   const processCwd = hostLoopUsesSystemEmptyCwd(baseline)
     ? resolveHostProcessCwd({ fallbackDir: join(resolve(outDir), "work", "host-cwd"), stat: deps.stat })
     : undefined;
+  // The binary's version is read only when the baseline records a fence: a pre-fence baseline runs no --version and
+  // warns about nothing.
   const fenced =
     deps.fence !== undefined &&
+    baseline.hostLoopFence != null &&
     hostLoopFenceApplies(
       baseline,
-      agentVersionOfBinary(deps.fence.agentBinary, (m) => warn(m)),
+      agentVersionOfBinary(deps.fence.agentBinary, (m) => warn(m), deps.askAgentVersion),
     );
   const permission =
     processCwd !== undefined

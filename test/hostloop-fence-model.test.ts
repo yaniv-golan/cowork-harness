@@ -3,7 +3,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { loadBaseline, resolveHostAgentBinary } from "../src/baseline.js";
 import {
   agentVersionOfBinary,
@@ -166,6 +166,37 @@ describe("hostLoopProcessContract: the fence follows the baseline and the binary
       ),
     ).toBe(false);
     expect(fenced(hostLoopProcessContract(withFence, out, "/S", "/S/mnt/outputs", { stat }))).toBe(false);
+  });
+});
+
+describe("hostLoopProcessContract: a baseline without a fence never asks the binary for its version", () => {
+  const out = mkdtempSync(join(tmpdir(), "cwh-fence-prefence-"));
+  afterAll(() => rmSync(out, { recursive: true, force: true }));
+  const stat = () => ({ isDirectory: () => true, uid: 0, mode: 0o40755 });
+  const unversioned = { roots: { folders: ["/U/rw"], readOnlyRoots: ["/S/mnt/uploads"] }, agentBinary: "/saved/copy/claude" };
+  const run = (baseline: ReturnType<typeof loadBaseline>) => {
+    const asked: string[] = [];
+    const err: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((c: string | Uint8Array) => (err.push(String(c)), true));
+    try {
+      const c = hostLoopProcessContract(baseline, out, "/S", "/S/mnt/outputs", {
+        stat,
+        fence: unversioned,
+        askAgentVersion: (p) => (asked.push(p), "2.1.317 (Claude Code)"),
+      });
+      return { fenced: "blockReadsOutsideWorkingDirectories" in settingsOf(c.permission!.extraArgs).permissions, asked, err };
+    } finally {
+      spy.mockRestore();
+    }
+  };
+  it("pre-fence baseline: no --version, no warning, no fence", () => {
+    const r = run(loadBaseline("desktop-4.4212.0"));
+    expect(r).toEqual({ fenced: false, asked: [], err: [] });
+  });
+  it("fenced baseline: the same override is asked once, and its answer decides", () => {
+    const r = run({ ...loadBaseline("desktop-4.4212.0"), appVersion: "4.16336.0", hostLoopFence: { minCli: "2.1.315" } });
+    expect(r.fenced).toBe(true);
+    expect(r.asked).toEqual(["/saved/copy/claude"]);
   });
 });
 
