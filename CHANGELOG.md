@@ -28,7 +28,7 @@ All notable changes to this project are documented here. The format is based on
 - **A host-loop agent now receives Cowork's outside-folder blocks** (configured and acceptance-verified; behaviour not
   measured). From Desktop 4.16336.0, Desktop turns on the agent's own refusal of file reads and writes outside the
   task's folders when the host CLI is new enough. The baseline records that floor as `hostLoopFence.minCli`, and on
-  `hostloop` the harness sends the same settings when the agent it runs is at or above it: outputs and every
+  `hostloop` (and `chat`, which spawns the same way) the harness sends the same settings when the agent it runs is at or above it: outputs and every
   connected folder as working directories, and uploads, the spooled tool results, skills and staged plugins as
   readable roots. A probe against the staged agent shows it accepts these settings. What a tool call then does has
   not been measured in a live run. See docs/fidelity-gaps.md.

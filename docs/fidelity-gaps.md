@@ -1172,7 +1172,12 @@ What is shown, per channel:
   production's two messages do. That ordering does not matter is an assumption.
 - **Mid-session pushes:** the harness has no mid-session folder connect or artifact grant, so there is nothing to push.
 - **Behaviour:** not measured. What a Read or Write inside and outside these roots does under the fence needs a live
-  host-loop run, which has not been made. Until then the fence is configured and acceptance-verified only.
+  host-loop run, which has not been made. Until then the fence is configured and acceptance-verified only. One open
+  question changes existing verdicts: whether the agent's fence refuses before or after the harness's PreToolUse path
+  hook. If the fence runs first, an outside-folder write on a fenced baseline is refused by the agent with no hook
+  frame, so a scenario that asserts the hook's refusal (`hook_decision`, `no_hook_event_blocked`) can change verdict
+  between `desktop-4.4212.0` and `desktop-4.16336.0` with no harness bug and no skill change. If the hook runs first,
+  nothing changes. The live run measures this first.
 
 Connected folders being working directories also matters for CLAUDE.md. Production sets
 `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD` from the claude.ai account config, so a CLAUDE.md inside a connected
