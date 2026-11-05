@@ -319,7 +319,8 @@ committed baseline and say why in that baseline's `$comment`.
    > state and no static file can be faithful to it — the same reason the main-loop shell section became
    > a generator at 1.14271.0. Do **not** "restore" them into the asset: they would render twice. Edit
    > the generator instead, and note its text is mixed into `promptAssetsHash`, so an edit there stales
-   > recorded cassettes exactly as an asset edit does.
+   > recorded cassettes exactly as an asset edit does: the manifest and skill sentence on every tier, the
+   > retry part only on `hostloop` at or above its floor, where it is rendered.
 
    **Includes the prompt-patch channel sentinel.** `checkSyspromptMapFacts` pins Desktop's
    `coworkSyspromptMap` — a channel that can *replace* the computed Cowork prompt section for a named

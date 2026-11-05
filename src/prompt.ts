@@ -2,13 +2,11 @@ import { warn } from "./io.js";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { cmpVersionStrings, resolveMounts } from "./baseline.js";
-import { readGateFlag } from "./loop-decision.js";
+import { resolveMounts } from "./baseline.js";
 import {
   generateSubagentFolderManifest,
-  SUBAGENT_RETRY_MIN_VERSION,
   SUBAGENT_SKILL_SENTENCE,
-  subagentRetryPart,
+  subagentRetryText,
   type SubagentManifestFolder,
 } from "./prompt/subagent-manifest.js";
 import type { PlatformBaseline } from "./types.js";
@@ -242,10 +240,7 @@ export function renderPrompts(
         })
       : "";
     // Its arm follows the baseline's recorded gate; the rendered append, and so the arm, is in control-out.jsonl.
-    const retry =
-      isHostLoop && cmpVersionStrings(baseline.appVersion, SUBAGENT_RETRY_MIN_VERSION) >= 0
-        ? subagentRetryPart(readGateFlag(baseline, "1978029737", "workspaceBashDownloadStatus", false))
-        : "";
+    const retry = subagentRetryText(baseline, isHostLoop);
     return (section + manifest + retry + SUBAGENT_SKILL_SENTENCE).trim();
   };
   const readSubagentAppend = (): string | undefined => {

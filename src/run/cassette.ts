@@ -31,7 +31,7 @@ import {
   rmSync,
   realpathSync,
 } from "node:fs";
-import { subagentGeneratedPromptText } from "../prompt/subagent-manifest.js";
+import { subagentGeneratedPromptText, subagentRetryText } from "../prompt/subagent-manifest.js";
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -1205,7 +1205,7 @@ export function skillCommit(sessionPath: string, inlineSession?: SessionConfig):
 type PromptAssetKey = "promptTemplate" | "subagentAppend" | "subagentAppendHostLoop";
 export function hashBaselinePromptAssets(
   baseline: PlatformBaseline,
-  opts: { deviceBridge?: boolean; deviceBridgeNote?: "included" | "omitted" } = {},
+  opts: { deviceBridge?: boolean; deviceBridgeNote?: "included" | "omitted"; hostLoop?: boolean } = {},
 ): string | undefined {
   const spawn = (baseline.spawn ?? {}) as Record<string, unknown>;
   const entries = (["promptTemplate", "subagentAppend", "subagentAppendHostLoop"] as const satisfies readonly PromptAssetKey[])
@@ -1220,6 +1220,11 @@ export function hashBaselinePromptAssets(
   // the model and is hashed by nothing. The generator's OUTPUT varies with live mounts, so what is mixed
   // in is its constant templates with every interpolation blanked.
   h.update("subagentGenerated").update("\0").update(subagentGeneratedPromptText()).update("\0");
+  // The host-loop retry part, only where a run renders it (host-loop, at or above its floor, gate-selected arm), via
+  // the same function the render calls. Where it is not sent nothing is mixed in, so every other run hashes exactly
+  // what it did before the part existed, and a gate flip under the same appVersion still moves a host-loop hash.
+  const retry = subagentRetryText(baseline, opts.hostLoop === true);
+  if (retry) h.update("subagentRetry").update("\0").update(retry).update("\0");
   // device_bridge replaces the folder text with harness notes; a bridge run's prompt carries them, so its hash
   // does. Every other run hashes exactly what it did.
   if (opts.deviceBridge) h.update("deviceBridge").update("\0").update(deviceBridgePromptText(opts.deviceBridgeNote)).update("\0");
@@ -1539,7 +1544,7 @@ export function buildFingerprint(
   baseline?: PlatformBaseline,
   inlineSession?: SessionConfig,
   sessionOverride?: string,
-  promptOpts: { deviceBridge?: boolean; deviceBridgeNote?: "included" | "omitted" } = {},
+  promptOpts: { deviceBridge?: boolean; deviceBridgeNote?: "included" | "omitted"; hostLoop?: boolean } = {},
 ): Fingerprint {
   const promptAssetsHash = baseline ? hashBaselinePromptAssets(baseline, promptOpts) : undefined;
   const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir, inlineSession, sessionOverride);
@@ -2497,7 +2502,7 @@ function computeTierStaleness(cassette: Cassette): { findings: StalenessFinding[
 export function promptAssetStaleness(
   fp: Fingerprint,
   liveBaselineObj: PlatformBaseline | undefined,
-  promptOpts: { deviceBridge?: boolean; deviceBridgeNote?: "included" | "omitted" } = {},
+  promptOpts: { deviceBridge?: boolean; deviceBridgeNote?: "included" | "omitted"; hostLoop?: boolean } = {},
 ): StalenessFinding | { note: string } | null {
   if (fp.promptAssetsHash === undefined)
     return {
@@ -2737,6 +2742,8 @@ export function computeStaleness(
   const pa = promptAssetStaleness(fp, liveBaselineObj, {
     deviceBridge: cassette.scenario.device_bridge === true,
     deviceBridgeNote: cassette.deviceBridge?.promptNote ?? "included",
+    // The tier the recording resolved to, as the record side hashed it.
+    hostLoop: (cassette.effectiveFidelity ?? cassette.scenario.fidelity) === "hostloop",
   });
   if (pa) {
     if ("note" in pa) notes.push(pa.note);

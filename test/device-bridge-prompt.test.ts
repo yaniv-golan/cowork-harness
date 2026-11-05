@@ -96,7 +96,9 @@ describe("wiring: the bridge flag reaches the render and both fingerprint sites"
     const s = read("run/execute.ts");
     expect(s).toMatch(/renderPrompts\([^;]*deviceBridge: scenario\.device_bridge === true/);
     expect(
-      s.match(/buildFingerprint\([^;]*\{\s*deviceBridge: scenario\.device_bridge === true,\s*deviceBridgeNote: bridgeNote,?\s*\}\)/g),
+      s.match(
+        /buildFingerprint\([^;]*\{\s*deviceBridge: scenario\.device_bridge === true,\s*deviceBridgeNote: bridgeNote,\s*hostLoop: effectiveFidelity === "hostloop",?\s*\}\)/g,
+      ),
     ).toHaveLength(2);
   });
   it("replay staleness reads it off the frozen scenario", () => {
@@ -135,7 +137,7 @@ describe("the device_bridge note can be omitted for a control run", () => {
     const fp = { baseline: b.appVersion, promptAssetsHash: om } as never;
     expect(promptAssetStaleness(fp, b, { deviceBridge: true, deviceBridgeNote: "omitted" })).toBeNull();
     expect(readFileSync(join(import.meta.dirname, "..", "src", "run", "cassette.ts"), "utf8")).toMatch(
-      /promptAssetStaleness\(fp, liveBaselineObj, \{\s*deviceBridge: cassette\.scenario\.device_bridge === true,\s*deviceBridgeNote: cassette\.deviceBridge\?\.promptNote \?\? "included",?\s*\}\)/,
+      /promptAssetStaleness\(fp, liveBaselineObj, \{\s*deviceBridge: cassette\.scenario\.device_bridge === true,\s*deviceBridgeNote: cassette\.deviceBridge\?\.promptNote \?\? "included",\s*(?:\/\/[^\n]*\s*)?hostLoop: \(cassette\.effectiveFidelity \?\? cassette\.scenario\.fidelity\) === "hostloop",?\s*\}\)/,
     );
   });
   it("execute.ts renders, fingerprints and records with the mode", () => {

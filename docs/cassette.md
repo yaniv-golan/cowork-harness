@@ -977,7 +977,9 @@ for the `cowork` → `hostloop`/`container` resolution.
   Desktop 1.46388.3 the hash ALSO covers the sub-agent prompt text the harness generates rather than
   reads from an asset (the host-loop folder manifest and the trailing sentence,
   `src/prompt/subagent-manifest.ts`) — that text reaches the model exactly as an asset's does, so it
-  must stale a recording the same way. Non-failing
+  must stale a recording the same way. Those two are hashed on every tier. The retry sentence that
+  Desktop 4.16336.0 added is hashed only where it is sent, on `hostloop` at 4.16336.0 or later and
+  in the arm the baseline's gate selects; other tiers and older baselines do not hash it. Non-failing
   by default (warns), `--strict` fails, `verify-cassettes` treats it like any other finding — re-record.
 - **`cassette recorded a prompt-asset fingerprint but the live baseline's prompt assets can't be hashed …`**
   (class `unverifiable-prompt-assets`) — a recorded `fingerprint.promptAssetsHash` exists but the live

@@ -11,11 +11,12 @@ All notable changes to this project are documented here. The format is based on
 - **Cassettes: re-stamp or re-record.** `latest` moves to `desktop-4.16336.0`, so a cassette recorded through
   `baseline: latest` reports `[stale] baseline moved 4.4212.0 → 4.16336.0 since record — re-record`; re-stamping
   `fingerprint.baseline` clears that. The agent moves from 2.1.309 to 2.1.317, so a re-stamped cassette recorded on
-  2.1.309 gets an `agent-version:` note; re-record it to clear the note. Separately, the sub-agent prompt text the
-  harness generates now includes the host-loop retry sentence, which moves `promptAssetsHash` on every tier and every
-  baseline: a cassette that recorded one reports that the baseline's prompt assets changed since record, and
-  `verify-cassettes` fails on it. Re-record to clear it. The bundled cassettes are re-stamped and re-hashed: none of
-  them dispatches a host-loop sub-agent, so none rendered the new sentence.
+  2.1.309 gets an `agent-version:` note; re-record it to clear the note. The host-loop retry sentence (see Added)
+  counts toward `promptAssetsHash` only where it is sent: a `hostloop` cassette on a 4.16336.0 or later baseline. A
+  re-stamped `hostloop` cassette therefore also reports that the baseline's prompt assets changed since record, and
+  `verify-cassettes` fails on it until it is re-recorded. A `container`, `microvm` or `protocol` cassette's hash is
+  the same on 4.16336.0 as on 4.4212.0, so re-stamping its baseline is enough, and a cassette pinned to an older
+  baseline is unaffected on every tier. The bundled cassettes are re-stamped and re-hashed.
 - **On `hostloop`, an agent binary outside Desktop's staging layout is now run once with `--version`** when the baseline
   records the outside-folder fence, typically a `COWORK_HOST_AGENT_BINARY` override. Its answer decides whether the
   fence is sent; if it gives no version, the fence is not sent and a warning says so. A baseline without a fence runs
