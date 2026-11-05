@@ -270,12 +270,9 @@ describe("fence invariant over the real stager's layout", () => {
     for (const p of dirs) expect(sets(p), p).toEqual(["ex"]);
   });
   it("the spool and skills are read exemptions; outputs and the folders are working directories", () => {
-    // The spawn's config-dir setup creates skills before the roots are derived; this test builds the plan without it,
-    // so it creates the dir itself to exercise the realpath spelling.
-    mkdirSync(join(plan.configDir, "skills"), { recursive: true });
-    const again = hostLoopFencePermissions(outputs, hostLoopAppRoots(plan, mntHost).fence);
-    const ex2 = (again.blockReadsExemptPaths as string[]).filter((p) => existsSync(p)).map((p) => realpathSync(p));
-    for (const p of [join(plan.configDir, "projects"), join(plan.configDir, "skills")]) expect(under(realpathSync(p), ex2), p).toBe(true);
+    // buildLaunchPlan creates skills and the stager creates projects, so both exist before the roots are derived (as in
+    // the spawn), and each is exempt under its real path.
+    for (const p of [join(plan.configDir, "projects"), join(plan.configDir, "skills")]) expect(sets(p), p).toEqual(["ex"]);
     for (const p of [outputs, rw, ro]) expect(sets(p), p).toEqual(["wd"]);
   });
   it("the working directories and the exemptions are disjoint", () => {
