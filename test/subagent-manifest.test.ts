@@ -3,8 +3,10 @@ import {
   generateSubagentFolderManifest,
   subagentGeneratedPromptText,
   subagentRetryPart,
+  subagentRetryText,
   SUBAGENT_SKILL_SENTENCE,
 } from "../src/prompt/subagent-manifest.js";
+import { hashBaselinePromptAssets, promptAssetStaleness } from "../src/run/cassette.js";
 import { renderPrompts } from "../src/prompt.js";
 import { loadBaseline } from "../src/baseline.js";
 import { SessionConfig } from "../src/session.js";
@@ -202,9 +204,52 @@ describe("renderPrompts — sub-agent retry part (Desktop >= 4.16336.0)", () => 
     expect(render(withGate("4.4212.0", true), "hostloop")).not.toContain("Workspace still starting");
   });
 
-  it("both arms are in the cassette-staleness text", () => {
+  it("the retry part is not in the tier-blind staleness text: it is hashed per run, where it is rendered", () => {
     const text = subagentGeneratedPromptText();
-    expect(text).toContain(subagentRetryPart(false));
-    expect(text).toContain(subagentRetryPart(true));
+    expect(text).not.toContain(subagentRetryPart(false));
+    expect(text).not.toContain("Workspace still");
+  });
+
+  // A cassette's prompt-asset hash covers the retry part only where its model received it. The oracle 267cb799c2e18b49 is
+  // not computed here: it is the value all four bundled cassettes carried before the retry part existed (commit 7102ad3f),
+  // so a pinned older-baseline cassette, on any tier, still compares green.
+  describe("the prompt-asset hash covers the retry part only where it is rendered", () => {
+    const PRE_RETRY = "267cb799c2e18b49";
+    const old = loadBaseline("desktop-4.4212.0");
+    const cur = loadBaseline("desktop-4.16336.0");
+    it("an older baseline hashes as it did before the part existed, on both lanes", () => {
+      expect(hashBaselinePromptAssets(old)).toBe(PRE_RETRY);
+      expect(hashBaselinePromptAssets(old, { hostLoop: true })).toBe(PRE_RETRY);
+    });
+    it("on 4.16336.0 a VM-tier run hashes exactly as the older baseline does (same assets, no retry part)", () => {
+      expect(hashBaselinePromptAssets(cur)).toBe(PRE_RETRY);
+      expect(hashBaselinePromptAssets(cur)).toBe(hashBaselinePromptAssets(old));
+    });
+    it("on 4.16336.0 a host-loop run's hash moves, and moves again when the gate selects the other arm", () => {
+      const off = hashBaselinePromptAssets(withGate("4.16336.0", false), { hostLoop: true });
+      const on = hashBaselinePromptAssets(withGate("4.16336.0", true), { hostLoop: true });
+      expect(off).not.toBe(PRE_RETRY);
+      expect(on).not.toBe(PRE_RETRY);
+      expect(on).not.toBe(off);
+      expect(hashBaselinePromptAssets(withGate("4.16336.0", true))).toBe(PRE_RETRY);
+    });
+    it("the hash and the render decide through the one function", () => {
+      for (const [b, hl] of [
+        [cur, true],
+        [cur, false],
+        [old, true],
+        [withGate("4.16336.0", true), true],
+      ] as const) {
+        const r = render(b, hl ? "hostloop" : "container");
+        const t = subagentRetryText(b, hl);
+        if (t) expect(r).toContain(t.trim());
+        else expect(r).not.toContain("Workspace still");
+      }
+    });
+    it("staleness: a re-stamped pre-retry fingerprint on 4.16336.0 is green on a VM tier and stale on host-loop", () => {
+      const fp = { baseline: cur.appVersion, promptAssetsHash: PRE_RETRY } as never;
+      expect(promptAssetStaleness(fp, cur, {})).toBeNull();
+      expect(promptAssetStaleness(fp, cur, { hostLoop: true })).toMatchObject({ class: "prompt-assets" });
+    });
   });
 });

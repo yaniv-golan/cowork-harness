@@ -27,6 +27,10 @@
  * silent divergence.
  */
 
+import { cmpVersionStrings } from "../baseline.js";
+import { readGateFlag } from "../loop-decision.js";
+import type { PlatformBaseline } from "../types.js";
+
 /** One folder as the manifest sees it. */
 export interface SubagentManifestFolder {
   /** CANONICAL host path (realpath), matching production's `gg(folder)` — NOT the path as declared.
@@ -84,6 +88,14 @@ const SUBAGENT_RETRY_DOWNLOAD_STATUS =
 /** The retry part. `downloadStatus` is gate 1978029737 field `workspaceBashDownloadStatus` (production default off). */
 export function subagentRetryPart(downloadStatus: boolean): string {
   return `\n\n${downloadStatus ? `${SUBAGENT_RETRY_BASE}; ${SUBAGENT_RETRY_DOWNLOAD_STATUS}` : `${SUBAGENT_RETRY_BASE}.`}`;
+}
+
+/** The retry part exactly as a run renders it, or "" where it is not sent: host-loop only, on a baseline at or above
+ *  the floor, with the arm the baseline's gate selects. The ONE place this is decided: the sub-agent append and the
+ *  cassette prompt-asset hash both call it, so a cassette's hash covers this text only where its model received it. */
+export function subagentRetryText(baseline: PlatformBaseline, isHostLoop: boolean): string {
+  if (!isHostLoop || cmpVersionStrings(baseline.appVersion, SUBAGENT_RETRY_MIN_VERSION) < 0) return "";
+  return subagentRetryPart(readGateFlag(baseline, "1978029737", "workspaceBashDownloadStatus", false));
 }
 
 /**
@@ -144,7 +156,10 @@ export function subagentGeneratedPromptText(): string {
     ],
   });
   const emptyVariant = generateSubagentFolderManifest({ vmCwd: P, hostCwd: P, folders: [] });
-  // Between them these cover every constant this module can emit: both prose variants and all
-  // three line shapes (outputs, reachable, unreachable), both arms of the retry part, plus the trailing sentence.
-  return [listVariant, emptyVariant, subagentRetryPart(false), subagentRetryPart(true), SUBAGENT_SKILL_SENTENCE].join("\u0001");
+  // Between them these cover both prose variants, all three line shapes (outputs, reachable, unreachable) and the
+  // trailing sentence. The retry part is NOT here: it reaches only some runs, so the hash mixes in
+  // `subagentRetryText` per run instead. These parts are hashed on every tier although only host-loop renders the
+  // manifest and protocol renders no sub-agent append at all; narrowing that would move every older cassette's
+  // hash, so it stays.
+  return [listVariant, emptyVariant, SUBAGENT_SKILL_SENTENCE].join("\u0001");
 }

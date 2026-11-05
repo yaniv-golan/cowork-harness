@@ -2016,6 +2016,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession, undefined, {
             deviceBridge: scenario.device_bridge === true,
             deviceBridgeNote: bridgeNote,
+            hostLoop: effectiveFidelity === "hostloop",
           }),
           plan.workspaceFixture,
         ),
@@ -2627,6 +2628,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, loadedSession, undefined, {
           deviceBridge: scenario.device_bridge === true,
           deviceBridgeNote: bridgeNote,
+          hostLoop: effectiveFidelity === "hostloop",
         }),
         plan.workspaceFixture,
       ),
