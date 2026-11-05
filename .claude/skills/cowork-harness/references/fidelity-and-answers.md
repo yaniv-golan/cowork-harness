@@ -55,6 +55,11 @@ and sees `/sessions/<id>/...` paths. Consequences an agent (or a debugging autho
   staged host uploads dir; it does not need to be copied into `outputs/` first.
 - In real Cowork an upload is a **hardlink** in the session's uploads dir; the harness **copies** it
   instead. Read-reachability is the same; only the advertised parent dir can differ.
+- **A second layer on `desktop-4.16336.0` and later**, when the native agent is 2.1.315 or newer: the agent
+  itself refuses file reads and writes outside its working directories (outputs and every connected folder),
+  in addition to the path hook above. Uploads, the spooled tool results, skills and staged plugins are exempt from
+  its read block. Such a refusal comes from the agent, so its wording is not the hook's message; a path the hook
+  allows can still be refused here if it sits outside all of those roots. Older baselines and agents run without it.
 
 ### `microvm` prerequisites & lifecycle
 

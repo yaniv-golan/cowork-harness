@@ -324,6 +324,13 @@ authorable). Reach for this list when debugging a run's behavior, that one while
     `probe-dispatch`, which have no `assert:` block. The failure message names the spelling for the lane
     you ran.
 
+28. **A `hostloop` file tool is refused with a message that is not the path hook's.** *Why:* on
+    `desktop-4.16336.0` and later, with a native agent 2.1.315 or newer, the agent's own outside-folder fence
+    refuses reads and writes outside outputs and the connected folders, in addition to the harness's path hook; only
+    uploads, the spooled tool results, skills and staged plugins are exempt from its read block. *Fix:* point the
+    tool at one of those roots by its host path (see `references/fidelity-and-answers.md`, "hostloop paths"); a
+    file the run needs from elsewhere belongs in a connected folder or an upload.
+
 For the assertion catalog, the YAML schema, the fidelity/answer tables, and the CI recipe, read the
 files in `references/` (the gotchas above are the full list; the references repeat only the
 assertion/replay-relevant ones).
