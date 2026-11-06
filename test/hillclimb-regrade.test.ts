@@ -355,6 +355,29 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
     expect(v1.listed).toMatchObject([{ rep: 1, why: expect.stringMatching(/refused/) }]);
   }, 180_000);
 
+  it("lists an open judge_invalid slot with the cause its row recorded in a field, never read from the row's prose", async () => {
+    buildFlow();
+    const flow = join(f.cwd, "flow");
+    const row = (rep: number, meta: Record<string, unknown>, error: string) =>
+      JSON.stringify({ prompt_id: "alpha", rep, failure_class: "judge_invalid", error, meta: { failure_rule: "judge_invalid", ...meta } }) +
+      "\n";
+    appendFileSync(
+      join(flow, "v1", "errors.jsonl"),
+      row(1, { judge_invalid_cause: "call", judge_error_status: 401, judge_error_message: "API 401" }, "x") +
+        // The prose says malformed; the field says call. The field wins.
+        row(2, { judge_invalid_cause: "call" }, "judge grade invalid (malformed: …)") +
+        row(3, { judge_invalid_cause: "malformed" }, "y") +
+        // A row written before the field existed, whatever its prose says.
+        row(4, {}, "judge grade invalid after retry (malformed: the judge answered without a usable grade)"),
+    );
+    const out = await regradeFlow(ARGS({ variant: "v1", rejudge: true }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
+    const why = Object.fromEntries(out.variants.find((v) => v.variant === "v1")!.listed.map((l) => [l.rep, l.why]));
+    expect(why[1]).toContain("(judge_invalid; judge call failed, API 401)");
+    expect(why[2]).toContain("(judge_invalid; judge call failed)");
+    expect(why[3]).toContain("(judge_invalid; malformed grade)");
+    expect(why[4]).toContain("(judge_invalid; cause not recorded)");
+  }, 180_000);
+
   it("a flow whose session names no model (run with --model) is not refused for an agent model", async () => {
     const { evals } = buildFlow();
     writeFileSync(join(evals, "_session.yaml"), readFileSync(join(evals, "_session.yaml"), "utf8").replace(`model: ${MODEL}\n`, ""));

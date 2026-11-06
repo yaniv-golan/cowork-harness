@@ -11,6 +11,7 @@ import { isConcreteModelId } from "../run/model-provenance.js";
 import { SESSION_EFFORT_TOKENS, type SessionConfig } from "../session.js";
 import { envOutputFormat, parseOutputFormat } from "../run/envelope.js";
 import { VARIANT_DIR_RE } from "./schema-check.js";
+import { judgeCheckDisabled } from "../run/judge-check.js";
 import { HILLCLIMB_RUN_BOOLEAN_FLAGS, HILLCLIMB_RUN_REPEATED_FLAGS, HILLCLIMB_RUN_VALUE_FLAGS } from "./usage.js";
 import { parseSearchCorpusFlag, searchCorpusDependentFlagRefusal } from "../search-corpus/flags.js";
 import type { SearchCorpusOption } from "../search-corpus/run.js";
@@ -54,6 +55,8 @@ export interface HillclimbRunArgs {
   allowMixedPool: boolean;
   /** `--allow-mixed-search`: run beside rows served from another pool, or searched live; printed on every row. */
   allowMixedSearch: boolean;
+  /** `--no-judge-check` (or COWORK_HARNESS_JUDGE_CHECK=0): skip the pre-spend grader credential check. */
+  noJudgeCheck: boolean;
   globals: Array<{ flag: "--dotenv" | "--run-dir"; value: string }>;
 }
 
@@ -197,6 +200,7 @@ export function parseHillclimbRunArgs(argv: readonly string[]): HillclimbRunArgs
     allowConfoundedPool,
     allowMixedPool,
     allowMixedSearch,
+    noJudgeCheck: judgeCheckDisabled(booleans.has("--no-judge-check")),
     flow: values["--flow"] ?? HILLCLIMB_RUN_DEFAULTS.flow,
     variant,
     ...(values["--model"] !== undefined ? { model: values["--model"] } : {}),

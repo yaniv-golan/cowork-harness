@@ -958,6 +958,28 @@ describe.skipIf(!can)("the usage envelope does not depend on --output-format's p
   });
 });
 
+describe("COWORK_HARNESS_GRADER_AUTH is validated at startup", () => {
+  // It picks which credential the graders get, so a typo must refuse before any command runs, not quietly mean `agent`.
+  it("an unknown value refuses with a usage error (exit 2) before the command runs; a valid one does not", () => {
+    const cwd = mkdtempSync(join(tmpdir(), "cc-graderauth-"));
+    const bad = spawnSync("node", [CLI, "doctor", "--output-format", "json"], {
+      encoding: "utf8",
+      cwd,
+      env: { ...process.env, COWORK_HARNESS_GRADER_AUTH: "inheirt" },
+    });
+    expect(bad.status).toBe(2);
+    const env = JSON.parse(bad.stdout);
+    expect(env.error.category).toBe("usage");
+    expect(env.error.message).toContain("COWORK_HARNESS_GRADER_AUTH");
+    const ok = spawnSync("node", [CLI, "--version"], {
+      encoding: "utf8",
+      cwd,
+      env: { ...process.env, COWORK_HARNESS_GRADER_AUTH: "inherit" },
+    });
+    expect(ok.status).toBe(0);
+  });
+});
+
 // Structural guard for the invariant the behavior tests above prove. The behavior tests cover the four
 // validations that exist today; this one fails on a NEW `fail()` added to the same loop with the
 // order-dependent predicate, which is how the original four got there.

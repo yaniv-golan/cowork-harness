@@ -91,6 +91,7 @@ function deps(over: Partial<RunCommandDeps> = {}): RunCommandDeps {
     stderr: (l) => err.push(l),
     flags: {},
     isolationCheck: () => undefined,
+    judgeCheck: async () => ({ lines: [] }),
     tokenCheck: () => ({ id: "token", title: "Auth token", status: "ok", detail: "found (env / .env)", required: true }),
     runScenario: async (a) => {
       calls.push({ scenario: a.scenario, extra: a.extra as Record<string, unknown> });
@@ -625,6 +626,37 @@ describe("runHillclimbCommand", () => {
       expect(r.exitCode).toBe(2);
       expect(calls).toEqual([]);
       expect(err.join("\n")).toContain("SYNTHETIC refusal");
+    });
+
+    it("a judge credential the API refuses stops the pass before any agent run (exit 2)", async () => {
+      const asked: unknown[] = [];
+      const r = await runHillclimbCommand(
+        args("--approve-harness"),
+        deps({ judgeCheck: async (t) => (asked.push(t), { lines: ["PROBE-LINE"], refusal: "JUDGE-401-REFUSAL" }) }),
+      );
+      expect(r.exitCode).toBe(2);
+      expect(calls).toEqual([]);
+      expect(err.join("\n")).toContain("JUDGE-401-REFUSAL");
+      expect(err.join("\n")).toContain("PROBE-LINE");
+      expect(asked).toHaveLength(1);
+      expect((asked[0] as Array<{ role: string }>).map((t) => t.role)).toEqual(["judge"]);
+    });
+
+    it("a dry run and --no-judge-check never probe the judge; the default does", async () => {
+      let asked = 0;
+      const judgeCheck = async () => (asked++, { lines: [] });
+      await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ judgeCheck, indexRows: () => [] }));
+      expect(err.join("\n")).toContain("judge credential: not probed (dry run)");
+      await runHillclimbCommand(args("--approve-harness", "--no-judge-check"), deps({ judgeCheck }));
+      expect(err.join("\n")).toContain("judge credential: not probed (--no-judge-check");
+      expect(asked).toBe(0);
+      // That pass scored the one slot: with nothing left to grade, the default does not probe either.
+      await runHillclimbCommand(args("--approve-harness"), deps({ judgeCheck }));
+      expect(err.join("\n")).toContain("judge credential: not probed (no open slot to run)");
+      expect(asked).toBe(0);
+      // A pass with an open slot (rep 1) probes once.
+      await runHillclimbCommand(args("--approve-harness", "--reps", "2"), deps({ judgeCheck }));
+      expect(asked).toBe(1);
     });
 
     it("a pairwise-only flow refuses up front too (semantic_pairwise judges through the host claude)", async () => {
@@ -1600,6 +1632,45 @@ describe("credentials: refused before spend when no source resolves; an auth fai
     expect(hints[0]).toContain("the process environment, then --dotenv <path>, then ./.env, then <install>/.env");
     expect(hints[0]).toContain("a credential is set, so the agent rejected it");
     expect(hints[0]).toContain("cowork-harness doctor --tier container");
+  });
+
+  it("a judge whose credential was refused (401) prints, once per pass, the credential the graders got, by name only", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
+    const d = deps();
+    const inner = d.runScenario;
+    const judgeRefused = {
+      ...d,
+      runScenario: (async (a: Parameters<typeof inner>[0]) => {
+        const r = await inner(a);
+        const res = structuredClone(r) as RunResult;
+        res.assertions[3] = {
+          ...res.assertions[3],
+          pass: false,
+          judgeInvalid: true,
+          judgeError: { kind: "call", status: 401, origin: "first_party", message: "API 401, first_party: Invalid API key" },
+        } as never;
+        return res;
+      }) as typeof inner,
+    };
+    const keys = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "COWORK_HARNESS_GRADER_AUTH"] as const;
+    const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    for (const k of keys) delete process.env[k];
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "tok-SECRET-value-1";
+    process.env.ANTHROPIC_API_KEY = "key-SECRET-value-2";
+    try {
+      const r = await runHillclimbCommand(args("--reps", "2"), judgeRefused);
+      expect(r.exitCode).toBe(1);
+      expect(err.filter((l) => l.includes("judge call failed on assertion(s) 3"))).toHaveLength(2);
+      const hints = err.filter((l) => l.includes("The judge used"));
+      expect(hints).toHaveLength(1);
+      expect(hints[0]).toContain("The judge used CLAUDE_CODE_OAUTH_TOKEN; also set but not passed: ANTHROPIC_API_KEY");
+      expect(err.join("\n")).not.toContain("SECRET");
+    } finally {
+      for (const k of keys) {
+        if (saved[k] === undefined) delete process.env[k];
+        else process.env[k] = saved[k];
+      }
+    }
   });
 
   it("at a tier that never passes ANTHROPIC_AUTH_TOKEN, a run failing with only that set says so (by name, never its value)", async () => {

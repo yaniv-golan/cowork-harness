@@ -468,11 +468,41 @@ describe("error rows (runner-scaffold.mjs l.549-564)", () => {
     expect(attemptRow({ result: crashed }, ctx(crashed, { events: [] })).dest).toBe("results");
   });
 
-  it("an invalid judge grade ⇒ judge_invalid, with the run dir kept for a later regrade promotion", () => {
+  it("an invalid judge grade ⇒ judge_invalid, with the run dir kept", () => {
     const r = structuredClone(fixture("success-semantic"));
     r.assertions[3] = { ...r.assertions[3], judgeInvalid: true }; // ADDED: no kept run has one
     const row = errRow(attemptRow({ result: r }, ctx(r)));
     expect(row).toMatchObject({ failure_class: "judge_invalid", meta: { run_dir: "~/.cowork-harness/runs/x/local_1" } });
+  });
+
+  it("a failed judge call ⇒ judge_invalid naming the cause, its status in meta, and the slot's real recovery", () => {
+    const r = structuredClone(fixture("success-semantic"));
+    // ADDED: the entry the judge now writes when its call failed (test/judge-call-error.test.ts asserts the judge writes it)
+    r.assertions[3] = {
+      ...r.assertions[3],
+      judgeInvalid: true,
+      judgeError: { kind: "call", status: 401, origin: "first_party", message: "API 401, first_party: Invalid API key" },
+    } as never;
+    const row = errRow(attemptRow({ result: r }, ctx(r)));
+    expect(row.failure_class).toBe("judge_invalid");
+    expect(row.meta).toMatchObject({
+      judge_invalid_cause: "call",
+      judge_error_status: 401,
+      judge_error_message: "API 401, first_party: Invalid API key",
+    });
+    expect(row.error).toContain("judge call failed on assertion(s) 3 (API 401, first_party: Invalid API key)");
+    expect(row.error).toMatch(/hillclimb run … --case \S+ --reps \d+/);
+    expect(row.error).not.toContain("malformed");
+  });
+
+  it("a malformed judge grade ⇒ judge_invalid that says malformed, with no judge_error_* meta", () => {
+    const r = structuredClone(fixture("success-semantic"));
+    r.assertions[3] = { ...r.assertions[3], judgeInvalid: true };
+    const row = errRow(attemptRow({ result: r }, ctx(r)));
+    expect(row.error).toContain("malformed");
+    expect(row.meta).toMatchObject({ judge_invalid_cause: "malformed" });
+    expect(row.meta).not.toHaveProperty("judge_error_status");
+    expect(row.meta).not.toHaveProperty("judge_error_message");
   });
 
   it("a rep built from a different snapshot than the variant's ⇒ error, flagged as source drift", () => {
@@ -501,7 +531,7 @@ describe("error rows (runner-scaffold.mjs l.549-564)", () => {
     expect(row.meta.retries_unrecorded).toBe(true);
   });
 
-  it("an invalid-judge error row keeps the judge's spend (judge_model, judge_usage) for the later promotion", () => {
+  it("an invalid-judge error row keeps the judge's spend (judge_model, judge_usage)", () => {
     const r = structuredClone(fixture("success-semantic"));
     // ADDED: an invalid grade that was nevertheless billed
     r.assertions[3] = {
@@ -549,6 +579,27 @@ describe("attemptRow — meta.judge_transport", () => {
     const meta = (attemptRow({ result: r }, ctx(r)).row as Record<string, any>).meta;
     expect(meta).not.toHaveProperty("judge_transport");
     expect(meta.judge_transports).toEqual([{ isolation: "strict" }, { isolation: "strict", strictMcp: false }]);
+  });
+
+  it("a grade recorded before the credential fields and one after are one transport; default vs inherit are two", () => {
+    const base = fixture("success-semantic");
+    const sem = base.assertions.find((a) => a.assertion.semantic_matches)!;
+    const withTransports = (t1: object, t2: object) =>
+      ({
+        ...base,
+        assertions: [...base.assertions.map((a) => (a === sem ? { ...a, judgeTransport: t1 } : a)), { ...sem, judgeTransport: t2 }],
+      }) as RunResult;
+    const old = { isolation: "1", cliVersion: "2.1.319", effort: "high" };
+    const r1 = withTransports(old, { ...old, credential: "CLAUDE_CODE_OAUTH_TOKEN" });
+    const m1 = (attemptRow({ result: r1 }, ctx(r1)).row as Record<string, any>).meta;
+    expect(m1).not.toHaveProperty("judge_transports");
+    expect(m1.judge_transport).toBeDefined();
+    const r2 = withTransports(
+      { ...old, credential: "CLAUDE_CODE_OAUTH_TOKEN" },
+      { ...old, credentialKeys: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"], graderAuth: "inherit" },
+    );
+    const m2 = (attemptRow({ result: r2 }, ctx(r2)).row as Record<string, any>).meta;
+    expect(m2.judge_transports).toHaveLength(2);
   });
 });
 

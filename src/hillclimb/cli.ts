@@ -1,6 +1,7 @@
 // `hillclimb` command family: `run`, `check`, `state-template`. The scenario runner comes from src/cli.ts (its
 // per-scenario runner and decider channel live there); everything else is composed here.
 
+import { runJudgeCheck } from "../run/judge-check.js";
 import { searchCorpusFindings } from "./search-corpus.js";
 import { existsSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
@@ -391,6 +392,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         flags: r.flags,
         runScenario: r.runScenario,
         isolationCheck: () => isolationRefusal(),
+        judgeCheck: (targets) => runJudgeCheck(targets),
         tokenCheck: (tier) => tokenCheck(tier),
       });
     } finally {

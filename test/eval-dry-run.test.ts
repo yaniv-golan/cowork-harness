@@ -191,6 +191,9 @@ function planDeps(rows: RunIndexRow[], extra: { log?: string[]; snapRoots?: stri
     runJob: NO_RUN,
     tokenCheck: TOKEN_OK,
     isolationCheck: (): string | undefined => undefined,
+    judgeCheck: async (): Promise<never> => {
+      throw new Error("a dry run must never probe the judge");
+    },
     log: (s: string) => extra.log?.push(s),
     evalId: "plan1",
     now: () => new Date("2026-10-01T00:00:00Z"),
@@ -532,6 +535,26 @@ describe("eval --dry-run: the host-claude isolation check", () => {
       if (prev === undefined) delete process.env.COWORK_HARNESS_GITSET;
       else process.env.COWORK_HARNESS_GITSET = prev;
     }
+  });
+
+  it("never probes the judge's credential (a billed call) and says so", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    const log: string[] = [];
+    const loud = parseEvalArgs([
+      scen,
+      "--arm",
+      `before=${a}`,
+      "--arm",
+      `after=${b}`,
+      "--out",
+      join(root, "eval"),
+      "--dry-run",
+      "--judge-model",
+      "claude-opus-4-8",
+    ]);
+    // planDeps' judgeCheck throws if it is ever called.
+    await planEvalDryRun(loud, planDeps([], { log }));
+    expect(log).toContain("judge credential: not probed (dry run)");
   });
 
   it("does not consult it when no scenario calls the judge or the LLM decider", async () => {

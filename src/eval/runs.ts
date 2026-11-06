@@ -36,6 +36,9 @@ export interface Grade {
   /** `live`: the grading the run itself did. Later re-grades append entries; the report reads entry 0. */
   source: "live";
   assertions: GradedAssertion[];
+  /** Set by a harness that records a failed judge call (`judgeError`) on its assertions: there, an invalid grade
+   *  without one is a malformed grade. A line without it predates that, so its invalid grades' cause is unknown. */
+  judgeErrorsRecorded?: true;
 }
 
 export interface RunsLine {
@@ -107,6 +110,7 @@ export function buildRunsLine(args: {
     ...(a.source !== undefined ? { source: a.source } : {}),
     ...(a.semanticClaims !== undefined ? { semanticClaims: a.semanticClaims } : {}),
     ...(a.judgeInvalid !== undefined ? { judgeInvalid: a.judgeInvalid } : {}),
+    ...(a.judgeError !== undefined ? { judgeError: a.judgeError } : {}),
     ...(a.judgePromptHash !== undefined ? { judgePromptHash: a.judgePromptHash } : {}),
     ...(a.judgeTransport !== undefined ? { judgeTransport: a.judgeTransport } : {}),
     ...(a.judgeCostUsd !== undefined ? { judgeCostUsd: a.judgeCostUsd } : {}),
@@ -210,7 +214,7 @@ export function buildRunsLine(args: {
         }
       : {}),
     ...(args.evidence ? { evidence: args.evidence } : {}),
-    grades: r ? [{ source: "live", assertions }] : [],
+    grades: r ? [{ source: "live", assertions, judgeErrorsRecorded: true }] : [],
   };
 }
 

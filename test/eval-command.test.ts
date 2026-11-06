@@ -150,6 +150,7 @@ const deps = (runJob: (s: EvalJobSpec) => Promise<RunResult>, log: string[] = []
   runJob,
   tokenCheck: TOKEN_OK,
   isolationCheck: () => undefined,
+  judgeCheck: async () => ({ lines: [] }),
   log: (s: string) => log.push(s),
   evalId: "test1",
   now: () => new Date("2026-09-30T00:00:00Z"),
@@ -917,6 +918,148 @@ describe("eval: snapshots and their signatures", () => {
       }),
     ).rejects.toThrow(/OLD-CLI-REFUSAL/);
     expect(calls).toHaveLength(0);
+  });
+
+  it("a judge credential the API refuses stops the eval before any job, and leaves no eval dir (exit 2)", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    const calls: EvalJobSpec[] = [];
+    const asked: unknown[] = [];
+    await expect(
+      runEval(args(scen, a, b, ["--judge-model", "claude-opus-4-8"]), {
+        ...deps(fakeRunner(undefined, calls)),
+        judgeCheck: async (t) => (asked.push(t), { lines: [], refusal: "JUDGE-401-REFUSAL" }),
+      }),
+    ).rejects.toThrow(/JUDGE-401-REFUSAL/);
+    expect(calls).toHaveLength(0);
+    expect(existsSync(join(root, "eval"))).toBe(false);
+    expect(asked).toEqual([[{ role: "judge", model: "claude-opus-4-8" }]]);
+  });
+
+  it("a judge check that could not tell (a 529, a timeout) prints its line and the eval proceeds", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    const calls: EvalJobSpec[] = [];
+    const log: string[] = [];
+    const loud = parseEvalArgs([
+      scen,
+      "--arm",
+      `before=${a}`,
+      "--arm",
+      `after=${b}`,
+      "--out",
+      join(root, "eval"),
+      "--judge-model",
+      "claude-opus-4-8",
+    ]);
+    await runEval(loud, { ...deps(fakeRunner(undefined, calls), log), judgeCheck: async () => ({ lines: ["JUDGE-529-WARNING"] }) });
+    expect(log).toContain("JUDGE-529-WARNING");
+    expect(calls.length).toBeGreaterThan(0);
+  });
+
+  it("--no-judge-check and COWORK_HARNESS_JUDGE_CHECK=0 skip the probe; no judged scenario never probes", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    let asked = 0;
+    const judgeCheck = async () => (asked++, { lines: [] });
+    await runEval(args(scen, a, b, ["--judge-model", "claude-opus-4-8", "--no-judge-check"]), { ...deps(fakeRunner()), judgeCheck });
+    expect(asked).toBe(0);
+    rmSync(join(root, "eval"), { recursive: true, force: true });
+    vi.stubEnv("COWORK_HARNESS_JUDGE_CHECK", "0");
+    try {
+      await runEval(args(scen, a, b, ["--judge-model", "claude-opus-4-8"]), { ...deps(fakeRunner()), judgeCheck });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    expect(asked).toBe(0);
+    rmSync(join(root, "eval"), { recursive: true, force: true });
+    await runEval(args(scen, a, b, ["--judge-model", "claude-opus-4-8"]), { ...deps(fakeRunner()), judgeCheck });
+    expect(asked).toBe(1); // the control: armed by default
+  });
+
+  it("does not probe the judge when no scenario calls a grader", async () => {
+    const { scen, a, b } = setup();
+    let asked = 0;
+    await runEval(args(scen, a, b), { ...deps(fakeRunner()), judgeCheck: async () => (asked++, { lines: [] }) });
+    expect(asked).toBe(0);
+  });
+
+  it("a judge that hit the usage limit (API 429) is counted under its own status", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    let n = 0;
+    // The first semantic rep hit the account's usage limit; every other rep's call was refused (401).
+    const failCall = (_s: EvalJobSpec, r: RunResult): RunResult => {
+      const semantic = r.assertions.some((x) => x.assertion.semantic_matches);
+      const status = semantic && n++ === 0 ? 429 : 401;
+      return {
+        ...r,
+        assertions: r.assertions.map((x) =>
+          x.assertion.semantic_matches
+            ? {
+                ...x,
+                pass: false,
+                judgeInvalid: true,
+                judgeError: { kind: "call" as const, status, message: `API ${status}` },
+              }
+            : x,
+        ),
+      };
+    };
+    const out = await runEval(args(scen, a, b, ["--judge-model", "claude-opus-4-8"]), deps(fakeRunner(failCall)));
+    const rep = writeEvalReport(out.evalDir);
+    const total: Record<string, number> = {};
+    for (const arm of rep.arms) for (const [k, v] of Object.entries(arm.judgeInvalidCauses ?? {})) total[k] = (total[k] ?? 0) + v;
+    expect(total).toEqual({ "call failed: API 429": 1, "call failed: API 401": 9 });
+    expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).toContain("call failed: API 429 ×1");
+  });
+
+  it("the report splits invalid judge grades by cause and prints the recovery; an old line reads 'cause not recorded'", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    // Every rep's semantic grade is a failed call (a 401), as the judge now records one.
+    const failCall = (_s: EvalJobSpec, r: RunResult): RunResult => ({
+      ...r,
+      assertions: r.assertions.map((x) =>
+        x.assertion.semantic_matches
+          ? {
+              ...x,
+              pass: false,
+              judgeInvalid: true,
+              judgeError: { kind: "call" as const, status: 401, message: "API 401, first_party: Invalid API key" },
+            }
+          : x,
+      ),
+    });
+    const out = await runEval(args(scen, a, b, ["--judge-model", "claude-opus-4-8"]), deps(fakeRunner(failCall)));
+    const rep = writeEvalReport(out.evalDir);
+    expect(rep.arms[0]!.judgeInvalidCauses).toEqual({ "call failed: API 401": 5 });
+    expect(rep.judgeCallFailures?.ungraded).toEqual([
+      expect.objectContaining({ scenario: "smoke-semantic-evidence-files", cause: "API 401, first_party: Invalid API key" }),
+    ]);
+    expect(rep.judgeCallFailures?.regrade).toHaveLength(1);
+    expect(rep.judgeCallFailures!.regrade[0]!.runDirs).toHaveLength(10); // every rep of both arms
+    expect(rep.judgeCallFailures!.regrade[0]!.scenarioFile).toMatch(/smoke-semantic-evidence-files\.yaml$/);
+    expect(rep.judgeCallFailures!.regrade[0]!.pruned).toEqual([]);
+    const md = readFileSync(join(out.evalDir, "report.md"), "utf8");
+    expect(md).toContain("call failed: API 401 ×5");
+    expect(md).toContain("No assertion graded: the judge could not be called");
+    expect(md).toMatch(/`cowork-harness regrade \S+( \S+)* --scenario \S+`/); // host paths are redacted in the markdown
+    expect(md).toContain("does not rewrite this eval's runs.jsonl");
+
+    // The same eval as a 4.14.0 harness wrote it: no judgeError, no marker. Never read as malformed.
+    const runs = join(out.evalDir, "runs.jsonl");
+    const old = readFileSync(runs, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((l) => {
+        const o = JSON.parse(l);
+        for (const g of o.grades ?? []) {
+          delete g.judgeErrorsRecorded;
+          for (const x of g.assertions) delete x.judgeError;
+        }
+        return JSON.stringify(o);
+      });
+    writeFileSync(runs, old.join("\n") + "\n");
+    const oldRep = writeEvalReport(out.evalDir);
+    expect(oldRep.arms[0]!.judgeInvalidCauses).toEqual({ "cause not recorded": 5 });
+    expect(oldRep.judgeCallFailures).toBeUndefined();
+    expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).not.toContain("malformed ×");
   });
 
   it("the isolation refusal comes before the --max-budget-usd gate (a real eval with priced history over the cap)", async () => {

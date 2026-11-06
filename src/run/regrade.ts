@@ -82,6 +82,8 @@ export interface RegradedAssertion {
   judgeTransport?: RunResult["assertions"][number]["judgeTransport"];
   judgedDoc?: JudgedDocFingerprint;
   judgeInvalid?: boolean;
+  /** Set with `judgeInvalid` when the judge's CALL failed (an API error, a timeout): no grade was made. */
+  judgeError?: RunResult["assertions"][number]["judgeError"];
   semanticEvidence?: RunResult["assertions"][number]["semanticEvidence"];
   /** A `semantic_pairwise` assert's per-reference outcomes (a fill's kept ones marked `copied`), its composed
    *  document and its judge's call count — as on the RunResult assertion entry. */
@@ -731,6 +733,7 @@ const JUDGE_FIELDS = [
   "judgeTransport",
   "judgeAttempts",
   "judgeInvalid",
+  "judgeError",
 ] as const;
 
 interface Prepared {
@@ -1478,10 +1481,33 @@ export function regradeTextReport(outcome: Extract<RegradeOutcome, { ok: true }>
     failed === 0 && invalid === 0
       ? `✓ regrade: all ${total.length} re-graded assertion(s) pass · ${spend}`
       : `✗ regrade: ${failed}/${total.length} re-graded assertion(s) failed` +
-          (invalid ? `, ${invalid} ungraded (judge invalid — not a verdict on the run)` : "") +
+          (invalid ? `, ${invalid} ungraded (${invalidCauses(total)} — not a verdict on the run)` : "") +
           ` · ${spend}`,
   );
   return lines;
+}
+
+/** The invalid grades by cause: `judge call failed (API 401 ×2)` for calls that failed, `malformed ×n` for replies
+ *  without a usable grade. */
+function invalidCauses(entries: readonly RegradedAssertion[]): string {
+  const bad = entries.filter((a) => a.judgeInvalid === true);
+  const calls = new Map<string, number>();
+  for (const a of bad)
+    if (a.judgeError) {
+      const k = a.judgeError.status !== undefined ? `API ${a.judgeError.status}` : "no API status";
+      calls.set(k, (calls.get(k) ?? 0) + 1);
+    }
+  const malformed = bad.filter((a) => !a.judgeError).length;
+  const parts: string[] = [];
+  if (calls.size)
+    parts.push(
+      `judge call failed (${[...calls]
+        .sort(([x], [y]) => x.localeCompare(y))
+        .map(([k, n]) => `${k} ×${n}`)
+        .join(", ")})`,
+    );
+  if (malformed) parts.push(`malformed ×${malformed}`);
+  return parts.join(", ");
 }
 
 /** `regrade` CLI entry. */

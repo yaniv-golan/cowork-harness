@@ -193,13 +193,18 @@ describe.runIf(POSIX)("a graded run records how its judge was called", () => {
     );
     chmodSync(current, 0o755);
     setEnv("COWORK_HARNESS_CLAUDE_BIN", current);
+    // The identity names the credential the judge got: pin it, so the shell's own env cannot change the expectation.
+    setEnv("CLAUDE_CODE_OAUTH_TOKEN", "fake-token");
+    setEnv("ANTHROPIC_API_KEY", "");
+    setEnv("ANTHROPIC_AUTH_TOKEN", "");
+    setEnv("COWORK_HARNESS_GRADER_AUTH", "");
     resetIsolationPreflight(join(dir, "no-managed-mcp.json"));
     const r = await executeScenario(
       scenario(["assert:", "  - semantic_matches:", "      rubric: ['x']", "      judge_model: claude-opus-4-8"]),
     );
     const a = r.assertions.find((x) => x.assertion.semantic_matches !== undefined)!;
     expect(a.judgeModel).toBe("claude-opus-4-8");
-    expect(a.judgeTransport).toEqual({ isolation: "1", cliVersion: "2.1.286", effort: "high" });
+    expect(a.judgeTransport).toEqual({ isolation: "1", cliVersion: "2.1.286", effort: "high", credential: "CLAUDE_CODE_OAUTH_TOKEN" });
   });
 });
 

@@ -7,7 +7,7 @@
 // Every transcript line here is SYNTHETIC (frame shapes with placeholder text); the withheld prompt parts are the
 // BUILTIN-PART placeholders, guarded by test/fixture-transcript-guard.test.ts.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -261,6 +261,8 @@ cat "${ENVELOPE}"
       CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
       STUB_ARGV: join(work, "argv"),
       COWORK_HARNESS_CLAUDE_BIN: judge,
+      // These count the judge's calls exactly: the pre-spend credential probe (tested on its own) would add one.
+      COWORK_HARNESS_JUDGE_CHECK: "0",
       JUDGE_CALLS: calls,
     };
     const cli = (...a: string[]) =>
@@ -351,6 +353,56 @@ cat "${ENVELOPE}"
     expect(checkFlowDir(flow, { profile: "harness" }).errors).toBe(0);
   }, 180_000);
 
+  it("the pre-spend judge check runs through the real probe wiring: one call per pass with open slots, none without", () => {
+    const plugin = join(work, "plugin", "my-plugin");
+    mkdirSync(join(plugin, "skills", "x"), { recursive: true });
+    writeFileSync(join(plugin, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nbody\n");
+    const evals = join(f.cwd, "evals");
+    mkdirSync(evals);
+    writeFileSync(join(evals, "_session.yaml"), `model: ${MODEL}\nplugins:\n  local_plugins:\n    - ${plugin}\n`);
+    writeFileSync(
+      join(evals, "alpha.yaml"),
+      "name: alpha\nbaseline: latest\nsession: ./_session.yaml\nfidelity: protocol\nprompt: hi\nassert:\n  - result: success\n" +
+        "  - semantic_pairwise:\n      rubric: ['answers']\n      judge_model: claude-haiku-4-5-20251001\n",
+    );
+    const judge = join(work, "judge.sh");
+    writeFileSync(judge, JUDGE, { mode: 0o755 });
+    const calls = join(work, "judge-calls");
+    // The check is on: no COWORK_HARNESS_JUDGE_CHECK here.
+    const env = {
+      ...f.env,
+      COWORK_MANAGED_CONFIG: "1",
+      CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
+      STUB_ARGV: join(work, "argv"),
+      COWORK_HARNESS_CLAUDE_BIN: judge,
+      JUDGE_CALLS: calls,
+    };
+    const cli = (...a: string[]) =>
+      spawnSync(process.execPath, [CLI, "hillclimb", ...a], { cwd: f.cwd, env, encoding: "utf8", timeout: 60_000 });
+    const n = () => (existsSync(calls) ? readFileSync(calls, "utf8").trim().split("\n").filter(Boolean).length : 0);
+    // The model named is the one that answered (the envelope's), not the pin.
+    const PROBED = "judge credential: CLAUDE_CODE_OAUTH_TOKEN works for";
+
+    // The baseline grades nothing with the judge (its reference is itself): the probe is the pass's one call.
+    const base = cli("run", "evals", "--flow", "flow", "--approve-harness", "--concurrency", "1");
+    expect(base.status, base.stderr).toBe(0);
+    expect(base.stderr).toContain(PROBED);
+    expect(n()).toBe(1);
+
+    // v1: the probe, then the one grade.
+    const v1 = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--concurrency", "1");
+    expect(v1.status, v1.stderr).toBe(0);
+    expect(v1.stderr).toContain(PROBED);
+    expect(n()).toBe(3);
+
+    // Every slot is scored: nothing will be graded, so nothing is probed.
+    const again = cli("run", "evals", "--flow", "flow", "--variant", "v1", "--concurrency", "1");
+    expect(again.status, again.stderr).toBe(0);
+    expect(again.stderr).toContain("judge credential: not probed (no open slot to run)");
+    expect(again.stderr).not.toContain(PROBED);
+    expect(n()).toBe(3);
+  }, 180_000);
+
   it("after a --case-scoped fill, the win_<vN> note names the other cases' rows and says to fill without --case", () => {
     const plugin = join(work, "plugin", "my-plugin");
     mkdirSync(join(plugin, "skills", "x"), { recursive: true });
@@ -376,6 +428,8 @@ cat "${ENVELOPE}"
       CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
       STUB_ARGV: join(work, "argv"),
       COWORK_HARNESS_CLAUDE_BIN: judge,
+      // These count the judge's calls exactly: the pre-spend credential probe (tested on its own) would add one.
+      COWORK_HARNESS_JUDGE_CHECK: "0",
       JUDGE_CALLS: join(work, "judge-calls"),
     };
     const cli = (...a: string[]) =>
@@ -450,6 +504,8 @@ cat "${ENVELOPE}"
       CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
       STUB_ARGV: join(work, "argv"),
       COWORK_HARNESS_CLAUDE_BIN: judge,
+      // These count the judge's calls exactly: the pre-spend credential probe (tested on its own) would add one.
+      COWORK_HARNESS_JUDGE_CHECK: "0",
       JUDGE_CALLS: calls,
     };
     const cli = (...a: string[]) =>

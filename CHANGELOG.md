@@ -6,6 +6,65 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Upgrade notes
+
+- **The graders now use the agent's credential when `CLAUDE_CODE_OAUTH_TOKEN` is set.** The judges, the LLM decider
+  and the critique evaluator no longer receive `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` alongside the token. If
+  you had both set, grading moves off the API key to the token's billing. `COWORK_HARNESS_GRADER_AUTH=inherit`
+  restores the previous behaviour. Without the token nothing changes.
+
+### Changed
+
+- **Which credential the graders get.** With `CLAUDE_CODE_OAUTH_TOKEN` set, the graders get the token alone, which is
+  the credential the agent authenticates with at the container, hostloop and microvm tiers. On protocol the agent
+  inherits your environment, where `ANTHROPIC_API_KEY` wins, so there the graders and the agent can still differ;
+  `doctor` says so. A one-line notice names the credential the graders use whenever the choice mattered (names only).
+  `ANTHROPIC_CUSTOM_HEADERS` is still passed. `COWORK_HARNESS_GRADER_AUTH` takes `agent` (the default) or `inherit`;
+  any other value is refused at startup.
+- **An API error that fails the same way every time is no longer retried** by the judges, the LLM decider or the
+  critique evaluator: status 400, 401, 403, 404, 413 or 422. A refused judge credential used to cost six calls per
+  assert before giving up; it now costs one.
+
+### Fixed
+
+- **A judge whose call failed is reported as a failed call, not as a malformed grade.** A 401 from the judge (an
+  invalid credential, say) was reported as `judge grade INVALID (malformed/ambiguous after retry)`. The check message
+  now reads `judge call FAILED (API 401, first_party: Invalid API key) — no grade was made`, the rep still counts as
+  invalid (not as a fail), and the `eval` report, `hillclimb` error rows and the `regrade` summary each say which
+  cause it was. A pairwise judge's failed call is reported the same way, metric-only references included.
+  A judge that hits the account's usage limit is a failed call with API status 429 (not retried), and a reply
+  that records an API status on a successful exit is read as the grade it carries unless it is also marked as an
+  error.
+
+### Added
+
+- **`judgeError` on an assertion result** (`{kind: "call", status?, origin?, message}`), set with `judgeInvalid` when
+  the judge's call failed; also in `regrade` files and eval `runs.jsonl` lines. A malformed grade carries none.
+- **A pre-spend grader credential check on `eval` and `hillclimb run`.** Before the first agent run, one tiny real
+  call per distinct grader (role, model) — each judge model, and the LLM decider's — through the exact grader path. A
+  401 or 403 (the credential), a 404 (the model) or a spent quota refuses the command (exit 2) at no cost, and the
+  refusal names the fix for that status; any other failure is printed and the command proceeds. An unknown model id
+  is an API 404 from the host `claude`, not a start-up refusal (measured on Claude Code 2.1.319: exit 1, $0). A working credential
+  costs one short call, printed with the credential's name and the cost. A dry run never makes it, and a
+  `hillclimb run` pass with no open slot skips it.
+  `--no-judge-check` or `COWORK_HARNESS_JUDGE_CHECK=0` skips it.
+- **The `eval` report splits invalid judge grades by cause** (`arms[].judgeInvalidCauses`: a failed call by API
+  status, `malformed`, or `cause not recorded` for an eval written before this release), names any assertion no rep
+  of which could be graded, and prints the recovery: fix the credential, then `regrade` the kept run dirs it lists.
+- **`hillclimb` error rows name the cause** of a `judge_invalid` row (`meta.judge_invalid_cause`: `call` or
+  `malformed`; for a call, `meta.judge_error_status` and `meta.judge_error_message`) and the command that re-runs the slot; the first refused judge credential in a pass
+  prints which credential the graders used.
+- **`judgeTransport` and `critique`'s `evaluatorTransport` record the graders' credential by name** (`credential`, or `credentialKeys` under `inherit`
+  with several keys set, and `graderAuth`). A grade recorded before this release, which has none, is treated as the
+  same transport when nothing else differs.
+- **`doctor` has a `Grader credential` row** naming the credential the graders get and the one the agent uses at the
+  checked tier; it warns when they can differ. It makes no call.
+
+### Known limitations
+
+- A credential that stops working during an eval still costs each remaining rep its agent run; each of those reps'
+  judge calls now fails at once instead of after six attempts. The eval does not stop early.
+
 ## [4.14.0] - 2026-11-05
 
 ### Upgrade notes

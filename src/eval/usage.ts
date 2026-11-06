@@ -9,6 +9,7 @@ export const EVAL_BOOLEAN_FLAGS = [
   "--dry-run",
   "--allow-confounded-pool",
   "--allow-mixed-pool",
+  "--no-judge-check",
 ] as const;
 export const EVAL_VALUE_FLAGS = [
   "--reps",
@@ -50,6 +51,10 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
   --model <id>               the agent model; it (or the session's model:) must be a CONCRETE id, not an alias
   --judge-model <id>         grade every semantic_matches assert with this concrete model (per-assert judge_model
                              is then inert); without it every live judge model must be concrete
+  --no-judge-check           skip the pre-spend grader credential check (also COWORK_HARNESS_JUDGE_CHECK=0). By
+                             default, before any agent run, the eval makes one tiny real call per judge (and LLM
+                             decider) model with the credential the graders get, and refuses on a 401/403/404 or a
+                             spent quota. Skipping it saves that call; a bad credential then fails every grade.
   --concurrency <n>          jobs in flight (default 2, 1..8); must be 1 with --decider-cmd/--decider-dir
   --alpha <a>                per-row level for 'possible' and Holm's family-wise level (default 0.05)
   --correction bh|holm       multiple-comparison correction for 'confirmed' (default bh at a fixed q = 0.10;

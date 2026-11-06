@@ -73,7 +73,8 @@ import {
   type RunContext,
   type PartlyScriptedGate,
 } from "./decide/decider.js";
-import { claudeCliCompleteDecider, isolationRefusal } from "./decide/llm-transport.js";
+import { runJudgeCheck } from "./run/judge-check.js";
+import { claudeCliCompleteDecider, graderAuthMode, isolationRefusal } from "./decide/llm-transport.js";
 import type { DecisionRequest } from "./agent/session.js";
 import { vmInit, vmDelete, vmStatus, vmPrune, instanceName, vmProvisioned, type VmProvisioning } from "./runtime/lima.js";
 import { resolveVmBaselineArg } from "./runtime/vm-baseline-arg.js";
@@ -1045,6 +1046,13 @@ async function main() {
   const envOutFmt = process.env.COWORK_HARNESS_OUTPUT_FORMAT;
   if (envOutFmt !== undefined && envOutFmt !== "text" && envOutFmt !== "json")
     fail(cmd, "usage", `COWORK_HARNESS_OUTPUT_FORMAT must be "text" or "json" (got "${envOutFmt}")`, undefined, isJsonOutput(rest));
+  // COWORK_HARNESS_GRADER_AUTH picks which credential a grader call receives, so a typo must not reach a judge call
+  // as "agent" (the default). Validated once here, after .env loading, so a value from either source is checked.
+  try {
+    graderAuthMode();
+  } catch (err) {
+    fail(cmd, "usage", (err as Error).message, undefined, isJsonOutput(rest));
+  }
   // `--dotenv` / `--run-dir` AFTER the subcommand are each command's own flags: its parser knows which tokens
   // are values of its other flags, so a `--dotenv=…` VALUE is never taken as the flag (the leading scan above
   // stops at the subcommand for the same reason). run/command-globals.ts applies them with the same meaning.
@@ -2347,6 +2355,9 @@ async function cmdEval(rawArgs: string[]) {
         log,
         tokenCheck: (tier) => tokenCheck(tier),
         isolationCheck: () => isolationRefusal(),
+        judgeCheck: async () => {
+          throw new Error("eval --dry-run must never probe the judge (a billed call)");
+        },
         runJob: async () => {
           throw new Error("eval --dry-run must never run a job");
         },
@@ -2384,6 +2395,7 @@ async function cmdEval(rawArgs: string[]) {
       log,
       tokenCheck: (tier) => tokenCheck(tier),
       isolationCheck: () => isolationRefusal(),
+      judgeCheck: (targets) => runJudgeCheck(targets),
       runJob: makeEvalJobRunner((a) => runOneScenario({ ...a, command: "run", policy, externalChannel, o }), flags),
       onPlan: (p) => (plan = p),
     });

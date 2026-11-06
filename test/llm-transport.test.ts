@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach, vi } from "vitest";
 import {
   claudeCliComplete,
   claudeCliCompleteDecider,
@@ -545,16 +545,30 @@ describe("isolationRefusal — the pre-spend form of the preflight", () => {
 });
 
 describe("transport identity", () => {
+  // The identity records the grader credential by name, which depends on this machine's environment: pin it empty.
+  beforeEach(() => {
+    for (const k of ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "COWORK_HARNESS_GRADER_AUTH"])
+      vi.stubEnv(k, "");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
   it("records the isolation level and the host CLI version, probed once", async () => {
     resetIsolationPreflight();
-    expect(transportIdentity()).toEqual({ isolation: "1", cliVersion: "9.9.9", effort: "high" });
+    expect(transportIdentity()).toEqual({ isolation: "1", cliVersion: "9.9.9", effort: "high", credential: "host-login" });
   });
   it("records strictMcp: false when the call leaves out --strict-mcp-config for an enterprise MCP config", () => {
     const managed = join(dir, "managed-mcp-identity.json");
     writeFileSync(managed, "{}");
     resetIsolationPreflight(managed);
     try {
-      expect(transportIdentity()).toEqual({ isolation: "1", cliVersion: "9.9.9", effort: "high", strictMcp: false });
+      expect(transportIdentity()).toEqual({
+        isolation: "1",
+        cliVersion: "9.9.9",
+        effort: "high",
+        strictMcp: false,
+        credential: "host-login",
+      });
     } finally {
       rmSync(managed);
       resetIsolationPreflight();
@@ -565,7 +579,7 @@ describe("transport identity", () => {
     const prev = process.env.COWORK_HARNESS_FORBID_SPAWN;
     process.env.COWORK_HARNESS_FORBID_SPAWN = "1";
     try {
-      expect(transportIdentity()).toEqual({ isolation: "1", effort: "high" });
+      expect(transportIdentity()).toEqual({ isolation: "1", effort: "high", credential: "host-login" });
     } finally {
       process.env.COWORK_HARNESS_FORBID_SPAWN = prev;
       resetIsolationPreflight();
@@ -576,7 +590,7 @@ describe("transport identity", () => {
     process.env.FAKE_COUNTER = counterPath;
     const real = makeSemanticJudge({ model: "m" });
     await real(["c"], "doc").catch(() => undefined); // the fake's reply is not a grade; the identity is set before parsing
-    expect(real.transport).toEqual({ isolation: "1", cliVersion: "9.9.9", effort: "high" });
+    expect(real.transport).toEqual({ isolation: "1", cliVersion: "9.9.9", effort: "high", credential: "host-login" });
     const stub = makeSemanticJudge({ model: "m", complete: async () => ({ text: '{"results":[{"index":0,"pass":true}]}', model: "m" }) });
     await stub(["c"], "doc");
     expect(stub.transport).toBeUndefined();

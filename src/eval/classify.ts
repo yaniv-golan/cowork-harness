@@ -82,7 +82,7 @@ export type ClassifiableResult = Partial<
       Partial<
         Pick<
           RunResult["assertions"][number],
-          "source" | "semanticClaims" | "judgeInvalid" | "judgePromptHash" | "judgeCostUsd" | "semanticEvidence" | "pairwise"
+          "source" | "semanticClaims" | "judgeInvalid" | "judgeError" | "judgePromptHash" | "judgeCostUsd" | "semanticEvidence" | "pairwise"
         >
       >
   >;

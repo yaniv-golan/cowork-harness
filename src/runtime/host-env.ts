@@ -34,6 +34,15 @@
  */
 export const SECRET_ENV_KEYS = new Set(["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]);
 
+/** The one credential key the agent gets on every isolated tier (container, microvm, hostloop): the OAuth token
+ *  when set, else the API key, never `ANTHROPIC_AUTH_TOKEN`. `runtimeAuthEnv` builds the agent's env from it, and
+ *  `doctor` names it from it, so the two cannot disagree. */
+export function runtimeAuthKey(env: NodeJS.ProcessEnv = process.env): "CLAUDE_CODE_OAUTH_TOKEN" | "ANTHROPIC_API_KEY" | undefined {
+  if (env.CLAUDE_CODE_OAUTH_TOKEN) return "CLAUDE_CODE_OAUTH_TOKEN";
+  if (env.ANTHROPIC_API_KEY) return "ANTHROPIC_API_KEY";
+  return undefined;
+}
+
 export function runtimeAuthEnv(): Record<string, string> {
   const e: Record<string, string> = {};
   // TZ parity: Desktop injects `Intl.DateTimeFormat().resolvedOptions().timeZone` into the agent env
@@ -43,11 +52,8 @@ export function runtimeAuthEnv(): Record<string, string> {
   // guarantees a timezone even when the host exports none (else the agent diverges on date/"today").
   const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   if (tz) e.TZ = tz;
-  const token = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-  if (token) {
-    e.CLAUDE_CODE_OAUTH_TOKEN = token; // faithful: token only, no ANTHROPIC_* keys
-  } else if (process.env.ANTHROPIC_API_KEY) {
-    e.ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY; // CI/headless fallback when no token
-  }
+  // Faithful: the token only, no ANTHROPIC_* keys; the API key is the CI/headless fallback when no token is set.
+  const key = runtimeAuthKey();
+  if (key) e[key] = process.env[key]!;
   return e;
 }

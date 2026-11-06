@@ -57,7 +57,8 @@ snapshots it needs for the checks go to a temp dir that is removed afterwards. (
 runs, as on `record --dry-run`; it may run the `security` Keychain probe or a container runtime's
 `--version`. So does the host-`claude` isolation check when a scenario calls the judge or the LLM decider: it
 runs `claude --help` / `--version`, and a host `claude` that is missing, or too old to run them isolated, refuses the dry
-run as it refuses the eval.) A refusal is the real eval's refusal, with the same message and exit code, so a clean dry run
+run as it refuses the eval. The grader credential check is the one check a dry run does not make: it is a real, billed
+call, so the dry run prints `judge credential: not probed (dry run)` instead.) A refusal is the real eval's refusal, with the same message and exit code, so a clean dry run
 is never refused for real on anything it could have checked. One refusal is the dry run's own: its temp dir
 must be outside any git work tree, for the same reason the eval dir must (the snapshots would hash as empty),
 so a TMPDIR inside one, or one git cannot answer for, exits 3 — set TMPDIR to a directory outside any git
@@ -188,6 +189,14 @@ marker says so (`enforced: "lower_bound"`). It is a pre-flight only: the eval is
 - `--allow-confounded-pool` — run a pool whose records come from one arm (or whose split cannot be bounded); every
   surface then says CONFOUNDED.
 - `--allow-mixed-pool` — accept a pool built with `search-pool build --mixed` (several skills).
+- `--no-judge-check` — skip the pre-spend grader credential check (also `COWORK_HARNESS_JUDGE_CHECK=0`). By default,
+  when a scenario calls a judge or the LLM decider, the eval makes one tiny real call per distinct grader (role, model), with
+  the credential the graders get, after every other check and before the first agent run. A 401 or 403 (the
+  credential), a 404 (the model: an unknown model id is an API 404) or a spent quota refuses the eval (exit 2) at no cost and leaves no eval dir; any other failure is printed and the eval
+  proceeds. A working credential costs one short call, printed as `judge credential: <name> works for <model> (probe
+  cost $…)`. It checks only the graders' credential: on the protocol tier the agent can use another one (see
+  `COWORK_HARNESS_GRADER_AUTH` in [cli.md](cli.md#graders)). Skipping it saves that call; a bad credential then fails
+  every grade, after each rep's agent run is paid for.
 - `--output-format json` — the envelope
   `{tool, version, command:"eval", ok, evalDir, arms, pins, sections, summary, cost, stoppedEarly, error}`
   (plus `searchCorpus` with `--search-corpus`), with `ok` true exactly when the exit code is 0.
@@ -221,6 +230,17 @@ The header states what every number depends on:
   (`report.json`: `arms[].evidenceUnavailable`). A refusal is neither a pass nor a fail, so it leaves that
   assertion's rows for that rep; an arm that refuses more often is producing evidence the judge cannot see
   whole (a deliverable that outgrew the capture budget, say), and this count is where that shows;
+- **per arm, the invalid judge grades by cause** (`report.json`: `arms[].judgeInvalidCauses`): `call failed: API
+  401` (by status; `no API status` for a timeout or a CLI that could not run) when the judge could not be called,
+  `malformed` when it answered without a usable grade, and `cause not recorded` for a `runs.jsonl` written before
+  4.15.0, which kept no cause. When an assertion's every scored rep is a failed call, the summary says
+  `No assertion graded: the judge could not be called (…)`. After any failed call it prints the recovery: fix the
+  graders' credential (`cowork-harness doctor`), then re-judge the kept runs (no agent run; it re-judges every judged assert of each listed run, the ones that
+  graded fine included, at judge cost) with the
+  `cowork-harness regrade <run-dir>… --scenario <file>` it names per scenario (`report.json`:
+  `judgeCallFailures.regrade`; dirs that `prune` removed are listed as not re-judgeable, as of when the report
+  was built, so an `eval report <dir>` after a `prune` lists more). That writes a re-grade
+  beside each run; it does not rewrite the eval's `runs.jsonl` or report;
 - **every (arm, scenario) in which every rep errored**, named with its most frequent bucket and rule —
   for example `errored_infra (auth) 5/5` — and a hint that follows the rule (sign-in, quota, start-up,
   network, decider, or read the run dirs). Whether that scenario's rows were compared is stated on the
@@ -250,7 +270,7 @@ it landed in.
 | the pin did not hold (`modelPinHonored` false, or unknown on a rep that otherwise completed), the snapshot changed under it, or a grade came from another judge prompt | excluded, reported |
 | with `--search-corpus`: not served from the pinned pool — refused before it ran because the eval's copy changed, served from another pool or miss mode, or (under the pin) with no frozen corpus although its agent ran (a live model answered, or it spent) — one that stopped before its agent ran stays infrastructure | excluded as infrastructure, counted and named (`search_pool_mismatch`); any such rep makes the eval exit 1. It outranks every other bucket, but keeps its termination rule (a usage limit beside it still shows as one) |
 | with `--search-corpus`: a search the corpus refused (`searchCorpus.metrics.refused > 0`) | excluded as infrastructure, counted and named (`search_refused`): that arm worked from different evidence. It outranks the agent's own failure, because a refused search hands the agent an error |
-| one assertion's judge output was invalid | only that assertion's rows lose the rep |
+| one assertion's judge grade was invalid: its call failed (an API error such as a 401, a timeout), or it answered without a usable grade (malformed) | only that assertion's rows lose the rep; the report counts the two causes apart |
 | one `semantic_matches` assertion refused for unavailable evidence (its `semanticEvidence` reason is not `graded`) | only that assertion's rows lose the rep — the roll-up and every claim — and it is counted per arm, by reason |
 
 An eval dir whose `runs.jsonl` was written before the refusal reason was kept in it carries no reason.

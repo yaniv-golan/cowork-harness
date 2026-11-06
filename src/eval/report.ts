@@ -1,7 +1,9 @@
-// The eval report: built from `manifest.json` + `runs.jsonl` alone, by ONE function that both the live eval
-// and `eval report <dir>` call — so the two are byte-identical by construction. Pure apart from reading and
-// writing the eval dir: no clock, no environment beyond $HOME (for `~` redaction).
-import { writeFileSync } from "node:fs";
+// The eval report: built from `manifest.json` + `runs.jsonl`, by ONE function that both the live eval and
+// `eval report <dir>` call — so the two are byte-identical by construction for the same files on disk. No clock,
+// no environment beyond $HOME (for `~` redaction). One exception reads outside the eval dir: the regrade
+// recovery's `pruned` list checks whether each kept run dir still exists, so it is as of when the report was
+// built, and an `eval report <dir>` after a `prune` lists the dirs the prune removed.
+import { existsSync, writeFileSync } from "node:fs";
 import { INFRA_EXCLUDED } from "./classify.js";
 import {
   asymmetry,
@@ -44,8 +46,9 @@ import {
 } from "./stats.js";
 import { confirmedAddsNoEvidence, familyReach, metricAaFalseConfirm, sectionFamilies, type SectionFamilies } from "./families.js";
 import { readManifest, type EvalManifest } from "./manifest.js";
-import { readRunsLines, repEvidenceOf, RUNS_FILE, type RunsLine } from "./runs.js";
+import { readRunsLines, repEvidenceOf, RUNS_FILE, type GradedAssertion, type RunsLine } from "./runs.js";
 import { redactHostPaths } from "../run/host-path-tokens.js";
+import { expandHome } from "../session.js";
 
 export const REPORT_JSON = "report.json";
 export const REPORT_MD = "report.md";
@@ -170,6 +173,11 @@ export interface ReportArm {
    *  assertion) over this arm's valid and judge_invalid reps. Each leaves that assertion's rows for that rep
    *  (`evidence_unavailable`), so this count is what keeps an arm that refuses more often visible. */
   evidenceUnavailable: Record<string, number>;
+  /** Invalid judge grades by cause, once per (rep, assertion) over this arm's valid and judge_invalid reps:
+   *  `call failed: API <status>` (or `call failed: no API status`, e.g. a timeout) when the judge could not be called,
+   *  `malformed` when it answered without a usable grade, `cause not recorded` on a runs.jsonl written before the
+   *  cause was kept. Each leaves that assertion's rows for that rep, as before. */
+  judgeInvalidCauses: Record<string, number>;
   /** Metric states over this arm's reps (one count per rep per declared metric): worst-ranked by cause, excluded by
    *  reason, and not-compared by reason. */
   metricStates: { worst: Record<string, number>; excluded: Record<string, number>; notCompared: Record<string, number> };
@@ -187,6 +195,13 @@ export interface EvalReport {
   skill: string | null;
   sections: { tuned: ReportSection | null; heldOut: ReportSection | null };
   judgeDisagreements: Array<{ scenario: string; assertionIndex: number; models: string[] }>;
+  /** Present when any judge call failed: the assertions no rep of which was graded (every scored rep's call failed),
+   *  and, per scenario, the kept run dirs whose failed calls `regrade` can redo at judge cost (`~`-form; `pruned`
+   *  lists those no longer on disk). */
+  judgeCallFailures?: {
+    ungraded: Array<{ scenario: string; assertionIndex: number; cause: string }>;
+    regrade: Array<{ scenario: string; scenarioFile: string; runDirs: string[]; pruned: string[] }>;
+  };
   /** Every recorded rep, in schedule order, with the bucket the report put it in. */
   reps: Array<{
     index: number;
@@ -795,6 +810,7 @@ export function buildEvalReport(evalDir: string): EvalReport {
     const buckets: Partial<Record<RepBucket, number>> = {};
     const errorSources: Record<string, number> = {};
     const evidenceUnavailable: Record<string, number> = {};
+    const judgeInvalidCauses: Record<string, number> = {};
     const metricStates = {
       worst: {} as Record<string, number>,
       excluded: {} as Record<string, number>,
@@ -819,6 +835,10 @@ export function buildEvalReport(evalDir: string): EvalReport {
         for (const g of (repEvidenceOf(x.line).result?.assertions ?? []).filter((g) => g.source === undefined)) {
           const reason = g.judgeInvalid === true ? undefined : semanticRefusalReason(g);
           if (reason !== undefined) evidenceUnavailable[reason] = (evidenceUnavailable[reason] ?? 0) + 1;
+          if (g.judgeInvalid === true) {
+            const cause = judgeInvalidCause(g, x.line.grades[0]?.judgeErrorsRecorded === true);
+            judgeInvalidCauses[cause] = (judgeInvalidCauses[cause] ?? 0) + 1;
+          }
         }
       buckets[x.c.bucket] = (buckets[x.c.bucket] ?? 0) + 1;
       const key = x.line.thrown
@@ -840,6 +860,7 @@ export function buildEvalReport(evalDir: string): EvalReport {
       unclassified: mine.filter((x) => x.c.termination.unclassified).length,
       ambiguousExit: mine.filter((x) => x.c.termination.ambiguousExit).length,
       evidenceUnavailable: Object.fromEntries(Object.entries(evidenceUnavailable).sort(([x], [y]) => x.localeCompare(y))),
+      judgeInvalidCauses: Object.fromEntries(Object.entries(judgeInvalidCauses).sort(([x], [y]) => x.localeCompare(y))),
       metricStates: {
         worst: Object.fromEntries(Object.entries(metricStates.worst).sort(([x], [y]) => x.localeCompare(y))),
         excluded: Object.fromEntries(Object.entries(metricStates.excluded).sort(([x], [y]) => x.localeCompare(y))),
@@ -940,6 +961,7 @@ export function buildEvalReport(evalDir: string): EvalReport {
           : {}),
       }
     : {};
+  const judgeCallFailures = judgeCallFailuresOf(m, classified);
   const recordedIdx = new Set(lines.map((l) => l.index));
   const missingJobs = m.settings.reps * m.scenarios.length * 2 - recordedIdx.size;
   return {
@@ -953,6 +975,7 @@ export function buildEvalReport(evalDir: string): EvalReport {
     skill: m.skill,
     sections: { tuned, heldOut },
     judgeDisagreements,
+    ...(judgeCallFailures ? { judgeCallFailures } : {}),
     reps: classified.map(({ line, c }) => ({
       index: line.index,
       arm: line.arm,
@@ -998,6 +1021,51 @@ export function buildEvalReport(evalDir: string): EvalReport {
     redactedHostPaths: 0,
     ...(searchCorpus ? { searchCorpus } : {}),
   };
+}
+
+/** The cause an invalid judge grade is counted under (see `ReportArm.judgeInvalidCauses`). */
+function judgeInvalidCause(g: GradedAssertion, recorded: boolean): string {
+  if (g.judgeError) return g.judgeError.status !== undefined ? `call failed: API ${g.judgeError.status}` : "call failed: no API status";
+  return recorded ? "malformed" : "cause not recorded";
+}
+
+/** Over the scored reps: each judged assertion whose every grade was a failed call, and the run dirs to re-judge. */
+function judgeCallFailuresOf(m: EvalManifest, classified: ClassifiedLine[]): EvalReport["judgeCallFailures"] {
+  const per = new Map<string, { scored: number; failed: number; cause: string }>();
+  const dirs = new Map<string, Set<string>>();
+  for (const x of classified) {
+    if (x.c.bucket !== "valid" && x.c.bucket !== "judge_invalid") continue;
+    (x.line.grades[0]?.assertions ?? []).forEach((g, i) => {
+      if (g.source !== undefined || (!g.assertion.semantic_matches && !g.assertion.semantic_pairwise)) return;
+      const k = `${x.line.scenario}\u0000${i}`;
+      const e = per.get(k) ?? { scored: 0, failed: 0, cause: "" };
+      e.scored++;
+      if (g.judgeInvalid === true && g.judgeError) {
+        e.failed++;
+        // The message is the judge's own one-line summary, which already leads with the API status when there is one.
+        e.cause ||= g.judgeError.message;
+        if (x.line.runDir) (dirs.get(x.line.scenario) ?? dirs.set(x.line.scenario, new Set()).get(x.line.scenario)!).add(x.line.runDir);
+      }
+      per.set(k, e);
+    });
+  }
+  if (dirs.size === 0) return undefined;
+  const ungraded = [...per.entries()]
+    .filter(([, e]) => e.scored > 0 && e.failed === e.scored)
+    .map(([k, e]) => {
+      const [scenario, idx] = k.split("\u0000");
+      return { scenario: scenario!, assertionIndex: Number(idx), cause: e.cause };
+    });
+  const regrade = [...dirs.entries()].map(([scenario, set]) => {
+    const runDirs = [...set].sort();
+    return {
+      scenario,
+      scenarioFile: m.scenarios.find((s) => s.name === scenario)?.file ?? scenario,
+      runDirs,
+      pruned: runDirs.filter((d) => !existsSync(expandHome(d))),
+    };
+  });
+  return { ungraded, regrade };
 }
 
 /** What was wrong with one mismatched rep's pool, from its persisted line: the pin refusal (the copy unreadable, or
@@ -1303,6 +1371,14 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
             ? ` (\`unrecorded\`: a runs.jsonl written before the reason was kept; there, a refusal whose claims also missed min_pass reads as a fail.)`
             : ""),
       );
+    const invalid = Object.values(a.judgeInvalidCauses ?? {}).reduce((n, v) => n + v, 0);
+    if (invalid > 0)
+      L.push(
+        `  - ⚠ ${invalid} judge grade(s) invalid (${Object.entries(a.judgeInvalidCauses)
+          .map(([k, v]) => `${k} ×${v}`)
+          .join(", ")}) — each leaves that assertion's rows for that rep. A failed call graded nothing (not the skill); ` +
+          `\`malformed\`: the judge answered without a usable grade.`,
+      );
     const states = (rec: Record<string, number>) =>
       Object.entries(rec)
         .map(([k, v]) => `${k} ${v}`)
@@ -1408,6 +1484,18 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
           : ""
       }.`,
     );
+  const jcf = rep.judgeCallFailures;
+  if (jcf) {
+    for (const u of jcf.ungraded)
+      L.push(`**No assertion graded: the judge could not be called (${u.cause})** — ${u.scenario} assertion ${u.assertionIndex}.`);
+    L.push(
+      `Judge calls failed. Fix the graders' credential (\`cowork-harness doctor\`), then re-judge the kept runs (no agent run; judge cost` +
+        ` for every judged assert of each listed run, the ones that graded fine included): ${jcf.regrade.map((r) => `\`cowork-harness regrade ${r.runDirs.join(" ")} --scenario ${r.scenarioFile}\``).join("; ")}.` +
+        ` That writes a re-grade beside each run; it does not rewrite this eval's runs.jsonl or this report.`,
+    );
+    const pruned = jcf.regrade.flatMap((r) => r.pruned);
+    if (pruned.length) L.push(`No longer on disk (pruned), so not re-judgeable: ${pruned.join(", ")}.`);
+  }
   if (Object.keys(rep.summary.metricLabels).length)
     L.push(
       `Metric labels: ${Object.entries(rep.summary.metricLabels)

@@ -169,7 +169,7 @@ ignored.
 
 | Flag | |
 |---|---|
-| `--evaluator-model <id>` | the grading model (env: `COWORK_HARNESS_EVALUATOR_MODEL`) |
+| `--evaluator-model <id>` | the grading model (env: `COWORK_HARNESS_EVALUATOR_MODEL`). The evaluator gets the graders' credential (`COWORK_HARNESS_GRADER_AUTH`, see [cli.md](cli.md#graders)): with `CLAUDE_CODE_OAUTH_TOKEN` set, the token alone |
 | `--output-format json\|text` | critique's *report* format — the inner turns always speak JSON internally |
 | `--out <path>` | **also** write the selected-format report to this file (stdout unchanged). The format comes from `--output-format`, which defaults to **text** — so `--out report.json` writes TEXT unless you also pass `--output-format json`, and a downstream `json.load()` then fails with `Expecting value: line 1 column 1`, which reads as a corrupt report rather than a format mismatch. A mismatch between the extension and the format warns at argument-parse time, before the run spawns |
 | `--summary-out <path>` | **also** write a public-safe summary — no finding text — to this file; see [A public summary](#a-public-summary----summary-out). `--summary-include-cost` / `--summary-include-prompt-hash` add what it leaves out by default |
@@ -895,11 +895,13 @@ reach into `turns/1/` yourself:
   message reached the run (a crash, a kill, a gate before the first reply), which passing `--model`
   does not change;
 - **how the evaluator ran is in the report itself**: `evaluatorTransport` in `--output-format json`
-  (`{isolation, cliVersion?, effort?, settingsEnvOverride?, settingsMaxEffort?, strictMcp?}` — the isolation level of
+  (`{isolation, cliVersion?, effort?, settingsEnvOverride?, settingsMaxEffort?, strictMcp?, credential?, credentialKeys?, graderAuth?}` — the isolation level of
   the host `claude` call, that CLI's version, the `--effort` it was called with (`high`; absent from a report written
   before it was recorded), the effort/thinking keys a user-settings `env` block sets (names only, blanked by the call),
   a user `maxEffortLevel` (which lowers the effort when below it), and
-  `strictMcp: false` when it left out `--strict-mcp-config` for an enterprise MCP config), present
+  `strictMcp: false` when it left out `--strict-mcp-config` for an enterprise MCP config, and the credential the
+  evaluator got by name — `credential`, or `credentialKeys` under `COWORK_HARNESS_GRADER_AUTH=inherit` with several keys,
+  and `graderAuth: "inherit"`; never a value, and absent from a report written before 4.15.0), present
   with `evaluatorModel`, so two critiques' evaluator verdicts can be compared knowing both ran under the same
   conditions;
 - the graded turn's **`outcome` and `skillHash` are in the report itself** (`gradedOutcome` /
