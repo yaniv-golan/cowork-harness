@@ -1171,9 +1171,9 @@ Most runs need **none** of these — the defaults are correct. They're grouped b
   judges, the LLM decider and the critique evaluator) get. `agent` (the default): when `CLAUDE_CODE_OAUTH_TOKEN` is
   set, the graders get it alone — `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are not passed to them — which is
   the credential the agent authenticates with at the container, hostloop and microvm tiers; without the token
-  nothing changes. On the protocol tier the agent inherits your environment, where `ANTHROPIC_API_KEY` wins, so
-  there the graders and the agent can differ (`doctor` warns). `inherit`: the graders get every key set, as before
-  4.15.0, and the host `claude` picks among them. Any other value is refused at startup (exit 2). A one-line notice
+  nothing changes. On the protocol tier, with `ANTHROPIC_API_KEY` set, the agent gets the key and not the token
+  (the harness passes the token there only when no key is set), so there the graders and the agent can differ
+  (`doctor` warns). `inherit`: the graders get every key set, as before 4.15.0, and the host `claude` picks among them. Any other value is refused at startup (exit 2). A one-line notice
   says which credential the graders use whenever the choice mattered; names only, never a value.
 - `COWORK_HARNESS_JUDGE_CHECK` — `0` skips the pre-spend grader credential check `eval` and `hillclimb run` make
   (the same as `--no-judge-check`). By default, before any agent run, they make one tiny real call per distinct

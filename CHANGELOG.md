@@ -32,9 +32,9 @@ All notable changes to this project are documented here. The format is based on
   could not authenticate says which credential the agent is given.
 
 - **Which credential the graders get.** With `CLAUDE_CODE_OAUTH_TOKEN` set, the graders get the token alone, which is
-  the credential the agent authenticates with at the container, hostloop and microvm tiers. On protocol the agent
-  inherits your environment, where `ANTHROPIC_API_KEY` wins, so there the graders and the agent can still differ;
-  `doctor` says so. A one-line notice names the credential the graders use whenever the choice mattered (names only).
+  the credential the agent authenticates with at the container, hostloop and microvm tiers. On protocol, with
+  `ANTHROPIC_API_KEY` set, the agent gets the key and not the token (the harness passes the token there only when no key is set), so there the graders and the agent can
+  still differ; `doctor` says so. A one-line notice names the credential the graders use whenever the choice mattered (names only).
   `ANTHROPIC_CUSTOM_HEADERS` is still passed. `COWORK_HARNESS_GRADER_AUTH` takes `agent` (the default) or `inherit`;
   any other value is refused at startup.
 - **An API error that fails the same way every time is no longer retried** by the judges, the LLM decider or the

@@ -494,11 +494,11 @@ levels:
      says `subscription` whenever the run reported a subscription rate-limit window (five-hour or seven-day), on any
      tier. Without one, it depends on the env the agent was spawned with: when that env carries none of
      `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_REMOTE` or `CLAUDE_CODE_HOST_AUTH_ENV_VAR`, the API key wins (`api_key`);
-     otherwise the row says `ambiguous`. Through the environment only protocol reaches this case: at container,
-     microvm and hostloop the agent is given the token alone when it is set, so those rows say `subscription`
-     (hostloop rows recorded before 4.15.0 with both set say `ambiguous`; a managed `settings.json` that hands the
-     agent a key can still reach it at any tier). At protocol the agent gets your own environment, so it depends on what
-     you export (a shell inside a Claude Code session exports `CLAUDE_CODE_ENTRYPOINT`).
+     otherwise the row says `ambiguous`. No tier reaches this case through the environment: at container, microvm
+     and hostloop the agent is given the token alone when it is set, so those rows say `subscription`; at protocol,
+     with an API key set, the agent is given the key and not the token, so those rows say `api_key`. Hostloop rows
+     recorded before 4.15.0 with both set say `ambiguous`, and a managed `settings.json` that hands the agent a key
+     can still reach this case at any tier.
    - `api_key`: an API key and no token (a token source of `none`, or `apiKeyHelper`, the key's own helper).
    - `ambiguous`: anything else (a bearer `ANTHROPIC_AUTH_TOKEN`, no credential recorded, account frames that
      disagree).
@@ -512,7 +512,7 @@ On `subscription`, `cost_usd` is the agent's list-price estimate, not a charge. 
 organization's price table set it. Compare costs only across variants with the same basis. `billing_basis` describes
 the agent only. The judge and the LLM decider run on the host `claude` with the graders' credential: with
 `CLAUDE_CODE_OAUTH_TOKEN` set, the token alone, which is what the agent uses at the container, hostloop and microvm
-tiers. On protocol the agent inherits your env, where `ANTHROPIC_API_KEY` wins, so there the two can bill differently;
+tiers. On protocol, with `ANTHROPIC_API_KEY` set, the agent gets the key and not the token (the harness passes the token there only when no key is set), so there the two can bill differently;
 `COWORK_HARNESS_GRADER_AUTH=inherit` gives the graders every key instead (see [cli.md](cli.md#graders)). `hillclimb run`
 checks the graders' credential with one real call before its first agent run (`--no-judge-check` skips it; a dry run,
 or a pass with no open slot, never makes it).

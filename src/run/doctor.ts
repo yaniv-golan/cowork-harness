@@ -446,9 +446,10 @@ export const realProbe: DoctorProbe = {
 
 /** Which credential the graders (judge, LLM decider, critique evaluator) are given, and which one the agent
  *  authenticates with at `tier`, by name only. $0: nothing is called. It warns only when the two can differ: on
- *  protocol (the agent inherits the operator's env, where ANTHROPIC_API_KEY wins) with an OAuth token and another key
- *  set, or under `COWORK_HARNESS_GRADER_AUTH=inherit` with several keys. Whether the credential WORKS is checked by
- *  the one real call `eval` and `hillclimb run` make before their first agent run. */
+ *  protocol (the agent inherits the operator's env, less the OAuth token whenever ANTHROPIC_API_KEY is set: the token
+ *  is passed there only when no key is) with an OAuth token and another key set, or under
+ *  `COWORK_HARNESS_GRADER_AUTH=inherit` with several keys. Whether the credential WORKS is checked by the one real
+ *  call `eval` and `hillclimb run` make before their first agent run. */
 export function graderCredentialCheck(tier: Tier, env: NodeJS.ProcessEnv = process.env): DoctorCheck {
   let g: ReturnType<typeof graderCredential>;
   try {
@@ -456,8 +457,9 @@ export function graderCredentialCheck(tier: Tier, env: NodeJS.ProcessEnv = proce
   } catch (e) {
     return { id: "grader-credential", title: "Grader credential", status: "fail", detail: (e as Error).message, required: false };
   }
-  // The agent: on protocol the operator's env as is, where the CLI picks the first key in its measured order; every
-  // other tier gets the key the spawn path gives it (`runtimeAuthKey`: the token, else the API key, never the auth token).
+  // The agent: on protocol the operator's env (the token passed only when no API key is set), where the CLI picks the
+  // first key in its measured order; every other tier gets the key the spawn path gives it (`runtimeAuthKey`: the
+  // token, else the API key, never the auth token).
   const agent = tier === "protocol" ? GRADER_CREDENTIAL_KEYS.find((k) => !!env[k]) : runtimeAuthKey(env);
   const graders = !g.passed.length
     ? "the host claude's own login"
