@@ -158,10 +158,11 @@ child_process.spawn(<resolveHostAgentBinary(baseline)>, [ …§3.1 args, HOST pa
   env: buildHostLoopNativeEnv(baseline, { configDir: plan.configDir, extra: runtimeAuthEnv(), … }),
 })
 ```
-`buildHostLoopNativeEnv` layers, in order: the operator's `process.env` with `SCRUBBED_AGENT_ENV_KEYS`
-deleted, the keys the baseline's spawn env owns removed (and, when `extra` carries `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`,
-`ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_CUSTOM_HEADERS` too); then `hostNativeSpawnEnv(baseline, …)`,
-`extra` included; then the `agent_env` knob. `MAX_THINKING_TOKENS` is always removed.
+`buildHostLoopNativeEnv` layers, in order: the operator's `process.env` with named keys deleted
+(`SCRUBBED_AGENT_ENV_KEYS`, the auto-memory and background-tasks keys, and, when `extra` carries
+`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_CUSTOM_HEADERS`);
+then `hostNativeSpawnEnv(baseline, …)`, `extra` included, which wins over any operator key it also sets;
+then the `agent_env` knob. `MAX_THINKING_TOKENS` is always removed.
 - `--disallowedTools Bash WebFetch NotebookEdit`; append `mcp__workspace__bash mcp__workspace__web_fetch` to `--tools`/`--allowedTools`. (The asar `HOST_LOOP_EXCLUDED_BUILTIN_TOOLS` = {Bash, NotebookEdit, REPL, JavaScript, WebFetch}; only Bash/NotebookEdit/WebFetch exist in the CLI agent's 26-tool registry — REPL/JavaScript are absent here.)
 - `CLAUDE_PLUGIN_ROOT` / `--plugin-dir` point at the STAGED plugin copy — a REAL host path (`join(mntHost, m.mountPath)`), the same directory the sidecar's bind mount below also targets. (2+ configured plugins keep an unresolvable sentinel for both consumers — a pre-existing per-plugin-hook scoping limitation.) The `hostloop` workspace bash rewrites those host plugin paths, and the skills dir, to their VM mounts before executing a command (Desktop's host-loop behaviour from 1.40609.0; `src/hostloop/plugin-path-rewrite.ts`); the recorded tool input keeps the host path.
 - `cwd` = the harness-owned `<mntHost>/outputs` dir — this MUST equal the PreToolUse gate's `hostCwd` (below); a mismatch is cross-checked live via the hook payload's `input.cwd` and warned loudly, never silently trusted.

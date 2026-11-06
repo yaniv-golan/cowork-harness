@@ -1,7 +1,7 @@
 /**
  * The single impure boundary: runtime auth/TZ values read from the host env.
  *
- * Auth-env fidelity (SPEC §3.2, which scopes itself to container/microvm): real Cowork passes ONLY
+ * Auth-env fidelity (SPEC §3.2: container/microvm, and hostloop on the token path): real Cowork passes ONLY
  * `CLAUDE_CODE_OAUTH_TOKEN` — the desktop blanks `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN`/
  * `ANTHROPIC_CUSTOM_HEADERS` and deletes them (`rtA`/`itA`, app.asar). So when an OAuth token is
  * present we mirror that and DROP the API-key vars (prefer the token, exactly like the desktop). Only
@@ -47,9 +47,11 @@ export const TOKEN_PATH_DROPPED_ENV_KEYS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH
  */
 export const SECRET_ENV_KEYS = new Set(["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]);
 
-/** The one credential key the agent gets on every isolated tier (container, microvm, hostloop): the OAuth token
- *  when set, else the API key, never `ANTHROPIC_AUTH_TOKEN`. `runtimeAuthEnv` builds the agent's env from it, and
- *  `doctor` names it from it, so the two cannot disagree. */
+/** The credential key `runtimeAuthEnv` hands the agent on every isolated tier (container, microvm, hostloop): the
+ *  OAuth token when set, else the API key, never `ANTHROPIC_AUTH_TOKEN`. At container and microvm it is the only one.
+ *  At hostloop the agent also inherits the operator's shell, so with no token set an exported `ANTHROPIC_AUTH_TOKEN`
+ *  (or `ANTHROPIC_CUSTOM_HEADERS`) still reaches it; with the token set they are dropped (`TOKEN_PATH_DROPPED_ENV_KEYS`).
+ *  `runtimeAuthEnv` builds from it and `doctor` names it from it, so the two cannot disagree. */
 export function runtimeAuthKey(env: NodeJS.ProcessEnv = process.env): "CLAUDE_CODE_OAUTH_TOKEN" | "ANTHROPIC_API_KEY" | undefined {
   if (env.CLAUDE_CODE_OAUTH_TOKEN) return "CLAUDE_CODE_OAUTH_TOKEN";
   if (env.ANTHROPIC_API_KEY) return "ANTHROPIC_API_KEY";

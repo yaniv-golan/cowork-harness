@@ -52,12 +52,42 @@ describe("hostloop agent env: the token is the only credential when the agent is
     expect([...TOKEN_PATH_DROPPED_ENV_KEYS].sort()).toEqual(["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS"]);
   });
 
+  // spawnHostLoop has no env seam short of a Docker sidecar, so this replicates its call (src/runtime/hostloop.ts,
+  // `buildHostLoopNativeEnv(baseline, { …, extra: { CLAUDE_PLUGIN_ROOT, ...runtimeAuthEnv() } })`) rather than
+  // exercising it. searchCorpusPreflight below is exercised for real.
   it.each(cases)("buildHostLoopNativeEnv as spawnHostLoop calls it: %s", (_n, set, want) => {
     stubCredentials(set);
     const env = buildHostLoopNativeEnv(BASE, { configDir: "/tmp/cfg", extra: { CLAUDE_PLUGIN_ROOT: "", ...runtimeAuthEnv() } });
     expect(credentialKeys(env)).toEqual([...want].sort());
     if (want.includes("CLAUDE_CODE_OAUTH_TOKEN")) expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe("t");
     expect(env.TZ).toBeTruthy();
+  });
+
+  // The trigger is what `extra` gives the agent, never process.env: these two separate the views.
+  it("extra without the token keeps the operator's key, even with a token in process.env", () => {
+    stubCredentials({ CLAUDE_CODE_OAUTH_TOKEN: "t" });
+    const env = buildHostLoopNativeEnv(BASE, { configDir: "/tmp/cfg", operatorEnv: { ANTHROPIC_API_KEY: "k" }, extra: { TZ: "UTC" } });
+    expect(credentialKeys(env)).toEqual(["ANTHROPIC_API_KEY"]);
+  });
+  it("extra with the token drops the operator's key, even with no token in process.env", () => {
+    stubCredentials({});
+    const env = buildHostLoopNativeEnv(BASE, {
+      configDir: "/tmp/cfg",
+      operatorEnv: { ANTHROPIC_API_KEY: "k" },
+      extra: { CLAUDE_CODE_OAUTH_TOKEN: "t" },
+    });
+    expect(credentialKeys(env)).toEqual(["CLAUDE_CODE_OAUTH_TOKEN"]);
+  });
+
+  // Deleted from the operator layer before the overlay: a key the baseline's spawn env sets survives.
+  it("keeps a dropped key the baseline's spawn env sets itself", () => {
+    stubCredentials({ CLAUDE_CODE_OAUTH_TOKEN: "t", ANTHROPIC_CUSTOM_HEADERS: "from-operator" });
+    const pinned = {
+      ...BASE,
+      spawn: { ...BASE.spawn, env: { ...(BASE.spawn?.env ?? {}), ANTHROPIC_CUSTOM_HEADERS: "from-baseline" } },
+    } as PlatformBaseline;
+    const env = buildHostLoopNativeEnv(pinned, { configDir: "/tmp/cfg", extra: runtimeAuthEnv() });
+    expect(env.ANTHROPIC_CUSTOM_HEADERS).toBe("from-baseline");
   });
 
   it("leaves the rest of the operator's shell alone (ANTHROPIC_BASE_URL is still inherited)", () => {

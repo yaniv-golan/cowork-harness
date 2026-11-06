@@ -112,7 +112,8 @@ export function buildHostLoopNativeEnv(
   // operator's export must not reach the agent either, as on protocol (backgroundTasksEnv).
   delete nativeEnv[BACKGROUND_TASKS_ENV_KEY];
   // The credential the agent is given is the one `extra` carries (runtimeAuthEnv). When that is the OAuth token, the
-  // operator's other credential keys are not inherited beside it (see TOKEN_PATH_DROPPED_ENV_KEYS).
+  // operator's other credential keys are not inherited beside it (see TOKEN_PATH_DROPPED_ENV_KEYS). Deleted from the
+  // operator layer, before the overlay, like the scrub above: a key the baseline's spawn env or `extra` sets is kept.
   if (opts.extra?.CLAUDE_CODE_OAUTH_TOKEN !== undefined) for (const k of TOKEN_PATH_DROPPED_ENV_KEYS) delete nativeEnv[k];
   Object.assign(nativeEnv, hostNativeSpawnEnv(baseline, opts));
   delete nativeEnv.MAX_THINKING_TOKENS;

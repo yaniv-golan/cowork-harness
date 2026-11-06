@@ -15,7 +15,7 @@ All notable changes to this project are documented here. The format is based on
 - **The hostloop agent no longer inherits `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_CUSTOM_HEADERS`
   when `CLAUDE_CODE_OAUTH_TOKEN` is set.** It already authenticated with the token, so where a run is billed does not
   change. Two things you may see:
-  - eval and hillclimb rows from hostloop runs with both the token and the key set now record `meta.billing.basis`
+  - hillclimb rows from hostloop runs with both the token and the key set now record `meta.billing.basis`
     `subscription` where they recorded `ambiguous`, so a variant's `summary.json` `billing_basis` can read `"mixed"`
     across runs from before and after the upgrade;
   - a setup that sends the token through a proxy (`ANTHROPIC_BASE_URL`) which needs a header from
@@ -28,7 +28,8 @@ All notable changes to this project are documented here. The format is based on
   no longer carries `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_CUSTOM_HEADERS` beside the token, as in
   Desktop and as at container and microvm. The rest of your shell, `ANTHROPIC_BASE_URL` included, is still
   inherited. Only the environment is covered: a managed `settings.json` (an `env` entry or `apiKeyHelper`) can still
-  hand the agent a key. Without the token nothing changes. The message after an authentication failure at hostloop says which credential the agent took.
+  hand the agent a key. Without the token nothing changes. The message `hillclimb run` prints after a run at hostloop
+  could not authenticate says which credential the agent is given.
 
 - **Which credential the graders get.** With `CLAUDE_CODE_OAUTH_TOKEN` set, the graders get the token alone, which is
   the credential the agent authenticates with at the container, hostloop and microvm tiers. On protocol the agent
