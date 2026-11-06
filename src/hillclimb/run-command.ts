@@ -140,11 +140,13 @@ export async function runHillclimbCommand<F extends { label?: string; ablateSkil
   let skill: string | undefined;
   try {
     let graderTargets: GraderProbeTarget[];
-    ({ runner, price, skill, graderTargets } = prepare(args, deps, say));
+    let openSlots: number;
+    ({ runner, price, skill, graderTargets, openSlots } = prepare(args, deps, say));
     // The last refusal before any agent spend: does the graders' credential work? Every grade would otherwise fail
     // the same way, after its agent run was paid for. A dry run spends nothing, so it does not probe.
     if (graderTargets.length) {
       if (args.dryRun) say(`[${args.variant}] judge credential: not probed (dry run)`);
+      else if (openSlots === 0) say(`[${args.variant}] judge credential: not probed (no open slot to run)`);
       else if (args.noJudgeCheck) say(`[${args.variant}] judge credential: not probed (--no-judge-check / COWORK_HARNESS_JUDGE_CHECK=0)`);
       else {
         const jc = await deps.judgeCheck(graderTargets);
@@ -183,6 +185,8 @@ interface Prepared {
   skill: string | undefined;
   /** The graders the selected cases call (empty when none grades with an LLM). */
   graderTargets: GraderProbeTarget[];
+  /** The (case, rep) slots this pass would run; 0 ⇒ nothing to grade, so no credential check. */
+  openSlots: number;
 }
 
 const sha256 = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
@@ -261,6 +265,11 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   if (llmDecider && selected.some((c) => c.scenario.on_unanswered === "llm"))
     graderTargets.push({ role: "decider", model: llmDeciderModel(deps.env) });
   const flowArg = normalizeRootArg(args.flow);
+  // The (case, rep) slots this pass would run, counted as the runner counts them (a slot with a results row is done;
+  // an errors row leaves it open). None left ⇒ no grade will be made, so the credential check is not spent.
+  const scored = slotsIn(readVariantFileIfPresent(flowArg, v, "results.jsonl", deps.cwd));
+  let openSlots = 0;
+  for (const c of selected) for (let rep = 0; rep < args.reps; rep++) if (!scored.has(`${c.id}\0${rep}`)) openSlots++;
   const flowHash = flowHashOf(resolve(deps.cwd, flowArg));
   const runsRoot = deps.runsRoot ?? runsWriteRoot();
 
@@ -612,7 +621,7 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.tickMs !== undefined ? { tickMs: deps.tickMs } : {}),
   };
-  return { runner, price, skill: args.skill !== undefined ? tracked.name : undefined, graderTargets };
+  return { runner, price, skill: args.skill !== undefined ? tracked.name : undefined, graderTargets, openSlots };
 }
 
 /** `hillclimb run --search-corpus` before any spend: the pool loads and hashes; a mixed pool is never the baseline's

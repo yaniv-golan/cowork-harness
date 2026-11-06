@@ -650,7 +650,12 @@ describe("runHillclimbCommand", () => {
       await runHillclimbCommand(args("--approve-harness", "--no-judge-check"), deps({ judgeCheck }));
       expect(err.join("\n")).toContain("judge credential: not probed (--no-judge-check");
       expect(asked).toBe(0);
+      // That pass scored the one slot: with nothing left to grade, the default does not probe either.
       await runHillclimbCommand(args("--approve-harness"), deps({ judgeCheck }));
+      expect(err.join("\n")).toContain("judge credential: not probed (no open slot to run)");
+      expect(asked).toBe(0);
+      // A pass with an open slot (rep 1) probes once.
+      await runHillclimbCommand(args("--approve-harness", "--reps", "2"), deps({ judgeCheck }));
       expect(asked).toBe(1);
     });
 
