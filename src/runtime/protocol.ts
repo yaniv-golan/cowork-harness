@@ -202,9 +202,10 @@ export function spawnProtocol(
   //
   // L0 deliberately DIVERGES from the cowork-fidelity tiers in TWO ways, BY DESIGN — L0
   // keeps the real local config for OAuth and is not a cowork-fidelity tier:
-  //   - It does NOT apply runtimeAuthEnv()'s OAuth/API-key drop. container/microvm/
-  //         host-loop drop the API key when an OAuth token is present (the L1/L2 fidelity
-  //         behavior); L0 does not, because a fresh CLAUDE_CONFIG_DIR breaks local login.
+  //   - It does NOT apply runtimeAuthEnv()'s OAuth/API-key drop. container/microvm give the
+  //         agent the token alone when one is set, and host-loop does too from 4.15.0
+  //         (buildHostLoopNativeEnv drops the operator's other credential keys); L0 does not,
+  //         because a fresh CLAUDE_CONFIG_DIR breaks local login.
   //   - It does NOT pass --plugin-dir. Declared plugins load via --settings/managed
   //         config, NOT the cowork --plugin-dir cache layout. So L0 cannot validate
   //         plugin/skill loading the way Cowork stages it.

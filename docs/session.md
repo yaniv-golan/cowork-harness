@@ -178,7 +178,8 @@ that skill instead of the shared root.
 ### Agent-env knob (tier-uniform)
 
 `hostloop` and `protocol` spawn the agent over the **operator's full shell env** (`...process.env` /
-`{...plan.baseEnv}`), while `container`/`microvm` build a **constructed allowlist**. Left alone, that means
+`{...plan.baseEnv}`; at `hostloop`, with `CLAUDE_CODE_OAUTH_TOKEN` set, less `ANTHROPIC_API_KEY`,
+`ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_CUSTOM_HEADERS`), while `container`/`microvm` build a **constructed allowlist**. Left alone, that means
 an operator-exported `CLAUDE_CODE_SUBAGENT_MODEL`, `ENABLE_TOOL_SEARCH`, or
 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` silently affects only the two env-inheriting tiers — the exact
 same session behaves differently depending on which fidelity tier you run it at. `agent_env` is the

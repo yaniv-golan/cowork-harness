@@ -161,8 +161,9 @@ one real call that checks the graders' credential before the first agent run), `
   `basis`), with `meta.billing.basis` one of `api_key`, `subscription`, `third_party`, `ambiguous`, read from the
   agent's own frames and the spawn env (API key and OAuth token both set: `subscription` when a five-hour or
   seven-day rate limit was reported, on any tier; else `api_key` when the spawn env carries none of
-  `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_REMOTE`, `CLAUDE_CODE_HOST_AUTH_ENV_VAR`, else `ambiguous` — the baseline
-  sets the entrypoint at hostloop, container and microvm); the key is absent when the run recorded no credential frames. Summary:
+  `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_REMOTE`, `CLAUDE_CODE_HOST_AUTH_ENV_VAR`, else `ambiguous` — through the
+  environment only protocol reaches this (a managed `settings.json` key can at any tier): at container, microvm and hostloop the agent gets the token alone, so those rows say `subscription`;
+  hostloop rows from before 4.15.0 with both set say `ambiguous`); the key is absent when the run recorded no credential frames. Summary:
   `billing_basis` is always present: the single recorded value, `"mixed"` when rows differ, or `"unrecorded"`
   when no row records one, beside `billing_rows_unrecorded`. Names only, never an account's identity. On
   `subscription`, `cost_usd` is a list-price estimate, not a charge.

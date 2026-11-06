@@ -125,7 +125,10 @@ VM-env builder `rtA()` sets `CLAUDE_CODE_OAUTH_TOKEN` and blanks `ANTHROPIC_API_
 so the final env has the token and **no** API-key vars at all. **IMPLEMENTED** (`host-env.ts`
 `runtimeAuthEnv()`): when `CLAUDE_CODE_OAUTH_TOKEN` is present the harness mirrors the desktop and
 passes **only** the token, dropping `ANTHROPIC_API_KEY`; `ANTHROPIC_API_KEY` is forwarded **only** when
-there is no token (the CI/headless fallback the harness intentionally keeps). (`CLAUDE_CODE_EXECPATH`
+there is no token (the CI/headless fallback the harness intentionally keeps). This holds at container,
+microvm and, from 4.15.0, host-loop (§3.4), whose agent inherits the operator's shell: there the
+operator's `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_CUSTOM_HEADERS` are dropped when
+the token is given, so the agent's env carries the token alone, as in Desktop. (`CLAUDE_CODE_EXECPATH`
 is the agent's *own* `process.execPath` — never forward a host value; covered by the "no blanket
 `CLAUDE_*`" rule above.)
 
@@ -152,9 +155,14 @@ SDK-servers section below), so it never crosses the container egress boundary.
 ```
 child_process.spawn(<resolveHostAgentBinary(baseline)>, [ …§3.1 args, HOST paths … ], {
   cwd: <mntHost>/outputs,
-  env: { ...process.env, ...hostNativeSpawnEnv(baseline, { configDir: plan.configDir, … }) },
+  env: buildHostLoopNativeEnv(baseline, { configDir: plan.configDir, extra: runtimeAuthEnv(), … }),
 })
 ```
+`buildHostLoopNativeEnv` layers, in order: the operator's `process.env` with named keys deleted
+(`SCRUBBED_AGENT_ENV_KEYS`, the auto-memory and background-tasks keys, and, when `extra` carries
+`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_CUSTOM_HEADERS`);
+then `hostNativeSpawnEnv(baseline, …)`, `extra` included, which wins over any operator key it also sets;
+then the `agent_env` knob. `MAX_THINKING_TOKENS` is always removed.
 - `--disallowedTools Bash WebFetch NotebookEdit`; append `mcp__workspace__bash mcp__workspace__web_fetch` to `--tools`/`--allowedTools`. (The asar `HOST_LOOP_EXCLUDED_BUILTIN_TOOLS` = {Bash, NotebookEdit, REPL, JavaScript, WebFetch}; only Bash/NotebookEdit/WebFetch exist in the CLI agent's 26-tool registry — REPL/JavaScript are absent here.)
 - `CLAUDE_PLUGIN_ROOT` / `--plugin-dir` point at the STAGED plugin copy — a REAL host path (`join(mntHost, m.mountPath)`), the same directory the sidecar's bind mount below also targets. (2+ configured plugins keep an unresolvable sentinel for both consumers — a pre-existing per-plugin-hook scoping limitation.) The `hostloop` workspace bash rewrites those host plugin paths, and the skills dir, to their VM mounts before executing a command (Desktop's host-loop behaviour from 1.40609.0; `src/hostloop/plugin-path-rewrite.ts`); the recorded tool input keeps the host path.
 - `cwd` = the harness-owned `<mntHost>/outputs` dir — this MUST equal the PreToolUse gate's `hostCwd` (below); a mismatch is cross-checked live via the hook payload's `input.cwd` and warned loudly, never silently trusted.

@@ -403,7 +403,8 @@ const DEFAULT_ABSENT = new Set(["settings-conditional", "session-conditional", "
  * maintainer's shell can enter the comparison or a message) and with placeholder values for the keys the harness adds
  * at spawn (`runtimeAuthEnv`: TZ and the OAuth token) and for a connected folder. Only the key set is used. The OAuth
  * token is assumed present: `runtimeAuthEnv` sends ANTHROPIC_API_KEY instead when the operator has no token, which is
- * the CI fallback, not the Cowork path being compared.
+ * the CI fallback, not the Cowork path being compared. With the token in `extra` the builder also drops the operator's
+ * other credential keys; the operator layer here is empty, so that changes no key in the set.
  */
 export function harnessHostLoopKeys(baseline: PlatformBaseline): Set<string> {
   const env = buildHostLoopNativeEnv(baseline, {

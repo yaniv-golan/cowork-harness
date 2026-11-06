@@ -1037,6 +1037,19 @@ describe("authFailureHint — what a run the agent could not authenticate says",
     }
   });
 
+  it("at hostloop with the OAuth token set, says the token alone reaches the agent", async () => {
+    const { authFailureHint } = await import("../src/run/doctor.js");
+    const h = authFailureHint("hostloop", ok, { CLAUDE_CODE_OAUTH_TOKEN: "tok-SECRET-1", ANTHROPIC_API_KEY: "sk-SECRET-2" });
+    expect(h).toContain(
+      "CLAUDE_CODE_OAUTH_TOKEN alone while it is set (ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN do not reach the agent then)",
+    );
+    expect(h).not.toContain("SECRET");
+    // protocol still inherits every key.
+    expect(authFailureHint("protocol", ok, { CLAUDE_CODE_OAUTH_TOKEN: "t" })).toContain(
+      "CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN",
+    );
+  });
+
   it("with no credential, carries doctor's own detail and remedy", async () => {
     const { authFailureHint, tokenCheck } = await import("../src/run/doctor.js");
     const probe = { platform: () => "linux", hasToken: () => false, hasKeychainToken: () => false, worktreeEnv: () => null };

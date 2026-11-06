@@ -35,7 +35,7 @@ import { BACKGROUND_TASKS_ENV_KEY, baseAgentArgs, hostNativeSpawnEnv, dockerRunA
 import { buildPluginPathRewrites, type PluginPathRewrite } from "../hostloop/plugin-path-rewrite.js";
 import { agentSpawnOptions, agentTreeAgent } from "./agent-tree.js";
 import { AUTO_MEMORY_ENV_KEY } from "../loop-decision.js";
-import { runtimeAuthEnv } from "./host-env.js";
+import { runtimeAuthEnv, TOKEN_PATH_DROPPED_ENV_KEYS } from "./host-env.js";
 import { resolveHostLoopBindMounts, stageHostLoopWorkspace } from "./hostloop-stage.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
 import { checkHostLoopPathGate, PATH_GATE_TOOL_NAMES, type HostLoopPathGateConfig } from "../hostloop/pretooluse-path-hook.js";
@@ -90,7 +90,9 @@ export const VM_LOOP_TOOL_ALIASES: Record<string, string> = { WebFetch: "mcp__wo
  *      layer alone, before anything else touches it — container/microvm never inherit these keys, so
  *      leaking them only here (and on protocol) is exactly the asymmetry `agent_env` closes. Scrubbing
  *      AFTER the baseline overlay would also erase a value the baseline legitimately sets; scrubbing
- *      the operator layer first keeps that value intact.
+ *      the operator layer first keeps that value intact. When `extra` gives the agent the OAuth token,
+ *      `TOKEN_PATH_DROPPED_ENV_KEYS` (the API key, the bearer token, the custom headers) are deleted from
+ *      this layer too, so the token is the only credential the agent's env carries, as in Desktop.
  *   2. `hostNativeSpawnEnv`'s baseline-derived output (may legitimately set any scrubbed key).
  *   3. the authored `agentEnv` knob, applied last so it always wins.
  */
@@ -109,6 +111,10 @@ export function buildHostLoopNativeEnv(
   // Owned by the baseline's spawn.env, which hostNativeSpawnEnv overlays: on a baseline that pins no value the
   // operator's export must not reach the agent either, as on protocol (backgroundTasksEnv).
   delete nativeEnv[BACKGROUND_TASKS_ENV_KEY];
+  // The credential the agent is given is the one `extra` carries (runtimeAuthEnv). When that is the OAuth token, the
+  // operator's other credential keys are not inherited beside it (see TOKEN_PATH_DROPPED_ENV_KEYS). Deleted from the
+  // operator layer, before the overlay, like the scrub above: a key the baseline's spawn env or `extra` sets is kept.
+  if (opts.extra?.CLAUDE_CODE_OAUTH_TOKEN !== undefined) for (const k of TOKEN_PATH_DROPPED_ENV_KEYS) delete nativeEnv[k];
   Object.assign(nativeEnv, hostNativeSpawnEnv(baseline, opts));
   delete nativeEnv.MAX_THINKING_TOKENS;
   Object.assign(nativeEnv, opts.agentEnv ?? {});
