@@ -981,6 +981,35 @@ describe("eval: snapshots and their signatures", () => {
     expect(asked).toBe(0);
   });
 
+  it("a judge that hit the usage limit (API 429) is counted under its own status", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    let n = 0;
+    // The first semantic rep hit the account's usage limit; every other rep's call was refused (401).
+    const failCall = (_s: EvalJobSpec, r: RunResult): RunResult => {
+      const semantic = r.assertions.some((x) => x.assertion.semantic_matches);
+      const status = semantic && n++ === 0 ? 429 : 401;
+      return {
+        ...r,
+        assertions: r.assertions.map((x) =>
+          x.assertion.semantic_matches
+            ? {
+                ...x,
+                pass: false,
+                judgeInvalid: true,
+                judgeError: { kind: "call" as const, status, message: `API ${status}` },
+              }
+            : x,
+        ),
+      };
+    };
+    const out = await runEval(args(scen, a, b, ["--judge-model", "claude-opus-4-8"]), deps(fakeRunner(failCall)));
+    const rep = writeEvalReport(out.evalDir);
+    const total: Record<string, number> = {};
+    for (const arm of rep.arms) for (const [k, v] of Object.entries(arm.judgeInvalidCauses ?? {})) total[k] = (total[k] ?? 0) + v;
+    expect(total).toEqual({ "call failed: API 429": 1, "call failed: API 401": 9 });
+    expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).toContain("call failed: API 429 ×1");
+  });
+
   it("the report splits invalid judge grades by cause and prints the recovery; an old line reads 'cause not recorded'", async () => {
     const { scen, a, b } = setup({ semantic: true });
     // Every rep's semantic grade is a failed call (a 401), as the judge now records one.

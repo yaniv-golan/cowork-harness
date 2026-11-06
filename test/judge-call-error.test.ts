@@ -221,8 +221,26 @@ describe("semantic_matches: a judge call failure is reported as one", () => {
     expect(r!.message).toContain("judge call FAILED (API 401");
     expect(r!.message).toContain("Invalid API key");
     expect(r!.message).not.toContain("malformed");
+    // A 401 carries the credential hint; no credential variable is set here, so the judge used the claude login.
+    expect(r!.message).toContain("The judge used your claude login");
+    expect(r!.message).toContain("cowork-harness doctor");
     expect((r as { judgeError?: unknown }).judgeError).toMatchObject({ kind: "call", status: 401, origin: "first_party" });
     expect(r!.judgeAttempts).toBe(1);
+  });
+
+  it("the 401 hint names the credential the judge was given and the one it was not, never a value", async () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "tok-SECRET-value-1";
+    process.env.ANTHROPIC_API_KEY = "key-SECRET-value-2";
+    const q = quiet();
+    const c = ctx();
+    try {
+      await runSemanticJudges([sem], c, makeSemanticJudge({ model: "claude-opus-4-8" }));
+    } finally {
+      q.mockRestore();
+    }
+    const [r] = evaluate([sem], c);
+    expect(r!.message).toContain("The judge used CLAUDE_CODE_OAUTH_TOKEN; also set but not passed: ANTHROPIC_API_KEY");
+    expect(r!.message).not.toContain("SECRET");
   });
 
   it("the eval's runs.jsonl line keeps the failed call (judgeError) and marks the cause as recorded", async () => {
@@ -261,6 +279,7 @@ describe("semantic_matches: a judge call failure is reported as one", () => {
     const [r] = evaluate([sem], c);
     expect(calls()).toBe(6); // 3 transport spawns x 2 pre-pass attempts
     expect(r!.message).toContain("judge call FAILED (API 529");
+    expect(r!.message).not.toContain("The judge used"); // the credential hint is for a 401/403 only
   });
 
   it("(control) a well-formed reply that is not a grade stays a malformed grade, retried once", async () => {
@@ -570,6 +589,16 @@ describe("doctor: the Grader credential row (names only, $0)", () => {
     expect(c.detail).toContain("graders use CLAUDE_CODE_OAUTH_TOKEN; the agent at container uses CLAUDE_CODE_OAUTH_TOKEN");
     expect(c.detail).toContain("set but not passed to the graders: ANTHROPIC_API_KEY");
     expect(JSON.stringify(c)).not.toMatch(/tok-value|key-value/);
+  });
+  it("the API key and the auth token with no OAuth token: graders and agent both get the key (ok, no inherit advice)", () => {
+    const env = { ANTHROPIC_API_KEY: "key-value", ANTHROPIC_AUTH_TOKEN: "auth-value" };
+    for (const tier of ["container", "hostloop", "protocol"] as const) {
+      const c = graderCredentialCheck(tier, env);
+      expect(c.status).toBe("ok");
+      expect(c.detail).toContain("graders use ANTHROPIC_API_KEY (the host claude's pick of ANTHROPIC_API_KEY, ANTHROPIC_AUTH_TOKEN)");
+      expect(c.detail).toContain(`the agent at ${tier} uses ANTHROPIC_API_KEY`);
+      expect(JSON.stringify(c)).not.toMatch(/key-value|auth-value|inherit/);
+    }
   });
   it("protocol with both keys: the agent uses the API key, so the row warns", () => {
     const c = graderCredentialCheck("protocol", base);

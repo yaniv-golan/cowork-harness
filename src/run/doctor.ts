@@ -459,8 +459,15 @@ export function graderCredentialCheck(tier: Tier, env: NodeJS.ProcessEnv = proce
   // The agent: on protocol the operator's env as is (the API key first, as measured); every other tier gets the
   // OAuth token alone when it is set.
   const agent = tier === "protocol" ? set[0] : env.CLAUDE_CODE_OAUTH_TOKEN ? "CLAUDE_CODE_OAUTH_TOKEN" : set[0];
-  const graders = g.passed.length ? g.passed.join(" or ") : "the host claude's own login";
-  const mismatch = g.passed.length > 1 || (agent !== undefined && g.passed.length === 1 && g.passed[0] !== agent);
+  const graders = !g.passed.length
+    ? "the host claude's own login"
+    : g.passed.length > 1 && g.mode === "agent"
+      ? `${g.passed[0]} (the host claude's pick of ${g.passed.join(", ")})`
+      : g.passed.join(" or ");
+  // With several keys passed, the host claude picks the first in its measured order (`GRADER_CREDENTIAL_KEYS`): that
+  // is what grading is billed to. Under `inherit` the pick is a measurement, not a contract, so several keys warn there.
+  const inheritMany = g.mode === "inherit" && g.passed.length > 1;
+  const mismatch = inheritMany || (agent !== undefined && g.passed.length >= 1 && g.passed[0] !== agent);
   return {
     id: "grader-credential",
     title: "Grader credential",
@@ -471,10 +478,9 @@ export function graderCredentialCheck(tier: Tier, env: NodeJS.ProcessEnv = proce
       (g.mode === "inherit" ? " (COWORK_HARNESS_GRADER_AUTH=inherit)" : ""),
     ...(mismatch
       ? {
-          remedy:
-            g.passed.length > 1
-              ? "under COWORK_HARNESS_GRADER_AUTH=inherit the host claude picks among several keys; unset it, or keep one key, so grading is billed where you expect"
-              : `grading is billed to ${g.passed[0]} and the agent to ${agent}; on protocol that is by design (the agent inherits your env). Unset the key you do not mean to use, or set COWORK_HARNESS_GRADER_AUTH=inherit to give the graders every key`,
+          remedy: inheritMany
+            ? "under COWORK_HARNESS_GRADER_AUTH=inherit the host claude picks among several keys; unset it, or keep one key, so grading is billed where you expect"
+            : `grading is billed to ${g.passed[0]} and the agent to ${agent}; on protocol that is by design (the agent inherits your env). Unset the key you do not mean to use, or set COWORK_HARNESS_GRADER_AUTH=inherit to give the graders every key`,
         }
       : {}),
     required: false,
