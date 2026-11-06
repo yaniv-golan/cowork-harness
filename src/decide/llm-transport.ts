@@ -498,8 +498,10 @@ export class ApiExitError extends TransportExit {
     readonly origin: string | undefined,
     /** The CLI's own one-line reason (the envelope's `result`), bounded. */
     readonly apiMessage: string | undefined,
+    /** Given only where the cause, not the status, decides it (a spent usage quota is never worth a retry). */
+    retryable: boolean = apiErrorRetryable(status),
   ) {
-    super(message, apiErrorRetryable(status));
+    super(message, retryable);
     this.name = "ApiExitError";
   }
 }
@@ -512,15 +514,18 @@ export function apiErrorRetryable(status: number | undefined): boolean {
   return !(status === 400 || status === 401 || status === 403 || status === 404 || status === 413 || status === 422);
 }
 
-/** The API failure an envelope reports, or undefined when it reports none (or is not JSON). */
-function apiErrorOf(raw: string): { status?: number; origin?: string; message?: string } | undefined {
-  let p: { api_error_status?: unknown; api_error_origin?: unknown; terminal_reason?: unknown; result?: unknown };
+/** The API failure an envelope reports, or undefined when it reports none (or is not JSON). With `requireIsError`
+ *  (a clean exit), the envelope must also say `is_error: true`: a successful reply that merely records the status of
+ *  an error the CLI got past is not a failed call. */
+function apiErrorOf(raw: string, requireIsError = false): { status?: number; origin?: string; message?: string } | undefined {
+  let p: { api_error_status?: unknown; api_error_origin?: unknown; terminal_reason?: unknown; result?: unknown; is_error?: unknown };
   try {
     p = JSON.parse(raw) as typeof p;
   } catch {
     return undefined;
   }
   if (p === null || typeof p !== "object") return undefined;
+  if (requireIsError && p.is_error !== true) return undefined;
   const status = typeof p.api_error_status === "number" ? p.api_error_status : undefined;
   if (status === undefined && p.terminal_reason !== "api_error") return undefined;
   return {
@@ -730,11 +735,12 @@ function spawnOnce(
       clearTimeout(timer);
       // Decode once at close — see chunks comment above.
       const raw = Buffer.concat(chunks).toString("utf8");
+      // The message names the host CLI, never its path: it is persisted in a failed judge call's `judgeError`.
       const apiError = (exit: number | null): ApiExitError | undefined => {
-        const a = apiErrorOf(raw);
+        const a = apiErrorOf(raw, exit === 0);
         if (!a) return undefined;
         return new ApiExitError(
-          `LLM decider transport (${bin} -p) exited ${exit}: API error${a.status !== undefined ? ` ${a.status}` : ""}` +
+          `host claude -p exited ${exit}: API error${a.status !== undefined ? ` ${a.status}` : ""}` +
             `${a.origin ? ` (${a.origin})` : ""}${a.message ? ` — ${a.message}` : ""}`,
           a.status,
           a.origin,
@@ -778,9 +784,18 @@ function spawnOnce(
         return;
       }
       // Usage/quota limit: don't retry into a spent quota — fail loud & fast so a batch halts.
+      // Raised as an API error (the envelope's status, else 429) so a failed judge call records a status, and never
+      // retried whatever the status says.
       if (resultText && isUsageLimit(resultText, tryExtractApiErrorStatus(raw))) {
+        const a = apiErrorOf(raw);
         reject(
-          new TransportExit(`LLM decider transport (${bin} -p): usage/quota limit hit — retry after the limit resets. ${diag}`, false),
+          new ApiExitError(
+            `host claude -p: usage/quota limit hit — retry after the limit resets. ${diag}`,
+            a?.status ?? 429,
+            a?.origin,
+            "usage/quota limit hit",
+            false,
+          ),
         );
         return;
       }
@@ -895,7 +910,7 @@ async function completeViaCli(
  *  timeout, a missing CLI) and the run may proceed. `ok`: the call succeeded. */
 export type GraderProbeOutcome =
   | { status: "ok"; model: string; credential: string; costUsd?: number }
-  | { status: "refuse" | "warn"; model: string; credential: string; message: string };
+  | { status: "refuse" | "warn"; model: string; credential: string; message: string; apiStatus?: number };
 
 /** The pre-spend judge credential check: ONE real call through the exact grader path (same binary, same environment
  *  and credential, same isolation flags and `--effort` as a judge call), with no retry. It checks the credential the
@@ -915,12 +930,21 @@ export async function probeGraderCredential(model: string, role: GraderRole = "j
   } catch (e) {
     if (e instanceof InterruptedError) throw e;
     const err = e as Error & { retryable?: boolean; status?: number };
-    const message = (err.message ?? String(e)).split("\n")[0]!;
-    // Only what fails every later grade the same way: the credential (401/403), the model (404), a spent quota.
-    const refuse =
+    const message =
       err instanceof ApiExitError
-        ? err.status === 401 || err.status === 403 || err.status === 404
-        : err.retryable === false && /usage\/quota limit/.test(message);
-    return { status: refuse ? "refuse" : "warn", model, credential, message };
+        ? `API ${err.status ?? "error"}${err.apiMessage ? `: ${err.apiMessage}` : ""}`
+        : (err.message ?? String(e)).split("\n")[0]!;
+    // Only what fails every later grade the same way: the credential (401/403), the model (404), a spent quota.
+    // A spent usage quota is the 429 that is not retryable (a plain rate limit is, and only warns).
+    const refuse =
+      err instanceof ApiExitError &&
+      (err.status === 401 || err.status === 403 || err.status === 404 || (err.status === 429 && !err.retryable));
+    return {
+      status: refuse ? "refuse" : "warn",
+      model,
+      credential,
+      message,
+      ...(err instanceof ApiExitError && err.status !== undefined ? { apiStatus: err.status } : {}),
+    };
   }
 }

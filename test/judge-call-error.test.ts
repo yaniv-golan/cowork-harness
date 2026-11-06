@@ -31,6 +31,8 @@ import { graderCredentialCheck } from "../src/run/doctor.js";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const FIX_401 = resolve(HERE, "fixtures", "judge-call-error", "claude-p-401-api-key.json");
 const REAL_401 = JSON.parse(readFileSync(FIX_401, "utf8"));
+const FIX_404 = resolve(HERE, "fixtures", "judge-call-error", "claude-p-404-unknown-model.json");
+const REAL_404 = JSON.parse(readFileSync(FIX_404, "utf8"));
 const FIX_OK = resolve(HERE, "fixtures", "pairwise-judge", "claude-p-json-schema-envelope.json");
 const REAL_OK = JSON.parse(readFileSync(FIX_OK, "utf8"));
 
@@ -161,6 +163,35 @@ describe("transport: an API error envelope (real 401 frame, exit 1)", () => {
     q.mockRestore();
     expect((err as { status?: number }).status).toBe(401);
     expect((err as Error).message).not.toContain("unparseable envelope");
+  });
+
+  it("a successful reply that also records an API status is a grade, not a failed call (exit 0 needs is_error)", async () => {
+    // The real success envelope with a status edited in, as if the CLI had got past an error on its own.
+    serve(REAL_OK, 0, { api_error_status: 529 });
+    const q = quiet();
+    try {
+      const r = await claudeCliCompleteStructured({ system: "s", user: "u", schema: PAIRWISE_JSON_SCHEMA, model: "claude-haiku-4-5" });
+      expect(r).toBeDefined();
+    } finally {
+      q.mockRestore();
+    }
+    expect(calls()).toBe(1);
+  });
+
+  it("a spent usage quota is an API error with its status, not retried, and its message names no CLI path", async () => {
+    // The real 401 frame with the quota's status and text edited in.
+    serve(REAL_401, 1, { api_error_status: 429, result: "You've hit your session limit · resets 4pm" });
+    const q = quiet();
+    const c = ctx();
+    try {
+      await runSemanticJudges([sem], c, makeSemanticJudge({ model: "claude-opus-4-8" }));
+    } finally {
+      q.mockRestore();
+    }
+    const [r] = evaluate([sem], c);
+    expect(calls()).toBe(1);
+    expect((r as { judgeError?: unknown }).judgeError).toMatchObject({ kind: "call", status: 429 });
+    expect(JSON.stringify(r)).not.toContain(dir); // the fake CLI's path
   });
 
   it("a transient status (529, the real frame with its status edited) is still retried", async () => {
@@ -472,6 +503,36 @@ describe("the pre-spend judge check: one real call through the grader path, neve
       expect(o.lines).toHaveLength(2);
       expect(o.lines[0]).toMatch(/^judge credential: CLAUDE_CODE_OAUTH_TOKEN works for .* \(probe cost/);
       expect(o.lines[1]).toMatch(/^LLM decider credential: CLAUDE_CODE_OAUTH_TOKEN works for /);
+    } finally {
+      q.mockRestore();
+    }
+  });
+
+  it("an unknown model is a real API 404 (measured, $0): the probe refuses and names the model as the fix", async () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "fake-token-value";
+    serve(REAL_404, 1);
+    const q = quiet();
+    try {
+      const o = await runJudgeCheck([{ role: "judge", model: "claude-no-such-model-1" }]);
+      expect(calls()).toBe(1);
+      expect(o.refusal).toContain("API 404");
+      expect(o.refusal).toContain("pass --judge-model");
+      expect(o.refusal).not.toContain("doctor");
+    } finally {
+      q.mockRestore();
+    }
+  });
+
+  it("a spent quota refuses; a plain rate limit (429, retryable) only warns", async () => {
+    process.env.CLAUDE_CODE_OAUTH_TOKEN = "fake-token-value";
+    const q = quiet();
+    try {
+      serve(REAL_401, 1, { api_error_status: 429, result: "You've hit your weekly limit · resets Jul 13" });
+      expect((await runJudgeCheck([{ role: "judge", model: "claude-opus-4-8" }])).refusal).toContain("usage quota is spent");
+      serve(REAL_401, 1, { api_error_status: 429, result: "You've hit your rate limit, please try again shortly" });
+      const o = await runJudgeCheck([{ role: "judge", model: "claude-opus-4-8" }]);
+      expect(o.refusal).toBeUndefined();
+      expect(o.lines[0]).toMatch(/could not check/);
     } finally {
       q.mockRestore();
     }

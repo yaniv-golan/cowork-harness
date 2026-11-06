@@ -31,6 +31,12 @@ export function llmDeciderModel(env: NodeJS.ProcessEnv = process.env): string {
 
 const ROLE_NAME: Record<GraderRole, string> = { judge: "judge", decider: "LLM decider", evaluator: "critique evaluator" };
 
+function role404Fix(role: GraderRole): string {
+  return role === "decider"
+    ? "the model is unknown or not available to this credential; set COWORK_HARNESS_DECIDER_MODEL to a model it can use"
+    : "the model is unknown or not available to this credential; pass --judge-model, or fix the assert's judge_model / COWORK_HARNESS_JUDGE_MODEL";
+}
+
 function fmtCost(usd: number | undefined): string {
   return usd === undefined ? "probe cost not reported" : `probe cost $${usd.toFixed(usd < 0.01 ? 4 : 3)}`;
 }
@@ -59,12 +65,19 @@ export async function runJudgeCheck(
       );
       continue;
     }
+    // The fix follows the status: a 404 is the model (measured: an unknown model id is an API 404 at $0, not a
+    // start-up refusal), a 429 here is a spent quota, a 401/403 is the credential.
+    const fix =
+      o.apiStatus === 404
+        ? role404Fix(t.role)
+        : o.apiStatus === 429
+          ? "the usage quota is spent: wait for it to reset, or give the graders another credential (COWORK_HARNESS_GRADER_AUTH)"
+          : "check the credential with `cowork-harness doctor`; COWORK_HARNESS_GRADER_AUTH picks which credential the graders get";
     return {
       lines,
       refusal:
         `the ${who}'s call was refused before any agent run (${o.message}; model ${t.model}, credential ${o.credential}). ` +
-        `Every grade would fail the same way, so nothing was run. Check the credential with \`cowork-harness doctor\`; ` +
-        `COWORK_HARNESS_GRADER_AUTH picks which credential the graders get.`,
+        `Every grade would fail the same way, so nothing was run. Fix: ${fix}.`,
     };
   }
   return { lines };
