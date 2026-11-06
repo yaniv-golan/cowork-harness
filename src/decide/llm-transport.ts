@@ -193,8 +193,9 @@ export function graderCredential(base: NodeJS.ProcessEnv = process.env): GraderC
   const mode = graderAuthMode(base);
   const set = GRADER_CREDENTIAL_KEYS.filter((k) => !!base[k]);
   // `agent`: the token alone, as `runtimeAuthEnv` (src/runtime/host-env.ts) gives the agent. ANTHROPIC_CUSTOM_HEADERS
-  // is not a credential and is kept, a deliberate difference from Desktop (which deletes it with the keys): a proxy
-  // in front of the graders may need it.
+  // is not a credential and is kept, a deliberate difference from Desktop, whose agent env never carries the
+  // operator's: a proxy in front of the graders may need it. The hostloop agent does not get it on the token path
+  // (TOKEN_PATH_DROPPED_ENV_KEYS), so there the graders keep a header the agent no longer sees.
   const tokenOnly = mode === "agent" && !!base.CLAUDE_CODE_OAUTH_TOKEN;
   const passed: GraderCredentialKey[] = tokenOnly ? ["CLAUDE_CODE_OAUTH_TOKEN"] : set;
   return { mode, passed, dropped: set.filter((k) => !passed.includes(k)) };

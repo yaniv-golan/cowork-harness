@@ -12,8 +12,24 @@ All notable changes to this project are documented here. The format is based on
   and the critique evaluator no longer receive `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` alongside the token. If
   you had both set, grading moves off the API key to the token's billing. `COWORK_HARNESS_GRADER_AUTH=inherit`
   restores the previous behaviour. Without the token nothing changes.
+- **The hostloop agent no longer inherits `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_CUSTOM_HEADERS`
+  when `CLAUDE_CODE_OAUTH_TOKEN` is set.** It already authenticated with the token, so where a run is billed does not
+  change. Two things you may see:
+  - eval and hillclimb rows from hostloop runs with both the token and the key set now record `meta.billing.basis`
+    `subscription` where they recorded `ambiguous`, so a variant's `summary.json` `billing_basis` can read `"mixed"`
+    across runs from before and after the upgrade;
+  - a setup that sends the token through a proxy (`ANTHROPIC_BASE_URL`) which needs a header from
+    `ANTHROPIC_CUSTOM_HEADERS` stops working at hostloop: the header is no longer passed, while the proxy URL still
+    is. Without the token nothing changes.
 
 ### Changed
+
+- **The hostloop agent gets the OAuth token alone when it is set.** The hostloop agent inherits your shell; it now
+  no longer carries `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_CUSTOM_HEADERS` beside the token, as in
+  Desktop and as at container and microvm. Hooks and MCP servers the agent starts inherit the same env. The rest of
+  your shell, `ANTHROPIC_BASE_URL` included, is still inherited. Only the environment is covered: a managed
+  `settings.json` (an `env` entry or `apiKeyHelper`) can still hand the agent a key. Without the token nothing
+  changes. The message after an authentication failure at hostloop says which credential the agent took.
 
 - **Which credential the graders get.** With `CLAUDE_CODE_OAUTH_TOKEN` set, the graders get the token alone, which is
   the credential the agent authenticates with at the container, hostloop and microvm tiers. On protocol the agent

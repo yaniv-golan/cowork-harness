@@ -333,7 +333,8 @@ export function hostNativeSpawnEnv(
     // (`<dep>.type==="3p"?"":app.getVersion()`), and the agent READS it: on the `claude-desktop` /
     // `local-agent` entrypoints — `local-agent` is what the harness pins — it becomes the fallback source
     // of the `anthropic-client-version` request header (the platform half is a hard-coded `desktop_app`) whenever
-    // ANTHROPIC_CUSTOM_HEADERS carries none, which is our case. Without this injection the harness's agent
+    // ANTHROPIC_CUSTOM_HEADERS carries none, which is our case when the agent is given the token (with no token an
+    // operator export of it is still inherited). Without this injection the harness's agent
     // sends no client-identity headers at all, where production always sends them. It is ALLOWLISTED in
     // the sync (app.getVersion() is a host call, not structurally resolvable), so this is the only place
     // the value is supplied — same split as CLAUDE_CODE_HOST_PLATFORM above. VERSION-GATED, unlike that

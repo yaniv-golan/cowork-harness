@@ -26,7 +26,20 @@
  *     exactly as the harness does. The divergence is hostloop-only.
  * At hostloop the harness spawns a native process from an env that already holds the token, on the
  * operator's own machine, so nothing crosses a boundary that was closed before.
+ *
+ * HOSTLOOP INHERITANCE. Unlike container/microvm, the hostloop agent inherits the operator's whole shell
+ * (`buildHostLoopNativeEnv`), so `runtimeAuthEnv` choosing the token was not enough on its own there: an
+ * exported key still reached the agent beside it. When the token is what the agent is given, that builder
+ * now drops `TOKEN_PATH_DROPPED_ENV_KEYS` from the inherited layer, so the agent's env no longer carries
+ * them, as in Desktop. Desktop gets there differently: it builds the host-loop env from named keys and
+ * never inherits a shell. The rest of the shell (`ANTHROPIC_BASE_URL` included) is still inherited here.
+ * Only the environment is covered: a managed `settings.json` (`env`, `apiKeyHelper`) can still hand the
+ * agent a key, in Desktop as well.
  */
+/** The operator-shell keys the hostloop agent does not inherit when `runtimeAuthEnv` gives it the OAuth token.
+ *  `ANTHROPIC_CUSTOM_HEADERS` is dropped only on the token path, a choice rather than a fidelity consequence (Desktop
+ *  never passes the operator's): with no token, an API-key gateway that needs a header keeps working. */
+export const TOKEN_PATH_DROPPED_ENV_KEYS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS"] as const;
 /**
  * Env keys whose VALUES are secrets and must never be rendered into a process argv (visible via
  * `ps`/`/proc/<pid>/cmdline`). Docker passes these by NAME only (`-e KEY`, inherited from the docker

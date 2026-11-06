@@ -494,9 +494,10 @@ levels:
      says `subscription` whenever the run reported a subscription rate-limit window (five-hour or seven-day), on any
      tier. Without one, it depends on the env the agent was spawned with: when that env carries none of
      `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_REMOTE` or `CLAUDE_CODE_HOST_AUTH_ENV_VAR`, the API key wins (`api_key`);
-     otherwise the row says `ambiguous`. At hostloop, container and microvm the baseline sets the `local-agent`
-     entrypoint, so those rows say `ambiguous`; at protocol the agent gets your own environment, so it depends on
-     what you export (a shell inside a Claude Code session exports `CLAUDE_CODE_ENTRYPOINT`).
+     otherwise the row says `ambiguous`. Only protocol reaches this case: at container, microvm and hostloop the
+     agent is given the token alone when it is set, so those rows say `subscription` (hostloop rows recorded before
+     4.15.0 with both set say `ambiguous`). At protocol the agent gets your own environment, so it depends on what
+     you export (a shell inside a Claude Code session exports `CLAUDE_CODE_ENTRYPOINT`).
    - `api_key`: an API key and no token (a token source of `none`, or `apiKeyHelper`, the key's own helper).
    - `ambiguous`: anything else (a bearer `ANTHROPIC_AUTH_TOKEN`, no credential recorded, account frames that
      disagree).
