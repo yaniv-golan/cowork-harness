@@ -3,8 +3,8 @@ name: cowork-harness
 description: Test or debug a Claude Code skill/plugin under Claude Cowork's runtime — sandboxed agent, default-deny egress, the can_use_tool permission/question protocol — using the cowork-harness CLI. Use when validating or regression-testing a skill, authoring or debugging a scenario YAML (prompt + scripted answers + assert:), choosing a fidelity tier, scripting AskUserQuestion / tool-permission answers, asserting artifacts, egress, or sub-agent dispatch, measuring how long each tool call took (toolDurations / trace), or debugging a failed run or verdict from its result.json or transcript. Especially when a harness run no-ops an assertion, fails on an unanswered gate, false-greens, a steered answer never reaches the model, or a web_fetch is unexpectedly denied or gated. Also when iterating or hardening a skill across fixes, or grounding a skill's self-critique against its own run evidence — including a document-analysis skill (cap table, deck, financial model, transcript) that needs an uploaded file attached to be critiqued at all. Also for comparing two versions of a skill before merging an edit — did it make answers worse? (`eval`: paired A/B, pinned models) — or improving one round by round (`hillclimb`, the `/claude-api hillclimb` runner). NOT for generic unit testing (pytest/vitest of your own scripts) or non-Cowork CI. Covers the skill / run / chat / record / replay / trace / decide / assertions / scaffold / critique / stats / eval / hillclimb commands and the session-vs-scenario split.
 metadata:
   author: cowork-harness
-  version: 4.14.0
-  tracks-harness: cowork-harness 4.14.0 (baseline desktop-4.16336.0)
+  version: 4.15.0
+  tracks-harness: cowork-harness 4.15.0 (baseline desktop-4.16336.0)
 ---
 
 # cowork-harness
@@ -26,7 +26,7 @@ allowlist). This skill exists mostly to keep you out of those traps — the *Inv
 full landmine catalog in [`references/gotchas.md`](references/gotchas.md) are the highest-value part.
 Read them.
 
-> **Version note:** the facts and `file:line` pointers here track `cowork-harness 4.14.0` (baseline
+> **Version note:** the facts and `file:line` pointers here track `cowork-harness 4.15.0` (baseline
 > `desktop-4.16336.0`). If your checkout is newer, prefer the live `--help` and — in a repo checkout —
 > `SPEC.md` / `docs/*.md` over this snapshot, and re-run the bundled linter.
 
@@ -43,14 +43,14 @@ Before the first command, confirm the CLI is reachable and **fail loud** (never 
 
 - **One-shot check.** Run `cowork-harness doctor [--tier <tier>]` first — a read-only prerequisite check that inspects Docker, the staged agent, the token, the baseline and the `device_bridge` image (built, or built on the first bridge run) in one pass. The bullets below explain each thing it checks (and how to fix it).
 - **Replay-only? Skip `doctor`.** Replaying committed cassettes needs no Docker, no staged agent, and no token — and every tier's `doctor` validates the auth token (the live tiers also Docker + the staged agent), so a ✗ there is expected, not a blocker. Go straight to `cowork-harness replay <cassette>`.
-- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 4.14.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@^4.14.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@^4.14.0"`. **Pin `@^4.14.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
+- **CLI on PATH, recent enough?** Run `cowork-harness --version` — this skill needs **≥ 4.15.0**. If it's missing or older, prefix every command with the version floor `npx "cowork-harness@^4.15.0" <cmd>` (Node ≥ 22), or install once with `npm i -g "cowork-harness@^4.15.0"`. **Pin `@^4.15.0`, never `@latest`** — `@latest` can silently fetch an older CLI and the new commands fail as "unknown command", whereas the floor **fails loud** if no compatible version is published.
 
   This skill documents the CURRENT surface, not release history. If `cowork-harness --version` is
   OLDER than the floor, the per-release record of what you are missing is [CHANGELOG.md](https://github.com/yaniv-golan/cowork-harness/blob/main/CHANGELOG.md)
   — upgrade rather than work around it, since this skill's `file:line` pointers and flag names track the floor.
 - **Agent binary (sandboxed live tiers — `container`/`microvm`/`hostloop`/`cowork`).** The staged Claude Code agent is **bind-mounted** from a local Claude Desktop install, or point `COWORK_AGENT_BINARY` at a `claude-code-vm/<ver>/claude` ELF. Nothing is bundled. `protocol` (L0) and `replay` need no staged agent; for the sandboxed tiers, no agent → no run; report that, don't skip silently.
 - **Docker / Lima.** Only `--fidelity protocol` (L0) runs without them. `container` / `microvm` / `hostloop` / `cowork` need Docker (Lima for L2). If they're absent, drop to `--fidelity protocol` and **say so** — a green that never exercised the sandbox is not a sandbox pass. At `protocol` the plugin under test **is** delivered (`--plugin-dir`), but its hooks then run as native host processes — so a plugin declaring hooks is refused there until you pass `--allow-host-hooks` / `allow_host_hooks: true`.
-- **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred), or `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`, via env or `.env`. With the token set, the agent gets it alone at `container`/`microvm`/`hostloop` (at `hostloop` it otherwise inherits your shell; at `protocol` it inherits your env, where the key wins), and the graders (judge, LLM decider, evaluator) get it alone — `COWORK_HARNESS_GRADER_AUTH=inherit` passes every key ([semantic-judging](references/semantic-judging.md)). Minting an OAuth token needs the **`claude` CLI** (`npm i -g @anthropic-ai/claude-code`, then `claude setup-token`).
+- **Auth.** `CLAUDE_CODE_OAUTH_TOKEN` (preferred), or `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`, via env or `.env`. With the token set, the agent gets it alone at `container`/`microvm`/`hostloop` (at `hostloop` it otherwise inherits your shell; at `protocol`, with `ANTHROPIC_API_KEY` set, the agent gets the key and not the token, since the harness passes the token there only when no key is set), and the graders (judge, LLM decider, evaluator) get it alone — `COWORK_HARNESS_GRADER_AUTH=inherit` passes every key ([semantic-judging](references/semantic-judging.md)). Minting an OAuth token needs the **`claude` CLI** (`npm i -g @anthropic-ai/claude-code`, then `claude setup-token`).
 - **Point at another `.env`** with `--dotenv <path>`, and relocate run output with `--run-dir <path>`; both work before or after the subcommand.
 
 ## Orient — the three loops

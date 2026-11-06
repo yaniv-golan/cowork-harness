@@ -1,6 +1,6 @@
 # `eval` — paired before/after comparison of a skill edit (EXPERIMENTAL)
 
-Tracks `cowork-harness 4.14.0` (baseline `desktop-4.16336.0`). The full guide is
+Tracks `cowork-harness 4.15.0` (baseline `desktop-4.16336.0`). The full guide is
 [docs/eval.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/eval.md); this is the part you
 need while running it.
 
@@ -69,6 +69,14 @@ that scenario compared nothing — its rows are `insufficient` and the eval exit
 is the agent's own failure and the other arm ran, the reps are scored (a real drop) — exit 0 unless
 `--fail-on`. Either way the header
 names the arm, scenario, dominant error and a matching hint (`Every rep of arm <label> in <scenario> errored — …`).
+
+An invalid judge grade leaves that assertion's rows for that rep, and the report counts it per arm by cause
+(`arms[].judgeInvalidCauses`): `call failed: API <status>` (or `call failed: no API status`, e.g. a timeout),
+`malformed`, or `cause not recorded` for an eval written before 4.15.0. When a judge call failed, the report also
+names any assertion no rep of which was graded and prints the recovery: fix the graders' credential
+(`cowork-harness doctor`), then `cowork-harness regrade <run dirs> --scenario <file>` over the kept runs it lists.
+That re-judges every judged assert of those runs at judge cost and writes a re-grade beside each run; it does not
+rewrite the eval's `runs.jsonl` or report. Pruned run dirs are listed as not re-judgeable.
 
 ## Refused before any run (exit 2)
 

@@ -1,6 +1,6 @@
 # `hillclimb` — the runner for a `/claude-api hillclimb` loop
 
-Tracks `cowork-harness 4.14.0` (baseline `desktop-4.16336.0`). It needs a `cowork-harness` whose
+Tracks `cowork-harness 4.15.0` (baseline `desktop-4.16336.0`). It needs a `cowork-harness` whose
 `hillclimb --help` lists `--skill` (help goes to stderr). The command reference is
 [docs/cli.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cli.md); this is the part a loop needs
 while it runs. It covers `run`, `check`, `state-template`, `freeze-ref` and `regrade`.
@@ -161,9 +161,10 @@ one real call that checks the graders' credential before the first agent run), `
   `basis`), with `meta.billing.basis` one of `api_key`, `subscription`, `third_party`, `ambiguous`, read from the
   agent's own frames and the spawn env (API key and OAuth token both set: `subscription` when a five-hour or
   seven-day rate limit was reported, on any tier; else `api_key` when the spawn env carries none of
-  `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_REMOTE`, `CLAUDE_CODE_HOST_AUTH_ENV_VAR`, else `ambiguous` — through the
-  environment only protocol reaches this (a managed `settings.json` key can at any tier): at container, microvm and hostloop the agent gets the token alone, so those rows say `subscription`;
-  hostloop rows from before 4.15.0 with both set say `ambiguous`); the key is absent when the run recorded no credential frames. Summary:
+  `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_REMOTE`, `CLAUDE_CODE_HOST_AUTH_ENV_VAR`, else `ambiguous` — no tier
+  reaches this through the environment: at container, microvm and hostloop the agent gets the token alone when it is
+  set (`subscription`), and at protocol, with a key set, the key and not the token (`api_key`); hostloop rows from
+  before 4.15.0 with both set say `ambiguous`, and a managed `settings.json` key can reach it at any tier); the key is absent when the run recorded no credential frames. Summary:
   `billing_basis` is always present: the single recorded value, `"mixed"` when rows differ, or `"unrecorded"`
   when no row records one, beside `billing_rows_unrecorded`. Names only, never an account's identity. On
   `subscription`, `cost_usd` is a list-price estimate, not a charge.
@@ -505,7 +506,7 @@ sub-agent's turns after its dispatch. Before committing a flow dir, check what `
 - **`errors.jsonl` holds what is not the skill's score**, by `failure_class`: `timeout` (raise `--timeout-s` if
   it persists), `error` (an infrastructure fault, a run from another snapshot than the variant's, or a grade
   that does not line up with the scenario), `serving_substitution` (the wrong model, no evidence of the
-  pinned one, or another effort sent than requested — `effort_not_sent`: a serving problem, not the skill), `judge_invalid` (no usable judge grade: the row's `error` says whether the judge's call failed — then `meta.judge_error_status` / `meta.judge_error_message` — or its grade was malformed; either way the slot re-runs with `hillclimb run <scenarios> --flow <dir> --variant <v> --case <id> --reps <rep+1>`, and a `regrade` does not fill it). An error row
+  pinned one, or another effort sent than requested — `effort_not_sent`: a serving problem, not the skill), `judge_invalid` (no usable judge grade: the row's `error` says whether the judge's call failed — then `meta.judge_error_status` / `meta.judge_error_message` — or its grade was malformed; either way the slot re-runs with `hillclimb run <scenarios> --flow <dir> --variant <v> --case <id> --reps <rep+1>`, and a `regrade` does not fill it; the first 401 or 403 from a judge in a pass also prints which credential the graders got). An error row
   never occupies its slot: the next pass re-runs it (see resume above).
 - **`meta.run_dir`** is one rep's kept run (`result.json`, transcript, events), outside the flow dir, for
   digging into a single rep.
