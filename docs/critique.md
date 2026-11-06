@@ -169,7 +169,7 @@ ignored.
 
 | Flag | |
 |---|---|
-| `--evaluator-model <id>` | the grading model (env: `COWORK_HARNESS_EVALUATOR_MODEL`) |
+| `--evaluator-model <id>` | the grading model (env: `COWORK_HARNESS_EVALUATOR_MODEL`). The evaluator gets the graders' credential (`COWORK_HARNESS_GRADER_AUTH`, see [cli.md](cli.md#graders)): with `CLAUDE_CODE_OAUTH_TOKEN` set, the token alone |
 | `--output-format json\|text` | critique's *report* format — the inner turns always speak JSON internally |
 | `--out <path>` | **also** write the selected-format report to this file (stdout unchanged). The format comes from `--output-format`, which defaults to **text** — so `--out report.json` writes TEXT unless you also pass `--output-format json`, and a downstream `json.load()` then fails with `Expecting value: line 1 column 1`, which reads as a corrupt report rather than a format mismatch. A mismatch between the extension and the format warns at argument-parse time, before the run spawns |
 | `--summary-out <path>` | **also** write a public-safe summary — no finding text — to this file; see [A public summary](#a-public-summary----summary-out). `--summary-include-cost` / `--summary-include-prompt-hash` add what it leaves out by default |

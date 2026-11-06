@@ -23,6 +23,7 @@
 // Grade values come from eval's `repRowValues` — one producer for both commands. Strings are NOT scrubbed
 // here; the flow writer scrubs every byte it writes.
 
+import { transportKey } from "../decide/llm-transport.js";
 import { basename } from "node:path";
 import type { Assertion, MetricUnavailable, RunResult, TokenUsage } from "../types.js";
 import {
@@ -298,14 +299,12 @@ export function judgeFieldsOf(r: RunResult | undefined): {
   jr: { judge_retries: number; unrecorded: boolean };
 } {
   const judges = combineJudges(authored(r));
-  const transports = [
-    ...new Map(
-      authored(r)
-        .map((g) => g.judgeTransport)
-        .filter((t): t is NonNullable<typeof t> => t !== undefined)
-        .map((t) => [JSON.stringify(t), t] as const),
-    ).values(),
-  ];
+  const all = authored(r)
+    .map((g) => g.judgeTransport)
+    .filter((t): t is NonNullable<typeof t> => t !== undefined);
+  // Keyed by `transportKey`: a kept grade from before the credential fields were recorded and a new one count as one
+  // transport when nothing else differs, rather than as two.
+  const transports = [...new Map(all.map((t) => [transportKey(t, all), t] as const)).values()];
   return { judges, transports, jr: judgeRetries(r) };
 }
 
@@ -502,10 +501,25 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
         arm_source_drift: true,
       });
     // 7. Invalid judge grade.
-    if (rep.bucket === "judge_invalid")
-      return errorRow("judge_invalid", `judge grade invalid after retry on assertion(s) ${rep.judgeInvalidAssertions.join(", ")}`, {
-        failure_rule: "judge_invalid",
-      });
+    if (rep.bucket === "judge_invalid") {
+      // A failed judge CALL graded nothing; a malformed grade is a reply the judge could not be read from. Same slot
+      // outcome (the errors row), different cause and fix: the row names which. `hillclimb regrade` never fills a
+      // judge_invalid slot, so the recovery is to run the slot again.
+      const failed = rep.judgeInvalidAssertions.map((i) => r?.assertions[i]?.judgeError).find((e) => e !== undefined);
+      const where = `assertion(s) ${rep.judgeInvalidAssertions.join(", ")}`;
+      const rerun = `re-run the slot with \`hillclimb run … --case ${ctx.caseId} --reps ${ctx.rep + 1}\` (one agent run; a \`regrade\` does not fill it)`;
+      return errorRow(
+        "judge_invalid",
+        failed
+          ? `judge call failed on ${where} (${failed.message}): no grade was made; ${rerun}`
+          : `judge grade invalid after retry on ${where} (malformed: the judge answered without a usable grade); ${rerun}`,
+        {
+          failure_rule: "judge_invalid",
+          ...(failed?.status !== undefined ? { judge_error_status: failed.status } : {}),
+          ...(failed !== undefined ? { judge_error_message: failed.message } : {}),
+        },
+      );
+    }
   }
 
   const g = gradeFor(r, ctx, rep, agentFailed);

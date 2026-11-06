@@ -2341,6 +2341,15 @@ export interface TokenUsage {
  *  blank line, so walking the document by `chars + 2` recovers each one. A part cut by the aggregate cap is
  *  hashed over its surviving prefix, and a part wholly past the cut is not listed. `chars` counts UTF-16
  *  code units (JavaScript string length), the unit the judge caps are measured in. */
+/** Why a judge produced no grade because its call failed: the API status and origin when the host `claude` reported
+ *  them (a 401 for a rejected credential, a 529 when overloaded), and one scrubbed line describing it. */
+export interface JudgeError {
+  kind: "call";
+  status?: number;
+  origin?: string;
+  message: string;
+}
+
 export interface JudgedDocFingerprint {
   sha256: string;
   sections: Array<{
@@ -2847,6 +2856,13 @@ export interface RunResult {
       settingsEnvOverride?: string[];
       settingsMaxEffort?: string;
       strictMcp?: false;
+      /** The one credential key the judge's call carried, by name, or `host-login` when it carried none. Absent on a
+       *  grade recorded before 4.15.0, and when several keys were passed (`credentialKeys`). */
+      credential?: string;
+      /** Under `COWORK_HARNESS_GRADER_AUTH=inherit` with several credential keys set: every key passed (names only). */
+      credentialKeys?: string[];
+      /** `inherit` when `COWORK_HARNESS_GRADER_AUTH=inherit` was set; absent for the default. */
+      graderAuth?: "inherit";
     };
     /** How many calls the judge took for this assert: 1 plus every retry it ran. For
      *  `semantic_matches`, 1 or 2 (a malformed first grade is retried once). For `semantic_pairwise`, 1 plus the
@@ -2861,10 +2877,14 @@ export interface RunResult {
     /** Identity (16 hex) of the grading-prompt TEMPLATE the judge used. A before/after comparison must
      *  refuse to mix hashes: a prompt change can shift every pass rate. Live lane only. */
     judgePromptHash?: string;
-    /** True when a `semantic_matches` grade was INVALID (malformed/ambiguous after a retry). Distinct
-     *  from a normal fail: an eval aggregator counts this rep as invalid (not a fail, not absent), so a
-     *  flaky judge can neither inflate a pass rate (by the rep vanishing) nor manufacture a regression. */
+    /** True when a judged assert has no valid grade: the judge's reply was malformed or ambiguous after a retry, or
+     *  its call failed (then `judgeError` says why). Distinct from a normal fail: an eval aggregator counts this rep
+     *  as invalid (not a fail, not absent), so a flaky judge can neither inflate a pass rate (by the rep vanishing)
+     *  nor manufacture a regression. */
     judgeInvalid?: boolean;
+    /** Set beside `judgeInvalid` when the judge's CALL failed, so no grade was made (rather than a grade that could
+     *  not be read). Live lane only. */
+    judgeError?: JudgeError;
     /** Per-reference outcomes of a `semantic_pairwise` assert, in the order its references were resolved. `status`
      *  `graded`: the judge compared the run with the frozen reference — `outcome` from the run's side, `value` 1 win
      *  / 0.5 tie / 0 loss / 0.5 both_bad, `order` which output the judge saw first, `positionFlip` when the two calls

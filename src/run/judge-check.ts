@@ -1,0 +1,71 @@
+import { probeGraderCredential, type GraderProbeOutcome, type GraderRole } from "../decide/llm-transport.js";
+
+// The pre-spend grader credential check that `eval` and `hillclimb run` make before any agent run. One real call per
+// distinct (role, model) through the exact grader path. It checks only the credential the graders use: doctor's
+// token check only asks whether some agent credential is set, and on the protocol tier (where the agent uses
+// ANTHROPIC_API_KEY) neither proves the agent's own key valid; the agent's first call does that, at $0 on a 401.
+
+/** One grader the run will call: its role (which sets `--effort`) and its model. */
+export interface GraderProbeTarget {
+  role: GraderRole;
+  model: string;
+}
+
+/** The check's result: a refusal stops the command before any agent spend; `lines` are printed either way. */
+export interface JudgeCheckOutcome {
+  refusal?: string;
+  lines: string[];
+}
+
+export type JudgeCheck = (targets: readonly GraderProbeTarget[]) => Promise<JudgeCheckOutcome>;
+
+/** `--no-judge-check`, or `COWORK_HARNESS_JUDGE_CHECK=0`. */
+export function judgeCheckDisabled(flag: boolean, env: NodeJS.ProcessEnv = process.env): boolean {
+  return flag || env.COWORK_HARNESS_JUDGE_CHECK === "0";
+}
+
+/** The model the LLM decider uses when no flag picks one (decider.ts: env, else its default). */
+export function llmDeciderModel(env: NodeJS.ProcessEnv = process.env): string {
+  return env.COWORK_HARNESS_DECIDER_MODEL || "sonnet";
+}
+
+const ROLE_NAME: Record<GraderRole, string> = { judge: "judge", decider: "LLM decider", evaluator: "critique evaluator" };
+
+function fmtCost(usd: number | undefined): string {
+  return usd === undefined ? "probe cost not reported" : `probe cost $${usd.toFixed(usd < 0.01 ? 4 : 3)}`;
+}
+
+/** Probe each distinct (role, model) in order; stop at the first refusal. */
+export async function runJudgeCheck(
+  targets: readonly GraderProbeTarget[],
+  probe: (model: string, role: GraderRole) => Promise<GraderProbeOutcome> = probeGraderCredential,
+): Promise<JudgeCheckOutcome> {
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  for (const t of targets) {
+    const key = `${t.role}\u0000${t.model}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const o = await probe(t.model, t.role);
+    const who = ROLE_NAME[t.role];
+    if (o.status === "ok") {
+      lines.push(`${who} credential: ${o.credential} works for ${o.model} (${fmtCost(o.costUsd)})`);
+      continue;
+    }
+    if (o.status === "warn") {
+      lines.push(
+        `${who} credential: could not check ${t.model} with ${o.credential} (${o.message}); proceeding. If it is the ` +
+          `credential, each grade fails as a judge call failure and the rep counts as invalid.`,
+      );
+      continue;
+    }
+    return {
+      lines,
+      refusal:
+        `the ${who}'s call was refused before any agent run (${o.message}; model ${t.model}, credential ${o.credential}). ` +
+        `Every grade would fail the same way, so nothing was run. Check the credential with \`cowork-harness doctor\`; ` +
+        `COWORK_HARNESS_GRADER_AUTH picks which credential the graders get.`,
+    };
+  }
+  return { lines };
+}

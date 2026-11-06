@@ -4670,6 +4670,24 @@
       "definitions.RegradedAssertion.judgeCostUsd": {
         "type": "number"
       },
+      "definitions.RegradedAssertion.judgeError": {
+        "type": "object",
+        "closed": true
+      },
+      "definitions.RegradedAssertion.judgeError.kind": {
+        "const": "call",
+        "required": true
+      },
+      "definitions.RegradedAssertion.judgeError.message": {
+        "type": "string",
+        "required": true
+      },
+      "definitions.RegradedAssertion.judgeError.origin": {
+        "type": "string"
+      },
+      "definitions.RegradedAssertion.judgeError.status": {
+        "type": "integer"
+      },
       "definitions.RegradedAssertion.judgeInvalid": {
         "type": "boolean"
       },
@@ -8734,8 +8752,10 @@
       "COWORK_HARNESS_FIDELITY",
       "COWORK_HARNESS_FORBID_SPAWN",
       "COWORK_HARNESS_GITSET",
+      "COWORK_HARNESS_GRADER_AUTH",
       "COWORK_HARNESS_HEARTBEAT_MS",
       "COWORK_HARNESS_HILLCLIMB_SNAPSHOTS",
+      "COWORK_HARNESS_JUDGE_CHECK",
       "COWORK_HARNESS_JUDGE_MODEL",
       "COWORK_HARNESS_LEG_SNAPSHOT_MAX_BYTES",
       "COWORK_HARNESS_LINT_EXTRA_FINDINGS",

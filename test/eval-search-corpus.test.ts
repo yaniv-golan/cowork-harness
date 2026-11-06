@@ -130,6 +130,7 @@ const deps = (runJob: (s: EvalJobSpec) => Promise<RunResult>, log: string[] = []
   runJob,
   tokenCheck: () => ({ id: "token", title: "Auth token", status: "ok" as const, detail: "found", required: true }),
   isolationCheck: () => undefined,
+  judgeCheck: async () => ({ lines: [] }),
   log: (s: string) => log.push(s),
   evalId: "sc1",
   now: () => new Date("2026-10-15T00:00:00Z"),

@@ -4,7 +4,7 @@
 // assert whose evidence is unavailable refuses before any judge call, with the same typed reasons.
 
 import { createHash } from "node:crypto";
-import { COMPOSER_ID, composeJudgedDocument, judgedOpts, semanticRefusal, type AssertContext } from "../assert.js";
+import { COMPOSER_ID, composeJudgedDocument, judgedOpts, recordJudgeCallError, semanticRefusal, type AssertContext } from "../assert.js";
 import { finalizeRationale } from "../decide/semantic-judge.js";
 import { PAIRWISE_PROMPT_HASH, PairwiseJudgeInvalid, type PairwiseJudge } from "../decide/pairwise-judge.js";
 import { addCost, addTokenUsage } from "../decide/usage.js";
@@ -251,7 +251,8 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
         usage = addTokenUsage(usage, e.usage);
         model = e.model ?? model;
         // The message can quote the judge's reply, which can quote either output: scrubbed before it is stored or warned.
-        const why = scrub(e.message.split("\n")[0]!, secrets);
+        // A failed call names its cause (it never quotes an output); anything else is a reply that could not be read.
+        const why = e.call ? `judge call failed (${scrub(e.call.summary(), secrets)})` : scrub(e.message.split("\n")[0]!, secrets);
         if (!gate) {
           // A metric-only reference: this comparison is lost, the verdict is not.
           outcomes.push({
@@ -268,7 +269,10 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
           continue;
         }
         ctx.judgeInvalid.add(a);
-        say(`::warning:: semantic_pairwise grade invalid after retry (rep counts as invalid, not passed): ${why}\n`);
+        if (e.call) {
+          recordJudgeCallError(ctx, a, e.call, secrets);
+          say(`::warning:: semantic_pairwise ${why} — not a grade; rep counts as invalid, not passed\n`);
+        } else say(`::warning:: semantic_pairwise grade invalid after retry (rep counts as invalid, not passed): ${why}\n`);
         break;
       }
     }

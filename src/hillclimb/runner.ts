@@ -9,6 +9,7 @@
 // The job runner is injected: this module never spawns an agent. The CLI's real runner builds each JobReport
 // from a kept run dir; tests pass recorded excerpts.
 
+import { graderCredentialHint } from "../decide/llm-transport.js";
 import { basename, dirname, join, resolve } from "node:path";
 import { InterruptedError } from "../termination.js";
 import { createHash } from "node:crypto";
@@ -416,6 +417,7 @@ async function run(
     let fail = 0;
     let stepFailures = 0;
     let authHinted = false;
+    let judgeAuthHinted = false;
     const t0 = now();
     const progress = () => {
       const n = ok + fail;
@@ -545,9 +547,15 @@ async function run(
         fail++;
         writer.appendError(out.row);
         say(`  [${v}] ${c.stem} rep${rep} FAILED: ${String(out.row.error)}`);
-        if (!authHinted && deps.authHint && (out.row.meta as Record<string, unknown> | undefined)?.failure_rule === "auth") {
+        const meta = out.row.meta as Record<string, unknown> | undefined;
+        if (!authHinted && deps.authHint && meta?.failure_rule === "auth") {
           authHinted = true;
           say(`  [${v}] ${deps.authHint(c)}`);
+        }
+        // The judge's credential was refused: the same once-per-pass hint, naming the credential the graders got.
+        if (!judgeAuthHinted && (meta?.judge_error_status === 401 || meta?.judge_error_status === 403)) {
+          judgeAuthHinted = true;
+          say(`  [${v}] ${graderCredentialHint()}`);
         }
         return;
       }

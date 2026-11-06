@@ -261,6 +261,8 @@ cat "${ENVELOPE}"
       CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
       STUB_ARGV: join(work, "argv"),
       COWORK_HARNESS_CLAUDE_BIN: judge,
+      // These count the judge's calls exactly: the pre-spend credential probe (tested on its own) would add one.
+      COWORK_HARNESS_JUDGE_CHECK: "0",
       JUDGE_CALLS: calls,
     };
     const cli = (...a: string[]) =>
@@ -376,6 +378,8 @@ cat "${ENVELOPE}"
       CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
       STUB_ARGV: join(work, "argv"),
       COWORK_HARNESS_CLAUDE_BIN: judge,
+      // These count the judge's calls exactly: the pre-spend credential probe (tested on its own) would add one.
+      COWORK_HARNESS_JUDGE_CHECK: "0",
       JUDGE_CALLS: join(work, "judge-calls"),
     };
     const cli = (...a: string[]) =>
@@ -450,6 +454,8 @@ cat "${ENVELOPE}"
       CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
       STUB_ARGV: join(work, "argv"),
       COWORK_HARNESS_CLAUDE_BIN: judge,
+      // These count the judge's calls exactly: the pre-spend credential probe (tested on its own) would add one.
+      COWORK_HARNESS_JUDGE_CHECK: "0",
       JUDGE_CALLS: calls,
     };
     const cli = (...a: string[]) =>

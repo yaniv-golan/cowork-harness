@@ -76,7 +76,8 @@ scenario's `timeout_ms` lowered to it, a tie going to the runner; no judge start
 running finishes; reaching it is an `errors.jsonl` `timeout` row, while a shorter `timeout_ms` of the scenario's own
 firing first is a scored `errored_agent` row), `--model ID` and `--judge-model ID` (concrete ids; an alias is refused),
 `--effort LEVEL` (below),
-`--case ID`, `--skill NAME`, `--approve-harness`, `--ablate`, `--dry-run`, `--no-copy-inputs`, `--decider-cmd CMD` or
+`--case ID`, `--skill NAME`, `--approve-harness`, `--ablate`, `--dry-run`, `--no-copy-inputs`, `--no-judge-check` (skip the
+one real call that checks the graders' credential before the first agent run), `--decider-cmd CMD` or
 `--decider-dir DIR`, `--output-format text|json`, `--dotenv FILE`, `--run-dir DIR`.
 
 - **`--search-corpus POOL`** (with `--search-corpus-miss`, `--search-corpus-min-score`; hostloop) serves every rep's
@@ -502,7 +503,7 @@ sub-agent's turns after its dispatch. Before committing a flow dir, check what `
 - **`errors.jsonl` holds what is not the skill's score**, by `failure_class`: `timeout` (raise `--timeout-s` if
   it persists), `error` (an infrastructure fault, a run from another snapshot than the variant's, or a grade
   that does not line up with the scenario), `serving_substitution` (the wrong model, no evidence of the
-  pinned one, or another effort sent than requested — `effort_not_sent`: a serving problem, not the skill), `judge_invalid` (an unusable judge grade). An error row
+  pinned one, or another effort sent than requested — `effort_not_sent`: a serving problem, not the skill), `judge_invalid` (no usable judge grade: the row's `error` says whether the judge's call failed — then `meta.judge_error_status` / `meta.judge_error_message` — or its grade was malformed; either way the slot re-runs with `hillclimb run <scenarios> --flow <dir> --variant <v> --case <id> --reps <rep+1>`, and a `regrade` does not fill it). An error row
   never occupies its slot: the next pass re-runs it (see resume above).
 - **`meta.run_dir`** is one rep's kept run (`result.json`, transcript, events), outside the flow dir, for
   digging into a single rep.

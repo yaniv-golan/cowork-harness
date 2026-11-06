@@ -10,6 +10,7 @@ export const HILLCLIMB_RUN_BOOLEAN_FLAGS = [
   "--allow-confounded-pool",
   "--allow-mixed-pool",
   "--allow-mixed-search",
+  "--no-judge-check",
 ] as const;
 export const HILLCLIMB_RUN_VALUE_FLAGS = [
   "--flow",
@@ -108,6 +109,9 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
   --ablate                run with the skill removed (the null run); use a sibling flow dir
   --dry-run               print the resolved scope, gate status and estimate; spend nothing
   --judge-model ID        concrete judge model for every semantic assertion
+  --no-judge-check        skip the pre-spend grader credential check (also COWORK_HARNESS_JUDGE_CHECK=0): by
+                          default one tiny real call per judge / LLM decider model, before any agent run,
+                          refusing on a 401/403/404 or a spent quota
   --skill NAME            the plugin skill whose invocation the rows record (skill_invoked): a skill
                           directory's name or its registered name; needed when the plugin registers
                           several skills. It joins the harness sha, so changing it needs

@@ -11,6 +11,7 @@ import type {
   ToolNotCalledObject,
   TokenUsage,
   JudgedDocFingerprint,
+  JudgeError,
   AnswerRule,
 } from "./types.js";
 import { checkGatesAllScripted } from "./gates-scripted.js";
@@ -32,6 +33,8 @@ import { extractComputerLinks, resolveComputerLink, type LinkResolutionContext }
 import { scrub } from "./secrets.js";
 import { validateAgainstSchema } from "./json-schema.js";
 import { finalizeRationale } from "./decide/semantic-judge.js";
+import { JudgeCallError } from "./decide/judge-call-error.js";
+import { graderCredentialHint } from "./decide/llm-transport.js";
 import { scrubForTerminal, warn } from "./io.js";
 import {
   DEFAULT_AUTHORED_PER_FILE_BYTES,
@@ -462,6 +465,12 @@ export interface AssertContext {
    *  populated by runSemanticJudges. Distinct from "not graded": the check surfaces `judgeInvalid:true` so
    *  a consumer counts the rep as invalid, never silently drops it (which would inflate the score). */
   judgeInvalid?: Set<Assertion>;
+  /** The judged asserts in `judgeInvalid` whose judge CALL failed (no grade was made), with why. Populated by the
+   *  pre-passes; surfaced as `RunResult.assertions[].judgeError`. */
+  judgeErrors?: Map<Assertion, JudgeError>;
+  /** For a call the API refused for its credential (401/403): which credential the graders used. Live lane only,
+   *  read by the check message; not persisted. */
+  judgeErrorHints?: Map<Assertion, string>;
   /** Per-assert facts about the DOCUMENT that was composed for a `semantic_matches` grade — populated by
    *  runSemanticJudges, which is the only place that knows them (composing is where the caps bite).
    *  `evidenceCut` is true when the aggregate `JUDGE_DOC_CAP` truncated the authored-file evidence (or the
@@ -1145,6 +1154,28 @@ export function semanticRefusal(
   return undefined;
 }
 
+/** Record a failed judge call on `a` (both pre-passes): the persisted `judgeError` (scrubbed, one line) and, for a
+ *  credential the API refused, the hint the check message prints. */
+export function recordJudgeCallError(ctx: AssertContext, a: Assertion, call: JudgeCallError, secrets: readonly string[]): void {
+  const info = call.info((s) => scrub(s, [...secrets]));
+  (ctx.judgeErrors ??= new Map()).set(a, {
+    kind: "call",
+    ...(info.status !== undefined ? { status: info.status } : {}),
+    ...(info.origin !== undefined ? { origin: info.origin } : {}),
+    message: info.message,
+  });
+  if (call.status === 401 || call.status === 403) (ctx.judgeErrorHints ??= new Map()).set(a, graderCredentialHint());
+}
+
+/** The check message for a judged assert with no valid grade: a failed call names its cause; anything else is a reply
+ *  that could not be read. */
+function judgeInvalidMessage(a: Assertion, ctx: AssertContext): string {
+  const err = ctx.judgeErrors?.get(a);
+  if (!err) return "judge grade INVALID (malformed/ambiguous after retry) — rep counts as invalid, not a pass";
+  const hint = ctx.judgeErrorHints?.get(a);
+  return `judge call FAILED (${err.message}) — no grade was made; rep counts as invalid, not a pass` + (hint ? `. ${hint}` : "");
+}
+
 /** LIVE-ONLY async pre-pass. Grade every `semantic_matches` assert (via the supplied judge) and stash
  *  per-claim results in `ctx.semanticResults`, so the SYNCHRONOUS evaluate()/check() can read them. Call
  *  BEFORE evaluate() on the LIVE lane only — the replay lane strips `semantic_matches` (LIVE_ONLY_KEYS)
@@ -1238,25 +1269,37 @@ export async function runSemanticJudges(
     const j = override && judgeFor ? judgeFor(override) : judge;
     // Grade with ONE retry — a stochastic judge sometimes emits a malformed grade. If it still throws,
     // mark the rep INVALID (not absent): the check surfaces it so a consumer counts it, never drops it.
+    // A failed CALL (the judge wraps its transport's throw in a JudgeCallError) is not a malformed grade: it is
+    // recorded as `judgeError`, and one that would fail the same way again (a rejected credential) is not retried.
     let graded: SemanticClaimResult[] | undefined;
     let cost: number | undefined; // summed over BOTH attempts — a retried grade is paid twice
     let tokens: TokenUsage | undefined; // same basis as `cost`
     let attempts = 0;
     for (let attempt = 0; attempt < 2 && graded === undefined; attempt++) {
       attempts = attempt + 1;
+      let stop = false;
       try {
         graded = await j(sentRubric, answer);
       } catch (e) {
-        if (attempt === 1) {
+        const call = e instanceof JudgeCallError ? e : undefined;
+        stop = call !== undefined && !call.retryable;
+        if (attempt === 1 || stop) {
           ctx.judgeInvalid.add(a);
-          warn(
-            `::warning:: semantic judge grade invalid after retry (rep counts as invalid, not passed): ${(e as Error).message.split("\n")[0]}\n`,
-          );
+          if (call) {
+            recordJudgeCallError(ctx, a, call, secrets);
+            warn(
+              `::warning:: semantic judge call failed (${scrub(call.summary(), secrets)}) — not a grade; rep counts as invalid, not passed\n`,
+            );
+          } else
+            warn(
+              `::warning:: semantic judge grade invalid after retry (rep counts as invalid, not passed): ${(e as Error).message.split("\n")[0]}\n`,
+            );
         }
       } finally {
         if (typeof j.lastCostUsd === "number") cost = (cost ?? 0) + j.lastCostUsd;
         tokens = addTokenUsage(tokens, j.lastUsage);
       }
+      if (stop) break;
     }
     // The judge was handed `answer` — fingerprint exactly that, whatever the grade's outcome.
     ctx.judgedDocs.set(a, built.fingerprint);
@@ -3086,6 +3129,7 @@ function check(
   judgedDoc?: JudgedDocFingerprint;
   judgePromptHash?: string;
   judgeInvalid?: boolean;
+  judgeError?: JudgeError;
   semanticEvidence?: SemanticEvidence;
 } {
   const results: KeyResult[] = [];
@@ -3180,7 +3224,7 @@ function check(
     // so they are reported even when the pre-pass never ran (verify-run) instead of "judge not run".
     const refusal = ctx.semanticRefused?.get(a) ?? (judged ? semanticRefusal(a, ctx, docInfo) : forkRecordRefusal(a, ctx));
     if (ctx.judgeInvalid?.has(a)) {
-      results.push(fail("judge grade INVALID (malformed/ambiguous after retry) — rep counts as invalid, not a pass"));
+      results.push(fail(judgeInvalidMessage(a, ctx)));
     } else if (refusal) {
       semanticEvidence = refusal.semanticEvidence;
       results.push(fail(refusal.message));
@@ -3234,7 +3278,7 @@ function check(
     const gated = (outcomes ?? []).filter((o) => o.gate !== false);
     const unreadable = gated.filter((o) => o.status === "missing" || o.status === "integrity" || o.status === "invalid");
     if (ctx.judgeInvalid?.has(a)) {
-      results.push(fail("judge grade INVALID (malformed/ambiguous after retry) — rep counts as invalid, not a pass"));
+      results.push(fail(judgeInvalidMessage(a, ctx)));
     } else if (refusal) {
       semanticEvidence = refusal.semanticEvidence;
       results.push(fail(refusal.message));
@@ -5080,6 +5124,7 @@ function check(
   const isJudged = judgedOpts(a) !== undefined;
   const judgeModel = isJudged ? ctx.judgeModels?.get(a) : undefined;
   const judgeInvalid = isJudged && ctx.judgeInvalid?.has(a) ? true : undefined;
+  const judgeError = judgeInvalid ? ctx.judgeErrors?.get(a) : undefined;
   const judgeCostUsd = isJudged ? ctx.judgeCosts?.get(a) : undefined;
   const judgeUsage = isJudged ? ctx.judgeUsages?.get(a) : undefined;
   const judgedDoc = isJudged ? ctx.judgedDocs?.get(a) : undefined;
@@ -5101,6 +5146,7 @@ function check(
     ...(judgeTransport ? { judgeTransport } : {}),
     ...(judgeAttempts !== undefined ? { judgeAttempts } : {}),
     ...(judgeInvalid ? { judgeInvalid } : {}),
+    ...(judgeError ? { judgeError } : {}),
     ...(semanticEvidence ? { semanticEvidence } : {}),
   });
   const firstFail = results.find((r): r is { pass: false; message: string } => !r.pass);

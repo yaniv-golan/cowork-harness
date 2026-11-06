@@ -5,6 +5,7 @@
 // the schedule runs through an injected `runJob` (the CLI passes the same per-scenario runner `run` uses; the
 // tests pass a fake), each finished job appends one runs.jsonl line, and the report is written by the same
 // function `eval report` calls.
+import { judgeCheckDisabled, llmDeciderModel, type GraderProbeTarget, type JudgeCheck } from "../run/judge-check.js";
 import { pairwiseRefsRefusal, scenarioPairwiseSetup } from "../refs/preflight.js";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -113,6 +114,8 @@ export interface EvalArgs {
   deciderDir?: string;
   /** `--dry-run`: plan only — print the cost and power plan, run nothing, create no eval dir. */
   dryRun: boolean;
+  /** `--no-judge-check` (or COWORK_HARNESS_JUDGE_CHECK=0): skip the pre-spend grader credential check. */
+  noJudgeCheck: boolean;
   /** `--target-effect`, in percentage points (30 = a 30-point change). Only with `--dry-run`. */
   targetEffectPp?: number;
   /** `--max-budget-usd`: a pre-flight refusal from cost history, before any run (never a mid-run stop). */
@@ -305,6 +308,7 @@ export function parseEvalArgs(argv: readonly string[]): EvalArgs {
     ...(deciderCmd !== undefined ? { deciderCmd } : {}),
     ...(deciderDir !== undefined ? { deciderDir } : {}),
     dryRun,
+    noJudgeCheck: judgeCheckDisabled(booleans.has("--no-judge-check")),
     ...(targetEffectPp !== undefined ? { targetEffectPp } : {}),
     ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
     globals,
@@ -321,6 +325,9 @@ export interface EvalDeps {
   /** The host-`claude` isolation preflight (`isolationRefusal` in src/decide/llm-transport.ts — the CLI passes it):
    *  the refusal message, or undefined. Required, like `tokenCheck`, so no caller skips it by omission. */
   isolationCheck: () => string | undefined;
+  /** The pre-spend grader credential check (`runJudgeCheck` in src/run/judge-check.ts — the CLI passes it): one real
+   *  call per grader model the eval uses, before any agent run. Required, like `isolationCheck`. */
+  judgeCheck: JudgeCheck;
   log: (s: string) => void;
   /** Test seams. */
   evalId?: string;
@@ -525,6 +532,8 @@ interface PreparedArms {
   sigs: Array<Record<string, string>>;
   skill: string | null;
   evalFiles: string[];
+  /** The graders the eval will call (empty when no scenario grades with an LLM). */
+  graderTargets: GraderProbeTarget[];
   plan?: EvalPlan;
   searchCorpus?: PreparedSearchCorpus;
 }
@@ -830,11 +839,25 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
     const iso = deps.isolationCheck();
     if (iso) throw new UsageError(iso);
   }
+  // The graders the eval will call, for the pre-spend credential check (run by the caller: it is async, and a dry
+  // run skips it). Each judge pin's model, then the LLM decider's when a scenario falls back to it.
+  const graderTargets: GraderProbeTarget[] = judgePins.resolved.map((p) => ({ role: "judge" as const, model: p.model }));
+  if (llmDecider && scenarios.some((s) => s.scenario.on_unanswered === "llm"))
+    graderTargets.push({ role: "decider", model: llmDeciderModel() });
 
   // `--max-budget-usd`: the batch gate `record` uses, over this schedule (2 x reps runs of every scenario).
   if (args.maxBudgetUsd !== undefined) budgetGate(args, deps, indexRows, runsDir, plan!);
 
-  return { snaps, sessions, sigs, skill, evalFiles, ...(plan ? { plan } : {}), ...(searchCorpus ? { searchCorpus } : {}) };
+  return {
+    snaps,
+    sessions,
+    sigs,
+    skill,
+    evalFiles,
+    graderTargets,
+    ...(plan ? { plan } : {}),
+    ...(searchCorpus ? { searchCorpus } : {}),
+  };
 }
 
 /** The eval's `--max-budget-usd` pre-flight. Same decision as `record`'s batch gate (`checkBatchBudget`: the
@@ -985,6 +1008,8 @@ export async function planEvalDryRun(args: EvalArgs, deps: EvalDeps): Promise<{ 
         `the temp dir ${tildeify(snapRoot)} is inside a git work tree, where the arm snapshots would hash as empty: set TMPDIR to a directory outside any git work tree`,
       );
     const prep = prepareArms(args, deps, ctx, snapRoot, "plan");
+    // The credential check is a real (billed) call, and a dry run promises no spend.
+    if (prep.graderTargets.length) ctx.say("judge credential: not probed (dry run)");
     return { plan: prep.plan! };
   } finally {
     rmSync(snapRoot, { recursive: true, force: true });
@@ -1022,12 +1047,22 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
   }
 
   async function afterEvalDir(): Promise<EvalOutcome> {
-    const { snaps, sessions, sigs, skill, evalFiles, searchCorpus } = prepareArms(args, deps, ctx, evalDir, "run");
+    const { snaps, sessions, sigs, skill, evalFiles, searchCorpus, graderTargets } = prepareArms(args, deps, ctx, evalDir, "run");
     // Everything above is synchronous, so a signal that arrived during it is still pending: yield once so the
     // handler runs now — discarding the snapshots and exiting — rather than after the manifest, when the eval
     // would be kept as started with no run. Parking covers a handler that is still finishing.
     await new Promise<void>((res) => setImmediate(res));
     await parkIfTerminating();
+    // The last refusal before the manifest: does the graders' credential work? Every grade would otherwise fail
+    // the same way, after its agent run was paid for.
+    if (graderTargets.length) {
+      if (args.noJudgeCheck) say("judge credential: not probed (--no-judge-check / COWORK_HARNESS_JUDGE_CHECK=0)");
+      else {
+        const jc = await deps.judgeCheck(graderTargets);
+        for (const l of jc.lines) say(l);
+        if (jc.refusal) throw new UsageError(jc.refusal);
+      }
+    }
 
     // Manifest.
     const manifestScenarios: ManifestScenario[] = scenarios.map((s) => ({

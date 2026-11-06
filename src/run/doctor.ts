@@ -21,6 +21,7 @@ import { decideLoopFromBaseline } from "../loop-decision.js";
 import { limaPath, vmStatus, instanceName, vmProvisioned } from "../runtime/lima.js";
 import { fail, isJsonOutput, jsonPayloadEnvelope } from "./envelope.js";
 import { writeAllSync } from "../io.js";
+import { graderCredential } from "../decide/llm-transport.js";
 import { pinnedDigestFor, resolveAgentImage, resolveContainerRuntime, resolveProxyImage } from "../runtime/agent-image.js";
 import { deviceImageStatus, dockerImageId } from "../runtime/device-image.js";
 
@@ -442,6 +443,44 @@ export const realProbe: DoctorProbe = {
   },
 };
 
+/** Which credential the graders (judge, LLM decider, critique evaluator) are given, and which one the agent
+ *  authenticates with at `tier`, by name only. $0: nothing is called. It warns only when the two can differ: on
+ *  protocol (the agent inherits the operator's env, where ANTHROPIC_API_KEY wins) with an OAuth token and another key
+ *  set, or under `COWORK_HARNESS_GRADER_AUTH=inherit` with several keys. Whether the credential WORKS is checked by
+ *  the one real call `eval` and `hillclimb run` make before their first agent run. */
+export function graderCredentialCheck(tier: Tier, env: NodeJS.ProcessEnv = process.env): DoctorCheck {
+  let g: ReturnType<typeof graderCredential>;
+  try {
+    g = graderCredential(env);
+  } catch (e) {
+    return { id: "grader-credential", title: "Grader credential", status: "fail", detail: (e as Error).message, required: false };
+  }
+  const set = (["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"] as const).filter((k) => !!env[k]);
+  // The agent: on protocol the operator's env as is (the API key first, as measured); every other tier gets the
+  // OAuth token alone when it is set.
+  const agent = tier === "protocol" ? set[0] : env.CLAUDE_CODE_OAUTH_TOKEN ? "CLAUDE_CODE_OAUTH_TOKEN" : set[0];
+  const graders = g.passed.length ? g.passed.join(" or ") : "the host claude's own login";
+  const mismatch = g.passed.length > 1 || (agent !== undefined && g.passed.length === 1 && g.passed[0] !== agent);
+  return {
+    id: "grader-credential",
+    title: "Grader credential",
+    status: mismatch ? "warn" : "ok",
+    detail:
+      `graders use ${graders}; the agent at ${tier} uses ${agent ?? "no credential variable"}` +
+      (g.dropped.length ? `; set but not passed to the graders: ${g.dropped.join(", ")}` : "") +
+      (g.mode === "inherit" ? " (COWORK_HARNESS_GRADER_AUTH=inherit)" : ""),
+    ...(mismatch
+      ? {
+          remedy:
+            g.passed.length > 1
+              ? "under COWORK_HARNESS_GRADER_AUTH=inherit the host claude picks among several keys; unset it, or keep one key, so grading is billed where you expect"
+              : `grading is billed to ${g.passed[0]} and the agent to ${agent}; on protocol that is by design (the agent inherits your env). Unset the key you do not mean to use, or set COWORK_HARNESS_GRADER_AUTH=inherit to give the graders every key`,
+        }
+      : {}),
+    required: false,
+  };
+}
+
 /** The agent-credential check for one tier — the `token` row of `runDoctorChecks`, and the ONLY credential
  *  detector: `eval` refuses before its first run on exactly this decision, so the two can never disagree
  *  about a tier. Refuse on `status === "fail"`; `warn` (protocol with a Keychain login) is runnable. */
@@ -829,6 +868,7 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
   }
 
   checks.push(tokenCheck(tier, probe));
+  checks.push(graderCredentialCheck(tier));
 
   const bl = probe.baseline();
   checks.push({

@@ -11,6 +11,7 @@
 // --json-schema`, envelope field `structured_output`), which is what this module validates; free prose is never
 // parsed for a verdict (build-eval.md l.84 prefers structured outputs over "respond with only JSON").
 
+import { JudgeCallError, asJudgeCallError } from "./judge-call-error.js";
 import { createHash, randomBytes } from "node:crypto";
 import { addCost, addTokenUsage, usageCostUsd, usageTokens } from "./usage.js";
 import type { TokenUsage } from "../types.js";
@@ -193,6 +194,8 @@ export class PairwiseJudgeInvalid extends Error {
     readonly model: string | undefined,
     /** How many of the calls were retries. */
     readonly retries: number = 0,
+    /** Set when the judge's call itself failed (no reply was read): the grade did not happen, it was not malformed. */
+    readonly call?: JudgeCallError,
   ) {
     super(message);
     this.name = "PairwiseJudgeInvalid";
@@ -218,17 +221,23 @@ export function makePairwiseJudge(opts: { model: string; complete: CompleteStruc
         outputB: candidateIsA ? input.reference : input.candidate,
       });
       let lastError: Error | undefined;
+      let call: JudgeCallError | undefined; // set when the LAST attempt's call itself failed (no reply to read)
       for (let attempt = 0; attempt < 2; attempt++) {
         if (attempt > 0) retries++;
-        // A transport failure (timeout, usage limit, a non-zero exit after its own retries) is a grade that did not
-        // happen: retried once, then invalid — never a throw that takes down a run the agent already paid for.
+        // A transport failure (timeout, usage limit, an API error, a non-zero exit after its own retries) is a grade
+        // that did not happen: retried once unless it would fail the same way again (a 401, a usage limit), then
+        // invalid — never a throw that takes down a run the agent already paid for.
         let r: StructuredResult;
         try {
           r = await opts.complete({ system, user, schema: PAIRWISE_JSON_SCHEMA, model: opts.model });
         } catch (e) {
-          lastError = e as Error;
+          const wrapped = asJudgeCallError(e);
+          if (!(wrapped instanceof JudgeCallError)) throw wrapped; // an interrupt reaches the run's own handler
+          lastError = call = wrapped;
+          if (!wrapped.retryable) break;
           continue;
         }
+        call = undefined;
         cost = addCost(cost, usageCostUsd(r.usage));
         tokens = addTokenUsage(tokens, usageTokens(r.usage));
         model = r.model;
@@ -241,11 +250,14 @@ export function makePairwiseJudge(opts: { model: string; complete: CompleteStruc
         }
       }
       throw new PairwiseJudgeInvalid(
-        `${lastError?.message ?? "pairwise judge: invalid reply"} (after one retry)`,
+        call
+          ? `pairwise judge call failed (${call.summary()})${call.retryable ? " (after one retry)" : ""}`
+          : `${lastError?.message ?? "pairwise judge: invalid reply"} (after one retry)`,
         cost,
         tokens,
         model,
         retries,
+        call,
       );
     };
 

@@ -4,6 +4,7 @@ import type { Complete } from "./decider.js";
 import type { SemanticClaimResult, SemanticJudge } from "../assert.js";
 import { scrub } from "../secrets.js";
 import { usageCostUsd, usageTokens } from "./usage.js";
+import { asJudgeCallError } from "./judge-call-error.js";
 
 // A semantic judge grades a FIXED, authored rubric against a run's answer, one claim at a time, by
 // INDEX. It reuses the same host `claude -p --output-format json` transport as the LLM decider
@@ -274,7 +275,14 @@ export function makeSemanticJudge(opts: { model?: string; complete?: Complete } 
     // before parsing so a call whose grade then fails to parse still reports what it spent.
     judge.lastCostUsd = undefined;
     judge.lastUsage = undefined;
-    const { text, model: resolvedModel, usage } = await complete(buildJudgePrompt(rubric, answer), requestedModel);
+    // A throw from the call itself is a call that did not happen, not a malformed grade: mark it as such.
+    let reply: Awaited<ReturnType<Complete>>;
+    try {
+      reply = await complete(buildJudgePrompt(rubric, answer), requestedModel);
+    } catch (e) {
+      throw asJudgeCallError(e);
+    }
+    const { text, model: resolvedModel, usage } = reply;
     judge.lastCostUsd = usageCostUsd(usage);
     judge.lastUsage = usageTokens(usage);
     // Stash the per-call RESOLVED model onto the judge (mutated synchronously before this async fn

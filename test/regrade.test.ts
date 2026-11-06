@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { JudgeCallError } from "../src/decide/judge-call-error.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
@@ -1181,6 +1182,35 @@ describe("regrade: spend, provenance and invalid grades", () => {
     expect(file).toMatchObject({ regraded: 1, invalidGrades: 1 });
     expect(file.assertions[0].judgeInvalid).toBe(true);
     expect(file.judgeCostUsd).toBeCloseTo(0.004); // two attempts
+    // A throw from the judge itself (not its transport call) is a grade that could not be made sense of: malformed.
+    expect(regradeTextReport(out).join("\n")).toContain("1 ungraded (malformed ×1 — not a verdict on the run)");
+  });
+
+  it("a judge whose call failed (a 401) is summarised as a failed call, not as malformed, at one call", async () => {
+    const k = await keptRun({ author: writeReport });
+    let n = 0;
+    const refused = (o?: { model?: string }): SemanticJudge => {
+      const j: SemanticJudge = async () => {
+        n++;
+        throw new JudgeCallError(
+          Object.assign(new Error("Invalid API key"), {
+            status: 401,
+            origin: "first_party",
+            apiMessage: "Invalid API key",
+            retryable: false,
+          }),
+        );
+      };
+      j.model = o?.model ?? "claude-opus-4-8";
+      j.promptHash = JUDGE_PROMPT_HASH;
+      return j;
+    };
+    const out = await regradeRuns(opts(k, { makeJudge: refused }));
+    if (!out.ok) throw new Error(out.message);
+    expect(n).toBe(1); // not retried
+    const file = JSON.parse(readFileSync(out.runs[0].regradeFile, "utf8"));
+    expect(file.assertions[0]).toMatchObject({ judgeInvalid: true, judgeError: { kind: "call", status: 401 } });
+    expect(regradeTextReport(out).join("\n")).toContain("1 ungraded (judge call failed (API 401 ×1) — not a verdict on the run)");
   });
 
   it("a secret only in the rubric reaches none of the outputs: file, envelope, text report", async () => {

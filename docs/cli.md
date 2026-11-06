@@ -413,10 +413,13 @@ was asked for (`--judge-model`, else the assert's `judge_model`, else the defaul
   refused its evidence called no judge: it is neither priced nor unpriced, and the text report reads
   `none (no judge call)` for a run with no call. The envelope's top-level pair covers every run dir, and like each
   `runs[]` entry it never counts an entry a fill kept from the live run (`copied`). The file and each `runs[]`
-  entry also carry `invalidGrades`: asserts the judge could not grade (it failed twice — an outage or a malformed
-  grade), and the file carries `regraded`, the number of asserts graded. A round in which every grade is invalid is still written, with
+  entry also carry `invalidGrades`: asserts the judge could not grade — its call failed (an API error such as a
+  401, a timeout), or it answered twice without a usable grade (malformed) — and the file carries `regraded`, the
+  number of asserts graded. A failed call is recorded on its assert as `judgeError` (`{kind: "call", status?,
+  origin?, message}`); a malformed grade carries none. A round in which every grade is invalid is still written, with
   `invalidGrades` equal to `regraded`, so a judge outage can be told apart from a failing grade. The text report
-  counts invalid grades separately from failures and prints the judge spend per run and in total.
+  counts invalid grades separately from failures, split by cause (`judge call failed (API 401 ×2)`, `malformed ×1`),
+  and prints the judge spend per run and in total.
 - **Judge model.** `--judge-model` grades every assert with one model; without it each assert's `judge_model`,
   else `COWORK_HARNESS_JUDGE_MODEL`, else the default applies. Either way the model must name exactly one model —
   an alias such as `opus` is refused, because it resolves to whatever is newest at call time.
@@ -1157,12 +1160,25 @@ Most runs need **none** of these — the defaults are correct. They're grouped b
 - `COWORK_HARNESS_DECIDER_DIR_TIMEOUT_MS` — the `--decider-dir` per-gate backstop (default 600 s; see [decider-dir.md](./decider-dir.md#notes-and-tuning)). A `--decider-dir` timeout ends the run as an unanswered-gate partial with `errorSource: "decider_timeout"`, `result.json` written, exit 2.
 - `COWORK_HARNESS_DECIDER_CMD_TIMEOUT_MS` — backstop a hung `--decider-cmd` helper (default 600 s, fail loud). A timeout ends the run as an unanswered-gate partial with `errorSource: "decider_timeout"`, `result.json` written, exit 2.
 - `COWORK_HARNESS_LLM_TIMEOUT_MS` — backstop a hung `--decider-llm` model call (default 600 s, fail loud).
-- `COWORK_HARNESS_LLM_RETRIES` — bounded retries for a transient non-zero `claude -p` exit in the `--decider-llm` transport (default 2, clamped to 0–10; set `0` to disable, e.g. deterministic CI; a usage/quota-limit exit is treated as non-retryable and bypasses this budget — retrying a spent quota is futile).
+- `COWORK_HARNESS_LLM_RETRIES` — bounded retries for a transient non-zero `claude -p` exit in the host-`claude` transport the LLM decider, the judges and the critique evaluator share (default 2, clamped to 0–10; set `0` to disable, e.g. deterministic CI). Not retried, whatever the budget: a usage/quota-limit exit (retrying a spent quota is futile), and an API error the CLI reports with status 400, 401, 403, 404, 413 or 422 (a refused credential, an unknown model, a bad request fail the same way every time).
 - `COWORK_HARNESS_LLM_MAX_BYTES` — stdout cap on a `--decider-llm` model call (default 8 MiB, fail loud past it).
 - `COWORK_HARNESS_DIALOG_TIMEOUT_MS` — override the 6 s dialog auto-cancel.
 
 ### Graders
 
+- `COWORK_HARNESS_GRADER_AUTH` — which credential the graders (the `semantic_matches` and `semantic_pairwise`
+  judges, the LLM decider and the critique evaluator) get. `agent` (the default): when `CLAUDE_CODE_OAUTH_TOKEN` is
+  set, the graders get it alone — `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are not passed to them — which is
+  the credential the agent authenticates with at the container, hostloop and microvm tiers; without the token
+  nothing changes. On the protocol tier the agent inherits your environment, where `ANTHROPIC_API_KEY` wins, so
+  there the graders and the agent can differ (`doctor` warns). `inherit`: the graders get every key set, as before
+  4.15.0, and the host `claude` picks among them. Any other value is refused at startup (exit 2). A one-line notice
+  says which credential the graders use whenever the choice mattered; names only, never a value.
+- `COWORK_HARNESS_JUDGE_CHECK` — `0` skips the pre-spend grader credential check `eval` and `hillclimb run` make
+  (the same as `--no-judge-check`). By default, before any agent run, they make one tiny real call per distinct
+  judge (and LLM decider) model through the exact grader path, and refuse on a 401, 403 or 404 or a spent quota; any
+  other failure (a 5xx, a 429, a timeout) is printed and the command proceeds. A refused credential costs nothing; a
+  working one costs one short call, printed with the credential's name. A dry run never makes it.
 - `COWORK_HARNESS_JUDGE_MODEL` — the default model for `semantic_matches`' LLM judge (overridden by a
   per-assertion `judge_model`; falls back to the pinned default `claude-opus-4-8`). Pin it alongside `judge_model` for a
   reproducible before/after comparison across re-records.

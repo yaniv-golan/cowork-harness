@@ -273,6 +273,18 @@
           "description": "This assert's own document: false also when it carries a file an accepted drift is in."
         },
         "judgeInvalid": { "type": "boolean" },
+        "judgeError": {
+          "type": "object",
+          "description": "Set with judgeInvalid when the judge's call failed (an API error such as a 401, a timeout, a CLI that could not run): no grade was made. Absent on a malformed grade.",
+          "required": ["kind", "message"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "call" },
+            "status": { "type": "integer", "description": "The API's HTTP status, when the CLI reported one." },
+            "origin": { "type": "string" },
+            "message": { "type": "string", "description": "One line, scrubbed." }
+          }
+        },
         "judgeModel": { "type": "string", "description": "The model id the judge answered as." },
         "judgeModelRequested": {
           "type": "string",

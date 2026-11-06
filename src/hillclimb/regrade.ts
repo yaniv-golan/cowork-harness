@@ -1611,11 +1611,20 @@ async function regradeFlowInner(
         const id = String(e.prompt_id);
         if (args.cases.length && !byId.has(id)) continue;
         if (scored.has(`${id}\0${String(e.rep)}`)) continue;
+        // The cause, when the row recorded one: a failed judge call (and its API status), else a malformed grade, else
+        // a row written before the cause was kept.
+        const em = (e.meta ?? {}) as Record<string, unknown>;
+        const cause =
+          typeof em.judge_error_message === "string"
+            ? `judge call failed${typeof em.judge_error_status === "number" ? `, API ${em.judge_error_status}` : ""}`
+            : typeof e.error === "string" && e.error.includes("(malformed")
+              ? "malformed grade"
+              : "cause not recorded";
         vr.listed.push({
           prompt_id: id,
           rep: Number(e.rep),
           // `run` schedules reps below --reps only, so the command names the case and a --reps that covers this rep.
-          why: `an errors.jsonl row (judge_invalid): its slot is open — \`hillclimb run ${args.target} --flow ${flowArg} --variant ${v} --case ${id} --reps ${Number(e.rep) + 1}\` re-runs it (one agent run per open slot)`,
+          why: `an errors.jsonl row (judge_invalid; ${cause}): its slot is open — \`hillclimb run ${args.target} --flow ${flowArg} --variant ${v} --case ${id} --reps ${Number(e.rep) + 1}\` re-runs it (one agent run per open slot)`,
         });
       }
     }
@@ -2027,7 +2036,7 @@ async function regradeFlowInner(
     }
     for (const l of report) say(l);
     for (const vr of outcome.variants) {
-      const open = vr.listed.filter((x) => x.why.startsWith("an errors.jsonl row (judge_invalid)"));
+      const open = vr.listed.filter((x) => x.why.startsWith("an errors.jsonl row (judge_invalid"));
       if (!open.length) continue;
       // One command per case: --reps covers its highest open rep (lower open slots of the case are re-run with it).
       const byCase = new Map<string, number>();
@@ -2035,7 +2044,7 @@ async function regradeFlowInner(
       say(
         `  [${vr.variant}] ${open.length} slot(s) hold a judge_invalid error row (about one agent run each to re-run): ${[...byCase]
           .map(([id, reps]) => `\`hillclimb run ${args.target} --flow ${flowArg} --variant ${vr.variant} --case ${id} --reps ${reps}\``)
-          .join("; ")}`,
+          .join("; ")}. A \`regrade\` of their run dirs does not fill these slots.`,
       );
     }
     outcome.exitCode = outcome.variants.some((v) => v.listed.length) ? 1 : 0;

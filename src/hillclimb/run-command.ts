@@ -46,6 +46,8 @@ import type { HillclimbRunArgs } from "./args.js";
 import { loadCases, selectCases, type HillclimbCase } from "./cases.js";
 import { refuseChangedMetrics, successorColumnNotes } from "./metric-keys.js";
 import { prepareCases } from "./command.js";
+import { resolveJudgePins } from "../eval/pins.js";
+import { llmDeciderModel, type GraderProbeTarget, type JudgeCheck } from "../run/judge-check.js";
 import { flowHashOf, liveLockHolder, lockHeldMessage, slotsIn } from "./flow.js";
 import { NoFollowRoot, normalizeRootArg } from "./fs.js";
 import { makeHillclimbJobRunner } from "./job.js";
@@ -106,6 +108,9 @@ export interface RunCommandDeps<F extends { label?: string; ablateSkill?: boolea
   /** The host-`claude` isolation preflight (`isolationRefusal`, src/decide/llm-transport.ts): the refusal message, or
    *  undefined. Required, as on eval, so no caller skips it by omission. */
   isolationCheck: () => string | undefined;
+  /** The pre-spend grader credential check (`runJudgeCheck`, src/run/judge-check.ts): one real call per grader model
+   *  the pass uses, before any agent run. Required, as on eval, so no caller skips it by omission. */
+  judgeCheck: JudgeCheck;
   /** Doctor's credential check for a tier (`tokenCheck`, src/run/doctor.ts — the one eval refuses on). Required, as
    *  on eval, so no caller skips it by omission. */
   tokenCheck: (tier: FidelityTier) => DoctorCheck;
@@ -134,7 +139,19 @@ export async function runHillclimbCommand<F extends { label?: string; ablateSkil
   let price: Prepared["price"];
   let skill: string | undefined;
   try {
-    ({ runner, price, skill } = prepare(args, deps, say));
+    let graderTargets: GraderProbeTarget[];
+    ({ runner, price, skill, graderTargets } = prepare(args, deps, say));
+    // The last refusal before any agent spend: does the graders' credential work? Every grade would otherwise fail
+    // the same way, after its agent run was paid for. A dry run spends nothing, so it does not probe.
+    if (graderTargets.length) {
+      if (args.dryRun) say(`[${args.variant}] judge credential: not probed (dry run)`);
+      else if (args.noJudgeCheck) say(`[${args.variant}] judge credential: not probed (--no-judge-check / COWORK_HARNESS_JUDGE_CHECK=0)`);
+      else {
+        const jc = await deps.judgeCheck(graderTargets);
+        for (const l of jc.lines) say(`[${args.variant}] ${l}`);
+        if (jc.refusal) throw new UsageError(jc.refusal);
+      }
+    }
   } catch (e) {
     // The operator's interrupt, learned from a probe it killed: the CLI exits as interrupted, never as a refusal.
     if (!(e instanceof Error) || e instanceof InterruptedError) throw e;
@@ -164,6 +181,8 @@ interface Prepared {
   price: (remaining: Record<string, number>) => ReturnType<typeof estimateScheduleCost>;
   /** `--skill` as the registered name it selects; undefined without --skill. */
   skill: string | undefined;
+  /** The graders the selected cases call (empty when none grades with an LLM). */
+  graderTargets: GraderProbeTarget[];
 }
 
 const sha256 = (s: string): string => createHash("sha256").update(s, "utf8").digest("hex");
@@ -233,6 +252,14 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     const iso = deps.isolationCheck();
     if (iso) throw new UsageError(iso);
   }
+  // The graders the selected cases call, for the pre-spend credential check: each judge pin's model, then the LLM
+  // decider's when a case falls back to it. (`prepareCases` already refused a non-concrete judge model.)
+  const graderTargets: GraderProbeTarget[] = resolveJudgePins(
+    selected.map((c) => c.scenario),
+    args.judgeModel,
+  ).resolved.map((p) => ({ role: "judge" as const, model: p.model }));
+  if (llmDecider && selected.some((c) => c.scenario.on_unanswered === "llm"))
+    graderTargets.push({ role: "decider", model: llmDeciderModel(deps.env) });
   const flowArg = normalizeRootArg(args.flow);
   const flowHash = flowHashOf(resolve(deps.cwd, flowArg));
   const runsRoot = deps.runsRoot ?? runsWriteRoot();
@@ -585,7 +612,7 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     ...(deps.now ? { now: deps.now } : {}),
     ...(deps.tickMs !== undefined ? { tickMs: deps.tickMs } : {}),
   };
-  return { runner, price, skill: args.skill !== undefined ? tracked.name : undefined };
+  return { runner, price, skill: args.skill !== undefined ? tracked.name : undefined, graderTargets };
 }
 
 /** `hillclimb run --search-corpus` before any spend: the pool loads and hashes; a mixed pool is never the baseline's

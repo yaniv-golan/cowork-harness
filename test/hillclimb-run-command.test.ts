@@ -91,6 +91,7 @@ function deps(over: Partial<RunCommandDeps> = {}): RunCommandDeps {
     stderr: (l) => err.push(l),
     flags: {},
     isolationCheck: () => undefined,
+    judgeCheck: async () => ({ lines: [] }),
     tokenCheck: () => ({ id: "token", title: "Auth token", status: "ok", detail: "found (env / .env)", required: true }),
     runScenario: async (a) => {
       calls.push({ scenario: a.scenario, extra: a.extra as Record<string, unknown> });
@@ -625,6 +626,32 @@ describe("runHillclimbCommand", () => {
       expect(r.exitCode).toBe(2);
       expect(calls).toEqual([]);
       expect(err.join("\n")).toContain("SYNTHETIC refusal");
+    });
+
+    it("a judge credential the API refuses stops the pass before any agent run (exit 2)", async () => {
+      const asked: unknown[] = [];
+      const r = await runHillclimbCommand(
+        args("--approve-harness"),
+        deps({ judgeCheck: async (t) => (asked.push(t), { lines: ["PROBE-LINE"], refusal: "JUDGE-401-REFUSAL" }) }),
+      );
+      expect(r.exitCode).toBe(2);
+      expect(calls).toEqual([]);
+      expect(err.join("\n")).toContain("JUDGE-401-REFUSAL");
+      expect(err.join("\n")).toContain("PROBE-LINE");
+      expect(asked).toHaveLength(1);
+      expect((asked[0] as Array<{ role: string }>).map((t) => t.role)).toEqual(["judge"]);
+    });
+
+    it("a dry run and --no-judge-check never probe the judge; the default does", async () => {
+      let asked = 0;
+      const judgeCheck = async () => (asked++, { lines: [] });
+      await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ judgeCheck, indexRows: () => [] }));
+      expect(err.join("\n")).toContain("judge credential: not probed (dry run)");
+      await runHillclimbCommand(args("--approve-harness", "--no-judge-check"), deps({ judgeCheck }));
+      expect(err.join("\n")).toContain("judge credential: not probed (--no-judge-check");
+      expect(asked).toBe(0);
+      await runHillclimbCommand(args("--approve-harness"), deps({ judgeCheck }));
+      expect(asked).toBe(1);
     });
 
     it("a pairwise-only flow refuses up front too (semantic_pairwise judges through the host claude)", async () => {

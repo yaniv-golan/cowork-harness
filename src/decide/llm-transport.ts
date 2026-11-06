@@ -160,12 +160,92 @@ function warnSettingsEffort(role: GraderRole): void {
  *  variable is dropped. */
 export const GRADER_SHELL_DROP_KEYS = ["CLAUDE_CODE_SIMPLE", "CLAUDE_CODE_PROCESS_WRAPPER"] as const;
 
+/** The credential env keys a host `claude` reads, in the order it prefers them when several are set. Measured on
+ *  Claude Code 2.1.319 (and the staged agent 2.1.317 in a plain `-p` call) with a fake value in each, the 401 text
+ *  naming the one used: `ANTHROPIC_API_KEY` > `ANTHROPIC_AUTH_TOKEN` > `CLAUDE_CODE_OAUTH_TOKEN`. */
+export const GRADER_CREDENTIAL_KEYS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"] as const;
+export type GraderCredentialKey = (typeof GRADER_CREDENTIAL_KEYS)[number];
+
+/** `COWORK_HARNESS_GRADER_AUTH`: which credential the graders (the judge, the LLM decider, the critique evaluator)
+ *  get. `agent` (the default): when `CLAUDE_CODE_OAUTH_TOKEN` is set, only that token, the credential the agent
+ *  authenticates with on container, microvm and hostloop. `inherit`: the whole environment, and the host CLI picks
+ *  (4.14.0 and earlier). Any other value throws: a silent fallback would move where grading is billed. */
+export type GraderAuthMode = "agent" | "inherit";
+export function graderAuthMode(env: NodeJS.ProcessEnv = process.env): GraderAuthMode {
+  const raw = env.COWORK_HARNESS_GRADER_AUTH;
+  if (raw === undefined || raw === "" || raw === "agent") return "agent";
+  if (raw === "inherit") return "inherit";
+  throw new Error(
+    `COWORK_HARNESS_GRADER_AUTH must be "agent" or "inherit" (got ${JSON.stringify(raw)}). An unrecognised value would ` +
+      `silently pick a credential, which decides where grading is billed.`,
+  );
+}
+
+/** Which credential keys a grader call receives, and which it does not, under the current mode. Names only. */
+export interface GraderCredential {
+  mode: GraderAuthMode;
+  /** The credential keys passed to the host `claude`, in its own preference order (see `GRADER_CREDENTIAL_KEYS`). */
+  passed: GraderCredentialKey[];
+  /** The credential keys set in the harness's environment but not passed (always empty under `inherit`). */
+  dropped: GraderCredentialKey[];
+}
+export function graderCredential(base: NodeJS.ProcessEnv = process.env): GraderCredential {
+  const mode = graderAuthMode(base);
+  const set = GRADER_CREDENTIAL_KEYS.filter((k) => !!base[k]);
+  // `agent`: the token alone, as `runtimeAuthEnv` (src/runtime/host-env.ts) gives the agent. ANTHROPIC_CUSTOM_HEADERS
+  // is not a credential and is kept, a deliberate difference from Desktop (which deletes it with the keys): a proxy
+  // in front of the graders may need it.
+  const tokenOnly = mode === "agent" && !!base.CLAUDE_CODE_OAUTH_TOKEN;
+  const passed: GraderCredentialKey[] = tokenOnly ? ["CLAUDE_CODE_OAUTH_TOKEN"] : set;
+  return { mode, passed, dropped: set.filter((k) => !passed.includes(k)) };
+}
+
 /** The host-`claude` call's environment: the harness's own, minus the keys that would change its effort or thinking
- *  (see `ISOLATION_ARGS`) and `GRADER_SHELL_DROP_KEYS`. Everything else — auth, PATH, proxy — is kept. */
+ *  (see `ISOLATION_ARGS`), `GRADER_SHELL_DROP_KEYS`, and the credential keys `graderCredential` does not pass.
+ *  Everything else — PATH, proxy, custom headers — is kept. */
 export function graderSpawnEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...base };
   for (const k of [...EFFORT_THINKING_ENV_KEYS, ...GRADER_SHELL_DROP_KEYS]) delete env[k];
+  for (const k of graderCredential(base).dropped) delete env[k];
   return env;
+}
+
+let graderAuthNoticed = false;
+/** Once per process, at the first grader call, and only when the choice mattered (a key was dropped, or `inherit`
+ *  with more than one key): say which credential the graders use. Names only, never a value. */
+function noticeGraderCredential(): void {
+  if (graderAuthNoticed) return;
+  const c = graderCredential();
+  if (c.mode === "agent" && c.dropped.length) {
+    graderAuthNoticed = true;
+    warn(
+      `::notice:: [grader] the judge, LLM decider and critique evaluator use ${c.passed[0]}, the credential the agent ` +
+        `uses; ${c.dropped.join(" and ")} ${c.dropped.length > 1 ? "are" : "is"} set but not passed to them. ` +
+        `To bill them to ${c.dropped[0]} instead, set COWORK_HARNESS_GRADER_AUTH=inherit.\n`,
+    );
+  } else if (c.mode === "inherit" && c.passed.length > 1) {
+    graderAuthNoticed = true;
+    warn(
+      `::notice:: [grader] COWORK_HARNESS_GRADER_AUTH=inherit: the judge, LLM decider and critique evaluator get ` +
+        `${c.passed.join(", ")}, and the host claude picks among them (${c.passed[0]} first, as measured on ` +
+        `Claude Code 2.1.319). The agent may use a different one.\n`,
+    );
+  }
+}
+/** For a judge call the API refused (401/403): which credential the graders were given and which others are set,
+ *  by name, so the fix is obvious. Never a value. */
+export function graderCredentialHint(): string {
+  const c = graderCredential();
+  const used = c.passed.length ? c.passed.join(" or ") : "your claude login (no credential variable set)";
+  const others = c.dropped.length
+    ? `; also set but not passed: ${c.dropped.join(", ")} (COWORK_HARNESS_GRADER_AUTH=inherit would pass ${c.dropped.length > 1 ? "them" : "it"})`
+    : "";
+  return `The judge used ${used}${others}. Check it with \`cowork-harness doctor\`.`;
+}
+
+/** Test seam: let the next grader call print the credential notice again. */
+export function resetGraderAuthNotice(): void {
+  graderAuthNoticed = false;
 }
 
 /** The flags `ISOLATION_ARGS`, the `--effort` pin and the `--settings` override need the host CLI to accept, matched
@@ -311,6 +391,40 @@ export interface TransportIdentity {
   /** A user-settings `maxEffortLevel`, which clamps the call's effort when it is below `effort`. */
   settingsMaxEffort?: string;
   strictMcp?: false;
+  /** The one credential key the call carried, by name (`graderCredential`), or `host-login` when it carried none
+   *  (the host CLI then used an `apiKeyHelper`, its Keychain login or its config dir). Absent on a grade recorded
+   *  before 4.15.0, and when several keys were passed (see `credentialKeys`). */
+  credential?: GraderCredentialKey | "host-login";
+  /** Under `COWORK_HARNESS_GRADER_AUTH=inherit` with several credential keys set: every key passed. The harness does
+   *  not know which one the host CLI picked, so it records the set rather than guess. */
+  credentialKeys?: GraderCredentialKey[];
+  /** `inherit` when `COWORK_HARNESS_GRADER_AUTH=inherit` was set; absent for the default. */
+  graderAuth?: "inherit";
+}
+
+/** The fields `transportKey` leaves out when one side of a comparison lacks them, so a grade recorded before they
+ *  existed does not read as made by a different judge. */
+const LATER_IDENTITY_FIELDS = ["credential", "credentialKeys", "graderAuth"] as const;
+
+/** A comparable key for a transport identity. Two identities are the same transport when their keys are equal.
+ *  A field that `peers` (the identities this one is compared with) do not all record is left out, so a grade
+ *  recorded before 4.15.0 (no credential fields) and one recorded after count as one transport, while a default
+ *  grade and an `inherit` grade, both recorded after, count as two. */
+type IdentityLike = { credential?: unknown; credentialKeys?: unknown; graderAuth?: unknown };
+export function transportKey<T extends IdentityLike>(t: T, peers: readonly T[]): string {
+  const everyPeerHasCredential = peers.every((p) => p.credential !== undefined || p.credentialKeys !== undefined);
+  const out: Record<string, unknown> = { ...t };
+  if (!everyPeerHasCredential) for (const k of LATER_IDENTITY_FIELDS) delete out[k];
+  return JSON.stringify(Object.fromEntries(Object.entries(out).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))));
+}
+
+/** The credential part of a transport identity, from the environment a grader call is made with. */
+function credentialIdentity(): Pick<TransportIdentity, "credential" | "credentialKeys" | "graderAuth"> {
+  const c = graderCredential();
+  return {
+    ...(c.passed.length > 1 ? { credentialKeys: c.passed } : { credential: c.passed[0] ?? "host-login" }),
+    ...(c.mode === "inherit" ? { graderAuth: "inherit" as const } : {}),
+  };
 }
 const cliVersions = new Map<string, string | null>();
 export function transportIdentity(
@@ -323,7 +437,11 @@ export function transportIdentity(
     ...(u.envKeys.length ? { settingsEnvOverride: u.envKeys } : {}),
     ...(u.maxEffort !== undefined ? { settingsMaxEffort: u.maxEffort } : {}),
   };
-  const strict = { ...effort, ...(isolationArgs(bin).includes("--strict-mcp-config") ? {} : { strictMcp: false as const }) };
+  const strict = {
+    ...effort,
+    ...(isolationArgs(bin).includes("--strict-mcp-config") ? {} : { strictMcp: false as const }),
+    ...credentialIdentity(),
+  };
   // Under the spawn guard nothing is launched, not even a `--version` probe: the version is then unrecorded.
   try {
     assertSpawnAllowed("the host `claude` version probe");
@@ -366,6 +484,50 @@ class TransportExit extends Error {
     super(message);
     this.retryable = retryable;
   }
+}
+
+/** The host `claude` reported that its API call failed: the envelope carries `api_error_status` or
+ *  `terminal_reason: "api_error"`. A bare `is_error` is NOT enough: `error_max_structured_output_retries` sets it on a
+ *  model-side schema failure, which is a malformed reply, not a failed call. Measured on 2.1.319 for a 401 (invalid
+ *  `ANTHROPIC_API_KEY`): exit 1, `is_error: true`, `subtype: "success"` (so `subtype` is never read here),
+ *  `modelUsage: {}`, and the reason in `result`. Shared by the judge, the LLM decider and the critique evaluator. */
+export class ApiExitError extends TransportExit {
+  constructor(
+    message: string,
+    readonly status: number | undefined,
+    readonly origin: string | undefined,
+    /** The CLI's own one-line reason (the envelope's `result`), bounded. */
+    readonly apiMessage: string | undefined,
+  ) {
+    super(message, apiErrorRetryable(status));
+    this.name = "ApiExitError";
+  }
+}
+
+/** Whether a failed API call is worth another attempt. A request the API refused for what it is (bad request, auth,
+ *  permission, unknown model, too large, unprocessable) fails the same way again, so it is not retried; a timeout,
+ *  conflict, rate limit or server error may pass on a retry. An unknown status keeps the old behaviour (retried). */
+export function apiErrorRetryable(status: number | undefined): boolean {
+  if (status === undefined) return true;
+  return !(status === 400 || status === 401 || status === 403 || status === 404 || status === 413 || status === 422);
+}
+
+/** The API failure an envelope reports, or undefined when it reports none (or is not JSON). */
+function apiErrorOf(raw: string): { status?: number; origin?: string; message?: string } | undefined {
+  let p: { api_error_status?: unknown; api_error_origin?: unknown; terminal_reason?: unknown; result?: unknown };
+  try {
+    p = JSON.parse(raw) as typeof p;
+  } catch {
+    return undefined;
+  }
+  if (p === null || typeof p !== "object") return undefined;
+  const status = typeof p.api_error_status === "number" ? p.api_error_status : undefined;
+  if (status === undefined && p.terminal_reason !== "api_error") return undefined;
+  return {
+    ...(status !== undefined ? { status } : {}),
+    ...(typeof p.api_error_origin === "string" ? { origin: p.api_error_origin } : {}),
+    ...(typeof p.result === "string" && p.result.trim() ? { message: tail(p.result, 300) } : {}),
+  };
 }
 
 /** Best-effort `api_error_status` from a `claude -p --output-format json` envelope (429 on a rate/usage
@@ -568,7 +730,25 @@ function spawnOnce(
       clearTimeout(timer);
       // Decode once at close — see chunks comment above.
       const raw = Buffer.concat(chunks).toString("utf8");
+      const apiError = (exit: number | null): ApiExitError | undefined => {
+        const a = apiErrorOf(raw);
+        if (!a) return undefined;
+        return new ApiExitError(
+          `LLM decider transport (${bin} -p) exited ${exit}: API error${a.status !== undefined ? ` ${a.status}` : ""}` +
+            `${a.origin ? ` (${a.origin})` : ""}${a.message ? ` — ${a.message}` : ""}`,
+          a.status,
+          a.origin,
+          a.message,
+        );
+      };
       if (code === 0) {
+        // Checked before the envelope is parsed: an API failure carries no resolved model, so `parseEnvelope` would
+        // report it as an unparseable envelope. Whether the CLI ever exits 0 on one is unmeasured; the 401 exits 1.
+        const failed = apiError(code);
+        if (failed) {
+          reject(failed);
+          return;
+        }
         try {
           resolve(parseEnvelope(raw, model, extraArgs.includes("--json-schema")));
         } catch (e) {
@@ -602,6 +782,13 @@ function spawnOnce(
         reject(
           new TransportExit(`LLM decider transport (${bin} -p): usage/quota limit hit — retry after the limit resets. ${diag}`, false),
         );
+        return;
+      }
+      // An API failure the envelope names (a 401 for a bad credential, a 529 when overloaded): retried only when its
+      // status may pass on a second try (`apiErrorRetryable`), so a bad credential costs one spawn, not three.
+      const failed = apiError(code);
+      if (failed) {
+        reject(failed);
         return;
       }
       reject(new TransportExit(`LLM decider transport (${bin} -p) exited ${code}${diag ? ` — ${diag}` : " (no output captured)"}`));
@@ -652,9 +839,16 @@ export const claudeCliCompleteStructured: CompleteStructured = async ({ system, 
   };
 };
 
-async function completeViaCli(prompt: string, model: string, extraArgs: readonly string[], role: GraderRole): Promise<CompleteResult> {
+async function completeViaCli(
+  prompt: string,
+  model: string,
+  extraArgs: readonly string[],
+  role: GraderRole,
+  opts: { retries?: number } = {},
+): Promise<CompleteResult> {
   assertSpawnAllowed("the --decider-llm transport (`claude -p`)");
   warnSettingsEffort(role);
+  noticeGraderCredential();
   const bin = process.env.COWORK_HARNESS_CLAUDE_BIN || "claude";
   // envPositiveNumber warns LOUD (not a silent revert) when the var is SET but unparseable/non-positive
   // (e.g. "5m", "0", "-1") — the old `Number(...) || dflt` idiom swallowed a typo'd knob with no signal.
@@ -670,6 +864,7 @@ async function completeViaCli(prompt: string, model: string, extraArgs: readonly
     const n = Number(retriesRaw);
     retries = Number.isFinite(n) ? Math.min(10, Math.max(0, Math.floor(n))) : 2;
   }
+  if (opts.retries !== undefined) retries = opts.retries;
   let lastErr: Error | undefined;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
@@ -693,4 +888,39 @@ async function completeViaCli(prompt: string, model: string, extraArgs: readonly
     }
   }
   throw lastErr; // unreachable (the loop returns or throws on the last attempt), but satisfies the type checker.
+}
+
+/** What one pre-spend grader probe found. `refuse`: the credential or model cannot be used (401/403/404, or a usage
+ *  limit), so every grade the run would pay for would fail. `warn`: the probe could not tell (a server error, a
+ *  timeout, a missing CLI) and the run may proceed. `ok`: the call succeeded. */
+export type GraderProbeOutcome =
+  | { status: "ok"; model: string; credential: string; costUsd?: number }
+  | { status: "refuse" | "warn"; model: string; credential: string; message: string };
+
+/** The pre-spend judge credential check: ONE real call through the exact grader path (same binary, same environment
+ *  and credential, same isolation flags and `--effort` as a judge call), with no retry. It checks the credential the
+ *  graders use, which is not necessarily the agent's; `tokenCheck` only asks whether some agent credential is set.
+ *  A refused credential fails at $0 (the API refuses before any model call); a working one costs one tiny call. */
+export async function probeGraderCredential(model: string, role: GraderRole = "judge"): Promise<GraderProbeOutcome> {
+  const c = graderCredential();
+  const credential = c.passed.length === 1 ? c.passed[0]! : c.passed.length ? c.passed.join(" or ") : "your claude login";
+  try {
+    const r = await completeViaCli("Reply with the single word OK.", model, [], role, { retries: 0 });
+    let costUsd: number | undefined;
+    for (const v of Object.values(r.usage ?? {})) {
+      const n = (v as { costUSD?: unknown })?.costUSD;
+      if (typeof n === "number") costUsd = (costUsd ?? 0) + n;
+    }
+    return { status: "ok", model: r.model, credential, ...(costUsd !== undefined ? { costUsd } : {}) };
+  } catch (e) {
+    if (e instanceof InterruptedError) throw e;
+    const err = e as Error & { retryable?: boolean; status?: number };
+    const message = (err.message ?? String(e)).split("\n")[0]!;
+    // Only what fails every later grade the same way: the credential (401/403), the model (404), a spent quota.
+    const refuse =
+      err instanceof ApiExitError
+        ? err.status === 401 || err.status === 403 || err.status === 404
+        : err.retryable === false && /usage\/quota limit/.test(message);
+    return { status: refuse ? "refuse" : "warn", model, credential, message };
+  }
 }
