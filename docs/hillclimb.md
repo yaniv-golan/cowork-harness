@@ -258,8 +258,9 @@ Three things live outside the flow dir, and the loop needs all three for the who
   `meta.failure_rule`: `timeout` (the runner's bound), `error` (infrastructure; also a run whose content differs
   from the variant's snapshot, or a grade that does not line up with the scenario), `serving_substitution` (another
   model served the run, or no evidence of the pinned one, or the agent sent another effort than requested or none:
-  `meta.failure_rule: "effort_not_sent"`) and `judge_invalid` (the row's `error` names the cause: a failed judge
-  call, with `meta.judge_error_status` and `meta.judge_error_message`, or a malformed grade; the slot re-runs with
+  `meta.failure_rule: "effort_not_sent"`) and `judge_invalid` (the row's `error` names the cause, and
+  `meta.judge_invalid_cause` records it: `call` for a failed judge call, with `meta.judge_error_status` and
+  `meta.judge_error_message`, or `malformed` for a malformed grade; the slot re-runs with
   `hillclimb run … --case <id> --reps <rep+1>`, and a `regrade` does not fill it); with `--search-corpus`, also `search_pool_mismatch`
   (the rep was refused before it ran because the pool copy changed, or was served from another pool) and
   `search_refused` (a search the frozen corpus refused: the rep worked from different evidence, so it is never
@@ -511,8 +512,8 @@ the agent only. The judge and the LLM decider run on the host `claude` with the 
 `CLAUDE_CODE_OAUTH_TOKEN` set, the token alone, which is what the agent uses at the container, hostloop and microvm
 tiers. On protocol the agent inherits your env, where `ANTHROPIC_API_KEY` wins, so there the two can bill differently;
 `COWORK_HARNESS_GRADER_AUTH=inherit` gives the graders every key instead (see [cli.md](cli.md#graders)). `hillclimb run`
-checks the graders' credential with one real call before its first agent run (`--no-judge-check` skips it; a dry run
-never makes it).
+checks the graders' credential with one real call before its first agent run (`--no-judge-check` skips it; a dry run,
+or a pass with no open slot, never makes it).
 
 ### Cutting the cost per rep
 

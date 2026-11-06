@@ -32,21 +32,27 @@ All notable changes to this project are documented here. The format is based on
   now reads `judge call FAILED (API 401, first_party: Invalid API key) — no grade was made`, the rep still counts as
   invalid (not as a fail), and the `eval` report, `hillclimb` error rows and the `regrade` summary each say which
   cause it was. A pairwise judge's failed call is reported the same way, metric-only references included.
+  A judge that hits the account's usage limit is a failed call with API status 429 (not retried), and a reply
+  that records an API status on a successful exit is read as the grade it carries unless it is also marked as an
+  error.
 
 ### Added
 
 - **`judgeError` on an assertion result** (`{kind: "call", status?, origin?, message}`), set with `judgeInvalid` when
   the judge's call failed; also in `regrade` files and eval `runs.jsonl` lines. A malformed grade carries none.
 - **A pre-spend grader credential check on `eval` and `hillclimb run`.** Before the first agent run, one tiny real
-  call per distinct judge (and LLM decider) model through the exact grader path. A 401, 403 or 404, or a spent quota,
-  refuses the command (exit 2) at no cost; any other failure is printed and the command proceeds. A working credential
-  costs one short call, printed with the credential's name and the cost. A dry run never makes it.
+  call per distinct grader (role, model) — each judge model, and the LLM decider's — through the exact grader path. A
+  401 or 403 (the credential), a 404 (the model) or a spent quota refuses the command (exit 2) at no cost, and the
+  refusal names the fix for that status; any other failure is printed and the command proceeds. An unknown model id
+  is an API 404 from the host `claude`, not a start-up refusal (measured on Claude Code 2.1.319: exit 1, $0). A working credential
+  costs one short call, printed with the credential's name and the cost. A dry run never makes it, and a
+  `hillclimb run` pass with no open slot skips it.
   `--no-judge-check` or `COWORK_HARNESS_JUDGE_CHECK=0` skips it.
 - **The `eval` report splits invalid judge grades by cause** (`arms[].judgeInvalidCauses`: a failed call by API
   status, `malformed`, or `cause not recorded` for an eval written before this release), names any assertion no rep
   of which could be graded, and prints the recovery: fix the credential, then `regrade` the kept run dirs it lists.
-- **`hillclimb` error rows name the cause** of a `judge_invalid` row (`meta.judge_error_status`,
-  `meta.judge_error_message`) and the command that re-runs the slot; the first refused judge credential in a pass
+- **`hillclimb` error rows name the cause** of a `judge_invalid` row (`meta.judge_invalid_cause`: `call` or
+  `malformed`; for a call, `meta.judge_error_status` and `meta.judge_error_message`) and the command that re-runs the slot; the first refused judge credential in a pass
   prints which credential the graders used.
 - **`judgeTransport` records the graders' credential by name** (`credential`, or `credentialKeys` under `inherit`
   with several keys set, and `graderAuth`). A grade recorded before this release, which has none, is treated as the

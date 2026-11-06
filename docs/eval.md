@@ -190,9 +190,9 @@ marker says so (`enforced: "lower_bound"`). It is a pre-flight only: the eval is
   surface then says CONFOUNDED.
 - `--allow-mixed-pool` — accept a pool built with `search-pool build --mixed` (several skills).
 - `--no-judge-check` — skip the pre-spend grader credential check (also `COWORK_HARNESS_JUDGE_CHECK=0`). By default,
-  when a scenario calls a judge or the LLM decider, the eval makes one tiny real call per distinct grader model, with
-  the credential the graders get, after every other check and before the first agent run. A 401, 403 or 404, or a
-  spent quota, refuses the eval (exit 2) at no cost and leaves no eval dir; any other failure is printed and the eval
+  when a scenario calls a judge or the LLM decider, the eval makes one tiny real call per distinct grader (role, model), with
+  the credential the graders get, after every other check and before the first agent run. A 401 or 403 (the
+  credential), a 404 (the model: an unknown model id is an API 404) or a spent quota refuses the eval (exit 2) at no cost and leaves no eval dir; any other failure is printed and the eval
   proceeds. A working credential costs one short call, printed as `judge credential: <name> works for <model> (probe
   cost $…)`. It checks only the graders' credential: on the protocol tier the agent can use another one (see
   `COWORK_HARNESS_GRADER_AUTH` in [cli.md](cli.md#graders)). Skipping it saves that call; a bad credential then fails

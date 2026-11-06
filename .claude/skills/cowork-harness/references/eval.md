@@ -73,7 +73,7 @@ names the arm, scenario, dominant error and a matching hint (`Every rep of arm <
 ## Refused before any run (exit 2)
 
 - a model or judge that is an alias (`opus`, `best`) rather than a concrete id;
-- a judge credential the API refuses (401/403/404) or a spent quota, found by one real call per grader model
+- a judge credential the API refuses (401/403), a judge model it does not know (404), or a spent quota, found by one real call per grader (role, model)
   after every other check (`--no-judge-check` / `COWORK_HARNESS_JUDGE_CHECK=0` skip it; a dry run never makes it);
 - an eval dir inside any git work tree (the snapshots would mount empty);
 - identical arms (unless `--allow-identical-arms`);
