@@ -26,10 +26,9 @@ All notable changes to this project are documented here. The format is based on
 
 - **The hostloop agent gets the OAuth token alone when it is set.** The hostloop agent inherits your shell; it now
   no longer carries `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_CUSTOM_HEADERS` beside the token, as in
-  Desktop and as at container and microvm. Hooks and MCP servers the agent starts inherit the same env. The rest of
-  your shell, `ANTHROPIC_BASE_URL` included, is still inherited. Only the environment is covered: a managed
-  `settings.json` (an `env` entry or `apiKeyHelper`) can still hand the agent a key. Without the token nothing
-  changes. The message after an authentication failure at hostloop says which credential the agent took.
+  Desktop and as at container and microvm. The rest of your shell, `ANTHROPIC_BASE_URL` included, is still
+  inherited. Only the environment is covered: a managed `settings.json` (an `env` entry or `apiKeyHelper`) can still
+  hand the agent a key. Without the token nothing changes. The message after an authentication failure at hostloop says which credential the agent took.
 
 - **Which credential the graders get.** With `CLAUDE_CODE_OAUTH_TOKEN` set, the graders get the token alone, which is
   the credential the agent authenticates with at the container, hostloop and microvm tiers. On protocol the agent
