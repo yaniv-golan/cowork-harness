@@ -895,11 +895,13 @@ reach into `turns/1/` yourself:
   message reached the run (a crash, a kill, a gate before the first reply), which passing `--model`
   does not change;
 - **how the evaluator ran is in the report itself**: `evaluatorTransport` in `--output-format json`
-  (`{isolation, cliVersion?, effort?, settingsEnvOverride?, settingsMaxEffort?, strictMcp?}` — the isolation level of
+  (`{isolation, cliVersion?, effort?, settingsEnvOverride?, settingsMaxEffort?, strictMcp?, credential?, credentialKeys?, graderAuth?}` — the isolation level of
   the host `claude` call, that CLI's version, the `--effort` it was called with (`high`; absent from a report written
   before it was recorded), the effort/thinking keys a user-settings `env` block sets (names only, blanked by the call),
   a user `maxEffortLevel` (which lowers the effort when below it), and
-  `strictMcp: false` when it left out `--strict-mcp-config` for an enterprise MCP config), present
+  `strictMcp: false` when it left out `--strict-mcp-config` for an enterprise MCP config, and the credential the
+  evaluator got by name — `credential`, or `credentialKeys` under `COWORK_HARNESS_GRADER_AUTH=inherit` with several keys,
+  and `graderAuth: "inherit"`; never a value, and absent from a report written before 4.15.0), present
   with `evaluatorModel`, so two critiques' evaluator verdicts can be compared knowing both ran under the same
   conditions;
 - the graded turn's **`outcome` and `skillHash` are in the report itself** (`gradedOutcome` /

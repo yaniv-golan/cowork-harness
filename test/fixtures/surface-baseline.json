@@ -3386,8 +3386,20 @@
       ".evaluatorTransport.cliVersion": {
         "type": "string"
       },
+      ".evaluatorTransport.credential": {
+        "type": "string"
+      },
+      ".evaluatorTransport.credentialKeys": {
+        "type": "array"
+      },
+      ".evaluatorTransport.credentialKeys[]": {
+        "type": "string"
+      },
       ".evaluatorTransport.effort": {
         "type": "string"
+      },
+      ".evaluatorTransport.graderAuth": {
+        "const": "inherit"
       },
       ".evaluatorTransport.isolation": {
         "type": "string",

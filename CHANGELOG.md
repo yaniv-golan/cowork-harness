@@ -54,7 +54,7 @@ All notable changes to this project are documented here. The format is based on
 - **`hillclimb` error rows name the cause** of a `judge_invalid` row (`meta.judge_invalid_cause`: `call` or
   `malformed`; for a call, `meta.judge_error_status` and `meta.judge_error_message`) and the command that re-runs the slot; the first refused judge credential in a pass
   prints which credential the graders used.
-- **`judgeTransport` records the graders' credential by name** (`credential`, or `credentialKeys` under `inherit`
+- **`judgeTransport` and `critique`'s `evaluatorTransport` record the graders' credential by name** (`credential`, or `credentialKeys` under `inherit`
   with several keys set, and `graderAuth`). A grade recorded before this release, which has none, is treated as the
   same transport when nothing else differs.
 - **`doctor` has a `Grader credential` row** naming the credential the graders get and the one the agent uses at the

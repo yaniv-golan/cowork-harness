@@ -235,7 +235,8 @@ The header states what every number depends on:
   `malformed` when it answered without a usable grade, and `cause not recorded` for a `runs.jsonl` written before
   4.15.0, which kept no cause. When an assertion's every scored rep is a failed call, the summary says
   `No assertion graded: the judge could not be called (…)`. After any failed call it prints the recovery: fix the
-  graders' credential (`cowork-harness doctor`), then re-judge the kept runs at judge cost only with the
+  graders' credential (`cowork-harness doctor`), then re-judge the kept runs (no agent run; it re-judges every judged assert of each listed run, the ones that
+  graded fine included, at judge cost) with the
   `cowork-harness regrade <run-dir>… --scenario <file>` it names per scenario (`report.json`:
   `judgeCallFailures.regrade`; dirs that `prune` removed are listed as not re-judgeable, as of when the report
   was built, so an `eval report <dir>` after a `prune` lists more). That writes a re-grade
