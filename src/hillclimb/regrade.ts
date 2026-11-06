@@ -1611,13 +1611,13 @@ async function regradeFlowInner(
         const id = String(e.prompt_id);
         if (args.cases.length && !byId.has(id)) continue;
         if (scored.has(`${id}\0${String(e.rep)}`)) continue;
-        // The cause, when the row recorded one: a failed judge call (and its API status), else a malformed grade, else
-        // a row written before the cause was kept.
+        // The cause, read from the row's structured field (never its prose): a failed judge call (and its API
+        // status), a malformed grade, or a row written before the cause was kept.
         const em = (e.meta ?? {}) as Record<string, unknown>;
         const cause =
-          typeof em.judge_error_message === "string"
+          em.judge_invalid_cause === "call"
             ? `judge call failed${typeof em.judge_error_status === "number" ? `, API ${em.judge_error_status}` : ""}`
-            : typeof e.error === "string" && e.error.includes("(malformed")
+            : em.judge_invalid_cause === "malformed"
               ? "malformed grade"
               : "cause not recorded";
         vr.listed.push({

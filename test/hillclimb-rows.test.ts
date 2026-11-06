@@ -485,7 +485,11 @@ describe("error rows (runner-scaffold.mjs l.549-564)", () => {
     } as never;
     const row = errRow(attemptRow({ result: r }, ctx(r)));
     expect(row.failure_class).toBe("judge_invalid");
-    expect(row.meta).toMatchObject({ judge_error_status: 401, judge_error_message: "API 401, first_party: Invalid API key" });
+    expect(row.meta).toMatchObject({
+      judge_invalid_cause: "call",
+      judge_error_status: 401,
+      judge_error_message: "API 401, first_party: Invalid API key",
+    });
     expect(row.error).toContain("judge call failed on assertion(s) 3 (API 401, first_party: Invalid API key)");
     expect(row.error).toMatch(/hillclimb run … --case \S+ --reps \d+/);
     expect(row.error).not.toContain("malformed");
@@ -496,6 +500,7 @@ describe("error rows (runner-scaffold.mjs l.549-564)", () => {
     r.assertions[3] = { ...r.assertions[3], judgeInvalid: true };
     const row = errRow(attemptRow({ result: r }, ctx(r)));
     expect(row.error).toContain("malformed");
+    expect(row.meta).toMatchObject({ judge_invalid_cause: "malformed" });
     expect(row.meta).not.toHaveProperty("judge_error_status");
     expect(row.meta).not.toHaveProperty("judge_error_message");
   });

@@ -515,6 +515,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
           : `judge grade invalid after retry on ${where} (malformed: the judge answered without a usable grade); ${rerun}`,
         {
           failure_rule: "judge_invalid",
+          judge_invalid_cause: failed ? "call" : "malformed",
           ...(failed?.status !== undefined ? { judge_error_status: failed.status } : {}),
           ...(failed !== undefined ? { judge_error_message: failed.message } : {}),
         },
