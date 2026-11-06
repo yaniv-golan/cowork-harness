@@ -70,6 +70,14 @@ is the agent's own failure and the other arm ran, the reps are scored (a real dr
 `--fail-on`. Either way the header
 names the arm, scenario, dominant error and a matching hint (`Every rep of arm <label> in <scenario> errored — …`).
 
+An invalid judge grade leaves that assertion's rows for that rep, and the report counts it per arm by cause
+(`arms[].judgeInvalidCauses`): `call failed: API <status>` (or `call failed: no API status`, e.g. a timeout),
+`malformed`, or `cause not recorded` for an eval written before 4.15.0. When a judge call failed, the report also
+names any assertion no rep of which was graded and prints the recovery: fix the graders' credential
+(`cowork-harness doctor`), then `cowork-harness regrade <run dirs> --scenario <file>` over the kept runs it lists.
+That re-judges every judged assert of those runs at judge cost and writes a re-grade beside each run; it does not
+rewrite the eval's `runs.jsonl` or report. Pruned run dirs are listed as not re-judgeable.
+
 ## Refused before any run (exit 2)
 
 - a model or judge that is an alias (`opus`, `best`) rather than a concrete id;
