@@ -616,6 +616,12 @@ export function coerceWebFetchGrant(answer: string): { behavior: "allow" | "deny
  * helper. NON-DETERMINISTIC by nature — `executeScenario` flags the run so a green LLM-steered pass can't
  * be mistaken for a scripted one. An out-of-set or unavailable answer FAILS LOUD (never a silent default).
  */
+/** The model the LLM decider uses when no flag picks one: `COWORK_HARNESS_DECIDER_MODEL`, else "sonnet". The pre-spend
+ *  grader check probes this same model, so it is defined once. */
+export function llmDeciderModel(env: NodeJS.ProcessEnv = process.env): string {
+  return env.COWORK_HARNESS_DECIDER_MODEL || "sonnet";
+}
+
 export class LlmDecider implements Decider {
   constructor(
     private complete: Complete,
@@ -624,7 +630,7 @@ export class LlmDecider implements Decider {
     // NEVER what gets recorded in Decision.model / gateProvenance; claudeCliComplete's --output-format
     // json resolves it to a concrete id first (see CompleteResult). Pin --decider-model /
     // COWORK_HARNESS_DECIDER_MODEL to a dated id for cross-run reproducibility.
-    private model: string = process.env.COWORK_HARNESS_DECIDER_MODEL || "sonnet",
+    private model: string = llmDeciderModel(),
     // the default transport spawns `claude -p <prompt>` with the prompt as ARGV (process-table visible).
     // The prompt embeds an unscrubbed transcript tail, so without these a tracked secret in the last ~1000
     // chars lands in `ps`/`/proc/<pid>/cmdline`. Scrub the prompt at each complete() call — symmetric with

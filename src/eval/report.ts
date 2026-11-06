@@ -1489,8 +1489,8 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
     for (const u of jcf.ungraded)
       L.push(`**No assertion graded: the judge could not be called (${u.cause})** — ${u.scenario} assertion ${u.assertionIndex}.`);
     L.push(
-      `Judge calls failed. Fix the graders' credential (\`cowork-harness doctor\`), then re-judge the kept runs at judge cost only` +
-        ` (no agent run): ${jcf.regrade.map((r) => `\`cowork-harness regrade ${r.runDirs.join(" ")} --scenario ${r.scenarioFile}\``).join("; ")}.` +
+      `Judge calls failed. Fix the graders' credential (\`cowork-harness doctor\`), then re-judge the kept runs (no agent run; judge cost` +
+        ` for every judged assert of each listed run, the ones that graded fine included): ${jcf.regrade.map((r) => `\`cowork-harness regrade ${r.runDirs.join(" ")} --scenario ${r.scenarioFile}\``).join("; ")}.` +
         ` That writes a re-grade beside each run; it does not rewrite this eval's runs.jsonl or this report.`,
     );
     const pruned = jcf.regrade.flatMap((r) => r.pruned);

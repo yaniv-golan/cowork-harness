@@ -468,8 +468,8 @@ export interface AssertContext {
   /** The judged asserts in `judgeInvalid` whose judge CALL failed (no grade was made), with why. Populated by the
    *  pre-passes; surfaced as `RunResult.assertions[].judgeError`. */
   judgeErrors?: Map<Assertion, JudgeError>;
-  /** For a call the API refused for its credential (401/403): which credential the graders used. Live lane only,
-   *  read by the check message; not persisted. */
+  /** For a call the API refused for its credential (401/403): which credential the graders used (names only). Live
+   *  lane only; appended to the check message, so it is persisted with that message in `assertions[].message`. */
   judgeErrorHints?: Map<Assertion, string>;
   /** Per-assert facts about the DOCUMENT that was composed for a `semantic_matches` grade — populated by
    *  runSemanticJudges, which is the only place that knows them (composing is where the caps bite).

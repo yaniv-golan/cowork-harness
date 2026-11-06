@@ -194,6 +194,27 @@ describe("transport: an API error envelope (real 401 frame, exit 1)", () => {
     expect(JSON.stringify(r)).not.toContain(dir); // the fake CLI's path
   });
 
+  it("a failed call with no API status records the CLI by its basename, never its absolute path", async () => {
+    // Not an envelope: the CLI died before it could write one.
+    const p = join(dir, "not-json.txt");
+    writeFileSync(p, "segfault\n");
+    process.env.FAKE_ENVELOPE = p;
+    process.env.FAKE_EXIT = "1";
+    process.env.COWORK_HARNESS_LLM_RETRIES = "0";
+    const q = quiet();
+    const c = ctx();
+    try {
+      await runSemanticJudges([sem], c, makeSemanticJudge({ model: "claude-opus-4-8" }));
+    } finally {
+      q.mockRestore();
+    }
+    const [r] = evaluate([sem], c);
+    const je = (r as { judgeError?: { status?: number; message: string } }).judgeError!;
+    expect(je.status).toBeUndefined();
+    expect(je.message).toContain("fake-claude.sh -p) exited 1");
+    expect(JSON.stringify(r)).not.toContain(dir);
+  });
+
   it("a transient status (529, the real frame with its status edited) is still retried", async () => {
     serve(REAL_401, 1, { api_error_status: 529, result: "Overloaded" });
     const q = quiet();
@@ -599,6 +620,17 @@ describe("doctor: the Grader credential row (names only, $0)", () => {
       expect(c.detail).toContain(`the agent at ${tier} uses ANTHROPIC_API_KEY`);
       expect(JSON.stringify(c)).not.toMatch(/key-value|auth-value|inherit/);
     }
+  });
+  it("an auth token alone: the isolated tiers' agent gets no credential from it, so the row warns; protocol reads it (ok)", () => {
+    const env = { ANTHROPIC_AUTH_TOKEN: "auth-value" };
+    for (const tier of ["container", "hostloop", "microvm"] as const) {
+      const c = graderCredentialCheck(tier, env);
+      expect(c.status).toBe("warn");
+      expect(c.detail).toContain(`graders use ANTHROPIC_AUTH_TOKEN; the agent at ${tier} uses no credential variable`);
+      expect(c.remedy).toContain("it reads CLAUDE_CODE_OAUTH_TOKEN, else ANTHROPIC_API_KEY");
+      expect(JSON.stringify(c)).not.toContain("auth-value");
+    }
+    expect(graderCredentialCheck("protocol", env).status).toBe("ok");
   });
   it("protocol with both keys: the agent uses the API key, so the row warns", () => {
     const c = graderCredentialCheck("protocol", base);

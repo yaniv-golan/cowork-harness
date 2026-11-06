@@ -24,10 +24,8 @@ export function judgeCheckDisabled(flag: boolean, env: NodeJS.ProcessEnv = proce
   return flag || env.COWORK_HARNESS_JUDGE_CHECK === "0";
 }
 
-/** The model the LLM decider uses when no flag picks one (decider.ts: env, else its default). */
-export function llmDeciderModel(env: NodeJS.ProcessEnv = process.env): string {
-  return env.COWORK_HARNESS_DECIDER_MODEL || "sonnet";
-}
+/** The model the LLM decider uses when no flag picks one: decider.ts's own default, re-exported for the callers. */
+export { llmDeciderModel } from "../decide/decider.js";
 
 const ROLE_NAME: Record<GraderRole, string> = { judge: "judge", decider: "LLM decider", evaluator: "critique evaluator" };
 

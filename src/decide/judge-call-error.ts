@@ -1,3 +1,4 @@
+import { basename } from "node:path";
 import { InterruptedError } from "../termination.js";
 
 // A judge whose CALL failed (the transport threw: an API error such as a 401, a timeout, a missing CLI) did not
@@ -35,7 +36,7 @@ export class JudgeCallError extends Error {
   summary(): string {
     if (this.status !== undefined)
       return `API ${this.status}${this.origin ? `, ${this.origin}` : ""}${this.apiMessage ? `: ${this.apiMessage}` : ""}`;
-    return this.message.split("\n")[0]!;
+    return cliPathShown(this.message.split("\n")[0]!);
   }
 
   info(scrubLine: (s: string) => string): JudgeCallInfo {
@@ -46,6 +47,13 @@ export class JudgeCallError extends Error {
       retryable: this.retryable,
     };
   }
+}
+
+/** A transport message names the host CLI it ran, which is `COWORK_HARNESS_CLAUDE_BIN` when set (often an absolute
+ *  path). What a result records names it by its basename only, as the API-error messages do. */
+function cliPathShown(line: string, env: NodeJS.ProcessEnv = process.env): string {
+  const bin = env.COWORK_HARNESS_CLAUDE_BIN;
+  return bin && bin.includes("/") ? line.split(bin).join(basename(bin)) : line;
 }
 
 /** Wrap a transport throw; an interrupt is passed through unchanged (it must reach the run's own handler). */

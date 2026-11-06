@@ -21,7 +21,8 @@ import { decideLoopFromBaseline } from "../loop-decision.js";
 import { limaPath, vmStatus, instanceName, vmProvisioned } from "../runtime/lima.js";
 import { fail, isJsonOutput, jsonPayloadEnvelope } from "./envelope.js";
 import { writeAllSync } from "../io.js";
-import { graderCredential } from "../decide/llm-transport.js";
+import { GRADER_CREDENTIAL_KEYS, graderCredential } from "../decide/llm-transport.js";
+import { runtimeAuthKey } from "../runtime/host-env.js";
 import { pinnedDigestFor, resolveAgentImage, resolveContainerRuntime, resolveProxyImage } from "../runtime/agent-image.js";
 import { deviceImageStatus, dockerImageId } from "../runtime/device-image.js";
 
@@ -455,10 +456,9 @@ export function graderCredentialCheck(tier: Tier, env: NodeJS.ProcessEnv = proce
   } catch (e) {
     return { id: "grader-credential", title: "Grader credential", status: "fail", detail: (e as Error).message, required: false };
   }
-  const set = (["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"] as const).filter((k) => !!env[k]);
-  // The agent: on protocol the operator's env as is (the API key first, as measured); every other tier gets the
-  // OAuth token alone when it is set.
-  const agent = tier === "protocol" ? set[0] : env.CLAUDE_CODE_OAUTH_TOKEN ? "CLAUDE_CODE_OAUTH_TOKEN" : set[0];
+  // The agent: on protocol the operator's env as is, where the CLI picks the first key in its measured order; every
+  // other tier gets the key the spawn path gives it (`runtimeAuthKey`: the token, else the API key, never the auth token).
+  const agent = tier === "protocol" ? GRADER_CREDENTIAL_KEYS.find((k) => !!env[k]) : runtimeAuthKey(env);
   const graders = !g.passed.length
     ? "the host claude's own login"
     : g.passed.length > 1 && g.mode === "agent"
@@ -467,7 +467,8 @@ export function graderCredentialCheck(tier: Tier, env: NodeJS.ProcessEnv = proce
   // With several keys passed, the host claude picks the first in its measured order (`GRADER_CREDENTIAL_KEYS`): that
   // is what grading is billed to. Under `inherit` the pick is a measurement, not a contract, so several keys warn there.
   const inheritMany = g.mode === "inherit" && g.passed.length > 1;
-  const mismatch = inheritMany || (agent !== undefined && g.passed.length >= 1 && g.passed[0] !== agent);
+  // A credential the graders get but the agent does not (an auth token alone on an isolated tier) differs too.
+  const mismatch = inheritMany || (g.passed.length >= 1 && g.passed[0] !== agent);
   return {
     id: "grader-credential",
     title: "Grader credential",
@@ -478,9 +479,12 @@ export function graderCredentialCheck(tier: Tier, env: NodeJS.ProcessEnv = proce
       (g.mode === "inherit" ? " (COWORK_HARNESS_GRADER_AUTH=inherit)" : ""),
     ...(mismatch
       ? {
-          remedy: inheritMany
-            ? "under COWORK_HARNESS_GRADER_AUTH=inherit the host claude picks among several keys; unset it, or keep one key, so grading is billed where you expect"
-            : `grading is billed to ${g.passed[0]} and the agent to ${agent}; on protocol that is by design (the agent inherits your env). Unset the key you do not mean to use, or set COWORK_HARNESS_GRADER_AUTH=inherit to give the graders every key`,
+          remedy:
+            agent === undefined
+              ? `the agent at ${tier} gets none of these (it reads CLAUDE_CODE_OAUTH_TOKEN, else ANTHROPIC_API_KEY), while the graders get ${g.passed[0]}; set one the agent reads`
+              : inheritMany
+                ? "under COWORK_HARNESS_GRADER_AUTH=inherit the host claude picks among several keys; unset it, or keep one key, so grading is billed where you expect"
+                : `grading is billed to ${g.passed[0]} and the agent to ${agent}; on protocol that is by design (the agent inherits your env). Unset the key you do not mean to use, or set COWORK_HARNESS_GRADER_AUTH=inherit to give the graders every key`,
         }
       : {}),
     required: false,
