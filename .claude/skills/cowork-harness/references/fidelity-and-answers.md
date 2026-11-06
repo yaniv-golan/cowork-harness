@@ -349,10 +349,18 @@ up often enough to spell out:
 - `COWORK_HARNESS_DECIDER_DIR_POLL_MS` / `_TIMEOUT_MS` — the `--decider-dir` rendezvous (poll defaults: 300 ms for the run-side rendezvous, 500 ms for `gates --follow`). A backstop timeout ends the run as an unanswered-gate partial recorded as `errorSource: "decider_timeout"`.
 - `COWORK_HARNESS_DIALOG_TIMEOUT_MS` — dialog auto-cancel (default 6 s).
 - `COWORK_HARNESS_LLM_MAX_BYTES` — stdout bound on `--decider-llm` (default 8 MiB).
-- `COWORK_HARNESS_LLM_RETRIES` — bounded retries for a transient non-zero `claude -p` exit on the
-  `--decider-llm` transport (default 2, clamped 0–10; `0` disables for deterministic CI). Only a non-zero
-  exit retries; a timeout / byte-overflow / spawn failure fails loud on the first attempt. The exit error
-  carries the child's captured stdout/stderr so `exited 1` is diagnosable.
+- `COWORK_HARNESS_LLM_RETRIES` — bounded retries for a transient non-zero `claude -p` exit in the host-`claude`
+  transport the LLM decider, the judges and the critique evaluator share (default 2, clamped 0–10; `0` disables
+  for deterministic CI). Only a non-zero exit retries, and not every one: a usage/quota limit and an API error
+  with status 400, 401, 403, 404, 413 or 422 fail on the first attempt, as do a timeout / byte-overflow / spawn
+  failure. The exit error carries the child's captured stdout/stderr so `exited 1` is diagnosable.
+- `COWORK_HARNESS_GRADER_AUTH` — which credential the graders (judges, LLM decider, critique evaluator) get.
+  `agent` (default): with `CLAUDE_CODE_OAUTH_TOKEN` set, the token alone (the agent's credential at
+  container/hostloop/microvm); without it nothing changes. `inherit`: every key set. Any other value is refused.
+  `cowork-harness doctor` shows both credentials (names only).
+- `COWORK_HARNESS_JUDGE_CHECK` — `0` skips the pre-spend grader credential check on `eval` and `hillclimb run`
+  (same as `--no-judge-check`): one real call per grader (role, model) that refuses on a 401/403, a 404 (unknown
+  model) or a spent quota, before any agent run. A dry run, and a `hillclimb run` pass with no open slot, never make it.
 - `COWORK_HARNESS_SCRUB_KEYS` / `COWORK_HARNESS_SCRUB_VALUES` — extra env names / literal values to
   redact from logs (beyond the auth tokens + `ANTHROPIC_CUSTOM_HEADERS`).
 - `COWORK_HARNESS_SOFT_MISSING` — downgrade a missing mount source from hard-error to warn-and-skip.

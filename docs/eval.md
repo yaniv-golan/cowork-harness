@@ -237,7 +237,8 @@ The header states what every number depends on:
   `No assertion graded: the judge could not be called (…)`. After any failed call it prints the recovery: fix the
   graders' credential (`cowork-harness doctor`), then re-judge the kept runs at judge cost only with the
   `cowork-harness regrade <run-dir>… --scenario <file>` it names per scenario (`report.json`:
-  `judgeCallFailures.regrade`; dirs that `prune` removed are listed as not re-judgeable). That writes a re-grade
+  `judgeCallFailures.regrade`; dirs that `prune` removed are listed as not re-judgeable, as of when the report
+  was built, so an `eval report <dir>` after a `prune` lists more). That writes a re-grade
   beside each run; it does not rewrite the eval's `runs.jsonl` or report;
 - **every (arm, scenario) in which every rep errored**, named with its most frequent bucket and rule —
   for example `errored_infra (auth) 5/5` — and a hint that follows the rule (sign-in, quota, start-up,

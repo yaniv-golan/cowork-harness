@@ -1,6 +1,8 @@
-// The eval report: built from `manifest.json` + `runs.jsonl` alone, by ONE function that both the live eval
-// and `eval report <dir>` call — so the two are byte-identical by construction. Pure apart from reading and
-// writing the eval dir: no clock, no environment beyond $HOME (for `~` redaction).
+// The eval report: built from `manifest.json` + `runs.jsonl`, by ONE function that both the live eval and
+// `eval report <dir>` call — so the two are byte-identical by construction for the same files on disk. No clock,
+// no environment beyond $HOME (for `~` redaction). One exception reads outside the eval dir: the regrade
+// recovery's `pruned` list checks whether each kept run dir still exists, so it is as of when the report was
+// built, and an `eval report <dir>` after a `prune` lists the dirs the prune removed.
 import { existsSync, writeFileSync } from "node:fs";
 import { INFRA_EXCLUDED } from "./classify.js";
 import {

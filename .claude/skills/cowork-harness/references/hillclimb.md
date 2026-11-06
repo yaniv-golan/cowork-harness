@@ -395,7 +395,8 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
 - **What it never touches:** the agent (it never runs), `result.json`, the lines it did not rewrite (kept byte for
   byte), a row whose rebuild changed nothing (counted as re-evaluated, its bytes kept; a row with no
   `meta.assert_sig` is stamped only when its run's assert list is not the scenario's now), and an open `judge_invalid` slot in `errors.jsonl`, which
-  is never moved into `results.jsonl`: the summary names, per case, the `run` that re-runs it.
+  is never moved into `results.jsonl`: the summary names, per case, the `run` that re-runs it, with its cause (a failed
+  judge call and its API status, a malformed grade, or `cause not recorded` for a row written before 4.15.0).
 - **Listed, not re-graded (exit 1), decided before any judge call where it can be (a listed row costs no judge
   call):** a row with no scenario file for its case in the target (without `--case`); one whose kept run dir is
   gone or refused (multi-turn, partial, replay, copied beside its original, a work dir gone while a filesystem assert needs it; an agent-failed
@@ -410,7 +411,7 @@ Flags: `--flow DIR`, `--variant all|baseline|v<N>` (default `all`: every variant
   would be less redacted than the graded document, or one whose re-judge needs an assert whose scrubbed literal
   this process cannot reproduce (each released only by `--allow-scrub-change`, with `--rejudge` for a less-redacted
   row, never by `--allow-doc-drift`); one whose assert has an edit inside a scrubbed literal (only a re-run applies
-  it); and an open `judge_invalid` slot.
+  it); and an open `judge_invalid` slot (listed with its cause, as above).
 
 ## Cutting the cost per rep
 
