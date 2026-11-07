@@ -174,6 +174,8 @@ const full: RunResult = {
   // (`UsageInfo = Record<string, unknown> & { turns?: number }`), so its schema node declares just
   // `turns` and correctly stays permissive under the strictened pass too.
   usage: { turns: 3 },
+  turnCap: { maxTurns: 3, source: "session" },
+  timeout: { ms: 600000, source: "flag" },
   cost: { usd: 0.01, raw: { total_cost_usd: 0.01 } },
   deciderCostUsd: 0.004,
   deciderUsage: { input_tokens: 900, output_tokens: 12, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
