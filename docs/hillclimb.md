@@ -591,7 +591,8 @@ that the loop and the lite report builder read, with these differences:
   not tunable.
 - **A missing reference is refused before spending.** The reference runner hands the grader a missing reference
   as `null`; `hillclimb run` refuses a non-baseline pass while a pairwise case has no baseline reference.
-- **Timeouts.** `--timeout-s` (default 1800) bounds the agent: a longer scenario `timeout_ms` is lowered to it, and
+- **Timeouts.** `--timeout-s` (default 1800) bounds the agent: it is the run's budget unless the scenario's `timeout_ms` is
+  shorter (a tie goes to the runner), the scenario is not rewritten, `result.json` records `timeout.source: runner`, and
   reaching it is an `errors.jsonl` `timeout` row. A scenario's own shorter `timeout_ms` is the skill's limit: a
   scored agent failure. No judge starts after the bound, but one already running finishes.
 - **A workspace fixture starts with a fresh conversation.** A case with

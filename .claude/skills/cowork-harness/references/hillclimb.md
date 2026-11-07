@@ -71,8 +71,8 @@ with no `prompt:` (a session file) is skipped.
 ## The flags of `run`
 
 `--flow DIR`, `--variant ID` (`baseline` or `v<N>`, N ≥ 1, no leading zero; default `baseline`), `--reps N`
-(default 1), `--concurrency N` (default 4; a decider needs `--concurrency 1`), `--timeout-s N` (default 1800; 0 = none: the agent's bound, the
-scenario's `timeout_ms` lowered to it, a tie going to the runner; no judge starts after it, though one already
+(default 1), `--concurrency N` (default 4; a decider needs `--concurrency 1`), `--timeout-s N` (default 1800; 0 = none: the agent's budget unless the
+scenario's `timeout_ms` is shorter (a tie goes to the runner; `timeout.source: runner`); no judge starts after it, though one already
 running finishes; reaching it is an `errors.jsonl` `timeout` row, while a shorter `timeout_ms` of the scenario's own
 firing first is a scored `errored_agent` row), `--model ID` and `--judge-model ID` (concrete ids; an alias is refused),
 `--effort LEVEL` (below),

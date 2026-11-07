@@ -2802,7 +2802,8 @@ async function cmdSkill(rawArgs: string[]) {
       on_unanswered: useLlm ? "llm" : resolvePolicy("skill", flags),
       ...(flags.deciderDir != null ? { decider: "decider-dir" } : flags.deciderCmd != null ? { decider: "decider-cmd" } : {}),
       ...(useLlm ? { decider: "decider-llm" } : {}),
-      ...(timeoutMs !== undefined ? { timeout_ms: timeoutMs } : {}),
+      // The run's budget, as `record --dry-run` and result.json state it: not a scenario field (the scenario is not rewritten).
+      ...(timeoutMs !== undefined ? { timeout: { ms: timeoutMs, source: "flag" as const } } : {}),
       ...(allowStall ? { allow_stall: true } : {}),
     };
     // Under json the preview rides in the standard envelope (one framed document on stdout); text mode

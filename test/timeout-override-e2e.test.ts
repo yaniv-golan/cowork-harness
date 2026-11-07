@@ -206,4 +206,14 @@ describe.runIf(can)("--timeout is the run's budget, recorded with its source", (
       expect(flagged.stderr + flagged.stdout).toContain("timeout:  5000 ms (flag)");
     });
   }, 120_000);
+
+  it("skill --dry-run states the budget the same way, never as a scenario timeout_ms", async () => {
+    await withStub(QUICK, async (f) => {
+      const r = await cli(f, ["skill", f.cwd, "hi", "--dry-run", "--timeout", "5000", "--output-format", "json"]);
+      expect(r.code, r.stderr).toBe(0);
+      const p = JSON.parse(r.stdout);
+      expect(p.timeout).toEqual({ ms: 5000, source: "flag" });
+      expect(p).not.toHaveProperty("timeout_ms");
+    });
+  }, 120_000);
 });
