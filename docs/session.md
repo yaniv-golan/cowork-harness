@@ -175,6 +175,34 @@ that skill instead of the shared root.
 > **Removed:** the old numeric/per-model `max_thinking_tokens` field is gone — a session YAML that still
 > sets it fails to load with a targeted hint pointing at `extended_thinking` / `debug.max_thinking_tokens`.
 
+### Which keys reach the agent, per tier
+
+Every tier builds the agent's command line from one function, so a session key that sets an agent flag sets it on
+every tier. The table is generated from the harness's own record of its launch fields, and a test keeps it in sync.
+Keys not listed here are staging, the spawn environment, or harness policy, not agent flags.
+
+<!-- session-argv-fields:start -->
+| Set by | Agent flag | container / microvm / hostloop | protocol | Note |
+|---|---|---|---|---|
+| `model` | `--model` | yes | yes |  |
+| `effort` | `--effort` | yes | yes | always emitted; unset falls back to the baseline's default |
+| `extended_thinking` | `--max-thinking-tokens` / `--thinking disabled` | yes | yes |  |
+| `debug.max_thinking_tokens` | `--max-thinking-tokens` | yes | yes |  |
+| `debug.thinking_display` | `--thinking-display` | yes | yes |  |
+| `agent_max_turns` | `--max-turns` | yes | yes |  |
+| `skill --session-id` | `--session-id` | yes | yes |  |
+| `skill --resume` | `--resume` | yes | yes |  |
+| a staged plugin that declares hooks | `--include-hook-events` | yes | yes |  |
+| `answer_channel` | `--permission-prompt-tool` / `--permission-prompts` | yes | yes |  |
+| `plugins`, the skill folder | `--plugin-dir` | yes | yes |  |
+| `mcp.config` | `--mcp-config` | yes | yes | the sandbox tiers pass the staged guest copy; protocol passes the host path |
+| `permission_mode` | `--permission-mode` | yes | yes |  |
+<!-- session-argv-fields:end -->
+
+At `protocol`, off the managed config branch (a local login with no token), the agent reads and writes your real
+config dir. Its session transcripts land in your own `~/.claude/projects/`, and `skill --resume` continues the
+session from there.
+
 ### Agent-env knob (tier-uniform)
 
 `hostloop` and `protocol` spawn the agent over the **operator's full shell env** (`...process.env` /
