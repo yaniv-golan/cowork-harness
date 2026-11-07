@@ -1063,8 +1063,7 @@ one understands, or a per-file read error/crash — including a
 malformed/unreadable cassette, which is tallied there rather than as a `1` finding). A real finding
 always outranks a could-not-verify signal within the same run, so exit `1` wins if both occur.
 **`rehash` is a check:** `0` every cassette is current · `1` at least one needs a re-record (one this build
-refuses to read, or one whose scenario needs a newer stamp) · `2` usage. It rewrites nothing (`4`, partial
-migration, is no longer produced).
+refuses to read, or one whose scenario needs a newer stamp) · `2` usage. It rewrites nothing.
 **Collision warning:** the `run`/`skill` family's exit `3` means *boundary/integrity* (§11 above);
 `verify-cassettes`' exit `3` means *could not verify*. These are unrelated per-command meanings that
 happen to share a number — a CI script that branches on exit code across commands must not conflate
@@ -1294,8 +1293,8 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   The minimum supported read version is **v12**
   (`MIN_SUPPORTED_CASSETTE_VERSION`, the jcs1 hash epoch): a cassette below the floor, or one without
   `controlOut` or `userVisibleRoots`, is refused at load time as re-recordable, naming its remedy
-  (`npx cowork-harness@4 rehash` for v10/v11, a re-record otherwise); schema files below v12 are no longer
-  shipped, and the retained schema files are `schema/cassette.v12.json` through `schema/cassette.v19.json`. A cassette whose stamped version exceeds what a given build understands is
+  (`npx cowork-harness@4 rehash` for v10/v11, a re-record otherwise);
+  schema files below v12 are no longer shipped, and the retained schema files are `schema/cassette.v12.json` through `schema/cassette.v19.json`. A cassette whose stamped version exceeds what a given build understands is
   refused loudly by both `replay` and `verify-cassettes`; `replay` alone offers an opt-in override
   (`--best-effort-future-cassette`), which `verify-cassettes` does not accept — a verification gate has no
   "read it anyway" path. `record --rerecord-stale`'s selection accepts a future-stamped cassette without

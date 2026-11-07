@@ -77,7 +77,8 @@ const FROZEN_NUMBERED_ITEMS = [
   "19. **`gate_answers_delivered` passes vacuously when no gate fires — pair it, or drop it.** Whether a",
   "20. **A `mode: r` connected folder's contents are recorded body-less, not excluded.** `record` captures a",
   "21. **A `fidelity: cowork` cassette can go stale in a way `skill`/`format` drift won't catch.** Its recorded",
-  "22. **`lint` floods CI with INFO advisories that don't apply to you.** *Why:* two rules —",
+  // Reworded when the `gate-needs-controlout` rule was removed: one rule is left.
+  "22. **`lint` floods CI with INFO advisories that don't apply to you.** *Why:* `manifest-needs-snapshot`",
   "23. **`verify-cassettes`/`replay` report a `discovery-surface` note on cassettes you just recorded fine.**",
   "24. **Never name the file-delivery tool in a `SKILL.md`.** *Why:* Cowork has **two**, one per product",
   "25. **Three host-inventory flags — two on `record`, one on `verify-cassettes`.** `record",

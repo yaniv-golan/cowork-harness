@@ -56,7 +56,7 @@ describe("docs/cli.md ↔ src/run/cassette.ts replay-bucket sync", () => {
     return table.match(re)?.[1] ?? "";
   };
   const alwaysCell = cellFor("Always");
-  const controlOutCell = cellFor(String.raw`Only if the cassette carries \`controlOut\``);
+  const controlOutCell = cellFor(String.raw`Always, against the recorded \`controlOut\`[^|]*`);
   const manifestCell = cellFor(String.raw`Only if the cassette carries an \`artifacts\` manifest`);
   const liveOnlyCell = cellFor(String.raw`Always skipped \(live-only\)`);
 
