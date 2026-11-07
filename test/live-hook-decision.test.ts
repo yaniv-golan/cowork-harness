@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadBaseline, resolveAgentBinary } from "../src/baseline.js";
 import { loadDotenv } from "../src/dotenv.js";
@@ -35,9 +34,8 @@ try {
 }
 const dockerOk = spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0;
 const imageOk = dockerOk && spawnSync("docker", ["image", "inspect", IMAGE], { stdio: "ignore" }).status === 0;
-const TOKEN =
-  process.env.CLAUDE_CODE_OAUTH_TOKEN ||
-  (existsSync(`${homedir()}/.cowork-harness-token`) ? readFileSync(`${homedir()}/.cowork-harness-token`, "utf8").trim() : "");
+// Resolved once for the whole live lane by test/setup/live-token.ts (vitest.config.live.ts `setupFiles`).
+const TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "";
 const CAN = dockerOk && imageOk && !!AGENT && existsSync(AGENT) && !!TOKEN;
 
 // A silent skip is the failure mode this lane is prone to — say so on stderr.

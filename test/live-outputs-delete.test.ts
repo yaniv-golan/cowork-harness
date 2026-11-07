@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, mkdtempSync, writeFileSync, readdirSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { loadBaseline, resolveAgentBinary } from "../src/baseline.js";
 
@@ -89,9 +89,8 @@ if (latestVersion !== undefined) {
 const RWD = LATEST_OUTPUTS_MODE === "rwd";
 const dockerOk = spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0;
 const imageOk = dockerOk && spawnSync("docker", ["image", "inspect", IMAGE], { stdio: "ignore" }).status === 0;
-const TOKEN =
-  process.env.CLAUDE_CODE_OAUTH_TOKEN ||
-  (existsSync(`${homedir()}/.cowork-harness-token`) ? readFileSync(`${homedir()}/.cowork-harness-token`, "utf8").trim() : "");
+// Resolved once for the whole live lane by test/setup/live-token.ts (vitest.config.live.ts `setupFiles`).
+const TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "";
 const CAN = dockerOk && imageOk && !!AGENT && existsSync(AGENT) && !!TOKEN;
 const CLI = resolve("dist/cli.js");
 

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, mkdtempSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import readline from "node:readline";
 import { loadBaseline } from "../src/baseline.js";
@@ -33,22 +33,8 @@ const IMAGE = "cowork-agent-base:2";
 const dockerOk = spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0;
 const imageOk = dockerOk && spawnSync("docker", ["image", "inspect", IMAGE], { stdio: "ignore" }).status === 0;
 const binOk = !!AGENT && existsSync(AGENT);
-/** Minimal `.env` probe for ONE key — the skip-gate must mirror the CLI's own token-resolution chain
- *  (env > dotenv > ./.env > install .env) or it under-detects: on a dev machine whose token lives only in
- *  the repo `.env`, the gate said "no token" and silently skipped 12 live tests that the spawned CLI
- *  would have authenticated fine (observed). Not a general dotenv parser: one key, quotes stripped. */
-function tokenFromDotenv(): string {
-  try {
-    const m = readFileSync(".env", "utf8").match(/^CLAUDE_CODE_OAUTH_TOKEN=(.*)$/m);
-    return m ? m[1].trim().replace(/^["']|["']$/g, "") : "";
-  } catch {
-    return "";
-  }
-}
-const TOKEN =
-  process.env.CLAUDE_CODE_OAUTH_TOKEN ||
-  (existsSync(`${homedir()}/.cowork-harness-token`) ? readFileSync(`${homedir()}/.cowork-harness-token`, "utf8").trim() : "") ||
-  tokenFromDotenv();
+// Resolved once for the whole live lane by test/setup/live-token.ts (vitest.config.live.ts `setupFiles`).
+const TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "";
 const CAN = dockerOk && imageOk && binOk;
 
 // A silent skip is the failure mode this lane is prone to — say so on stderr.

@@ -36,6 +36,8 @@ describe("the live lane pins a model", () => {
   it("vitest.config.live.ts loads the setup in every worker", () => {
     const cfg = readFileSync(resolve("vitest.config.live.ts"), "utf8");
     expect(cfg).toMatch(/setupFiles:\s*\[[^\]]*"test\/setup\/live-model\.ts"/);
+    // The token setup sits in the same list (test/live-token-lane.test.ts covers what it does).
+    expect(cfg).toMatch(/setupFiles:\s*\[[^\]]*"test\/setup\/live-token\.ts"/);
     expect(readFileSync(resolve(LIVE_SETUP), "utf8")).toMatch(/applyLiveModelDefault\(process\.env\)/);
   });
 

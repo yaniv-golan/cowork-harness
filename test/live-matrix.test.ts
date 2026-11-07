@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 /**
@@ -32,9 +32,8 @@ const cliOk = existsSync(CLI);
 // The real dependency: the host `claude` this tier spawns. `--version` (not `command -v`) so a present
 // but unrunnable CLI fails the gate rather than producing a confusing mid-test spawn error.
 const hostClaudeOk = spawnSync("claude", ["--version"], { stdio: "ignore" }).status === 0;
-const TOKEN =
-  process.env.CLAUDE_CODE_OAUTH_TOKEN ||
-  (existsSync(`${homedir()}/.cowork-harness-token`) ? readFileSync(`${homedir()}/.cowork-harness-token`, "utf8").trim() : "");
+// Resolved once for the whole live lane by test/setup/live-token.ts (vitest.config.live.ts `setupFiles`).
+const TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "";
 const CAN = cliOk && hostClaudeOk && !!TOKEN;
 
 // A silent skip is this lane's characteristic failure — vitest.config.live.ts's own header warns a green

@@ -1,10 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { initMemoryPaths } from "./helpers/init-memory-paths.js";
-import { parseDotenv } from "../src/dotenv.js";
 
 /**
  * Live, AFTER half of the auto-memory witness (the BEFORE half is in test/auto-memory-env.test.ts: every committed
@@ -26,31 +25,11 @@ const CLI = resolve("dist/cli.js");
 const cliOk = existsSync(CLI);
 // Only protocol needs the host CLI; the other tiers' own prerequisites fail the run loudly if missing.
 const hostClaudeOk = FIDELITY !== "protocol" || spawnSync("claude", ["--version"], { stdio: "ignore" }).status === 0;
-// Credential, first hit wins (the value is never printed, only where it came from):
-//   1. CLAUDE_CODE_OAUTH_TOKEN exported in the environment
-//   2. COWORK_LIVE_DOTENV=<path> — the live-lane spelling of the CLI's `--dotenv <path>`; unreadable = no credential
-//   3. ~/.cowork-harness-token (the other live suites' file)
-//   4. this repo's .env (the CLI's own `<install>/.env` fallback)
-function resolveToken(): { token: string; source: string } {
-  if (process.env.CLAUDE_CODE_OAUTH_TOKEN) return { token: process.env.CLAUDE_CODE_OAUTH_TOKEN, source: "environment" };
-  const fromDotenv = (path: string): string => {
-    try {
-      return parseDotenv(readFileSync(path, "utf8")).get("CLAUDE_CODE_OAUTH_TOKEN") ?? "";
-    } catch {
-      return "";
-    }
-  };
-  const explicit = process.env.COWORK_LIVE_DOTENV;
-  if (explicit) return { token: fromDotenv(explicit), source: `COWORK_LIVE_DOTENV (${explicit})` };
-  const file = `${homedir()}/.cowork-harness-token`;
-  if (existsSync(file)) {
-    const t = readFileSync(file, "utf8").trim();
-    if (t) return { token: t, source: file };
-  }
-  const repoEnv = resolve(".env");
-  return { token: fromDotenv(repoEnv), source: repoEnv };
-}
-const { token: TOKEN, source: TOKEN_SOURCE } = resolveToken();
+// Resolved once for the whole live lane by test/setup/live-token.ts (vitest.config.live.ts `setupFiles`): the
+// environment, then COWORK_LIVE_DOTENV, then ~/.cowork-harness-token, then this repo's .env. The value is never
+// printed, only where the lookup went.
+const TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN ?? "";
+const TOKEN_SOURCE = process.env.COWORK_HARNESS_LIVE_TOKEN_SOURCE ?? "test/setup/live-token.ts did not run";
 const CAN = cliOk && hostClaudeOk && !!TOKEN;
 const why = `dist/cli.js:${cliOk} host-claude:${hostClaudeOk} token:${!!TOKEN} (looked up: ${TOKEN_SOURCE})`;
 if (!CAN) process.stderr.write(`::warning:: live-auto-memory (${FIDELITY}) SKIPPED — ${why}.\n`);

@@ -289,7 +289,7 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       done
       ```
       - The `CLAUDE_CODE_OAUTH_TOKEN` comes from the first of these that has it: the exported variable;
-        `COWORK_LIVE_DOTENV=<path>` (this suite's equivalent of the CLI's `--dotenv <path>`); `~/.cowork-harness-token`;
+        `COWORK_LIVE_DOTENV=<path>` (the live lane's equivalent of the CLI's `--dotenv <path>`); `~/.cowork-harness-token`;
         the repo's `.env`. The suite prints where it looked, never the value. A worktree has no `.env`, so from a
         worktree use `COWORK_LIVE_DOTENV=<primary checkout>/.env`.
       - **Each run must print `Tests  2 passed (2)`**: the prerequisites check, then the run. `COWORK_LIVE_REQUIRE=1`
@@ -309,7 +309,9 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       ```
       npx vitest list --config vitest.config.live.ts --staticParse=false
       ```
-      Run it twice: with the token exported, every live test is listed and stderr has no `SKIPPED` warning; with no
+      Every live suite gets its token from one lookup (`test/setup/live-token.ts`, the same order as the
+      auto-memory step above), so `COWORK_LIVE_DOTENV` or the repo `.env` works for the whole lane, not only one suite.
+      Run it twice: with a token resolvable, every live test is listed and stderr has no `SKIPPED` warning; with no
       token resolvable (the negative control: the variable unset, no `~/.cowork-harness-token`, no
       `COWORK_LIVE_DOTENV`, and run from a worktree with no `.env`), fewer tests are listed and stderr names each
       skipped suite. A run that
