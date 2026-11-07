@@ -4636,6 +4636,31 @@ export function _resolveRerecordSource(
   return { path: fallback, via: fallback ? "name-lookup" : "none" };
 }
 
+/** What `record --rerecord-stale` needs from a cassette: the cassette itself, or — when this build refuses it as an
+ *  older format (`rerecordable`) — just the two fields that locate its scenario source, read LENIENTLY from the raw
+ *  JSON. Such a cassette has no readable embedded snapshot, so it can only be re-recorded from the on-disk scenario.
+ *  Any other refusal (unparseable, malformed) is an error: there is nothing trustworthy to re-record from. */
+export type RerecordTarget =
+  { cassette: Cassette } | { old: { refusal: string; scenarioSource?: string; scenario: { name?: string } } } | { error: string };
+export function readRerecordTarget(path: string): RerecordTarget {
+  const rc = readCassette(path);
+  if (!("error" in rc)) return { cassette: rc.cassette };
+  if (!rc.rerecordable) return { error: rc.error };
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8")) as { scenarioSource?: unknown; scenario?: { name?: unknown } };
+    return {
+      old: {
+        refusal: rc.error,
+        ...(typeof raw.scenarioSource === "string" ? { scenarioSource: raw.scenarioSource } : {}),
+        scenario: typeof raw.scenario?.name === "string" ? { name: raw.scenario.name } : {},
+      },
+    };
+  } catch (caught) {
+    rethrowIfExit(caught);
+    return { error: rc.error };
+  }
+}
+
 export function _findScenarioOnDisk(cassettePath: string, scenarioName: string | undefined): string | null {
   if (!scenarioName) return null; // a lenient (nameless) cassette has no derivable scenario path
   const safeName = slugForPath(scenarioName);
@@ -5620,8 +5645,9 @@ export async function cmdRecord(args: string[]) {
     // frozen scenario (the stale set is cassettes, not YAML).
     const staleNames: string[] = [];
     for (const { path: cp } of stale) {
-      const rc = readCassette(cp);
-      if (!("error" in rc)) staleNames.push(rc.cassette.scenario.name);
+      const t = readRerecordTarget(cp);
+      if ("cassette" in t) staleNames.push(t.cassette.scenario.name);
+      else if ("old" in t && t.old.scenario.name !== undefined) staleNames.push(t.old.scenario.name);
     }
     // Every item must resolve a model, checked before the first re-record for the same reason as the budget:
     // an item refused mid-batch would come after the earlier ones were paid for. Each item is resolved the way
@@ -5629,9 +5655,9 @@ export async function cmdRecord(args: string[]) {
     // that cannot be resolved or loaded here is left to the loop, which reports it.
     const staleUnpinned: string[] = [];
     for (const { path: cp } of stale) {
-      const rc = readCassette(cp);
-      if ("error" in rc) continue;
-      const src = _resolveRerecordSource(cp, rc.cassette);
+      const t = readRerecordTarget(cp);
+      if ("error" in t) continue;
+      const src = _resolveRerecordSource(cp, "cassette" in t ? t.cassette : t.old);
       let sc: Scenario | undefined;
       if (src.path) {
         try {
@@ -5640,8 +5666,8 @@ export async function cmdRecord(args: string[]) {
           rethrowIfExit(caught);
           continue;
         }
-      } else if (fromEmbedded) {
-        sc = embeddedPairwiseRefs(embeddedScenario(rc.cassette.scenario, cp), cp);
+      } else if (fromEmbedded && "cassette" in t) {
+        sc = embeddedPairwiseRefs(embeddedScenario(t.cassette.scenario, cp), cp);
       }
       if (sc && unresolvedModelPreflight(sc, modelOverride)) staleUnpinned.push(src.path ?? cp);
     }
@@ -5658,8 +5684,19 @@ export async function cmdRecord(args: string[]) {
     if (!noRedact) {
       const preflightItems: Array<{ scenario: Scenario; policyDirs: string[] }> = [];
       for (const { path: cp } of stale) {
-        const rc = readCassette(cp);
-        if (!("error" in rc)) preflightItems.push({ scenario: rc.cassette.scenario, policyDirs: [process.cwd(), dirname(cp)] });
+        const t = readRerecordTarget(cp);
+        let scenario: Scenario | undefined;
+        if ("cassette" in t) scenario = t.cassette.scenario;
+        else if ("old" in t) {
+          // An older-format cassette re-records from its on-disk scenario; preflight THAT, when it resolves and parses.
+          const src = _resolveRerecordSource(cp, t.old).path;
+          try {
+            if (src) scenario = parseScenarioFile(src);
+          } catch (caught) {
+            rethrowIfExit(caught);
+          }
+        }
+        if (scenario) preflightItems.push({ scenario, policyDirs: [process.cwd(), dirname(cp)] });
       }
       const preflight = redactionPreflightMessage(preflightItems);
       if (preflight) warn(preflight);
@@ -5715,20 +5752,22 @@ export async function cmdRecord(args: string[]) {
           return false;
         }
       }
-      const rc = readCassette(cp);
-      if ("error" in rc) {
-        log(`  ✗ ${tag} ${cp}: ${rc.error} — cannot re-record`);
-        staleItems[i] = { cassette: cp, status: "failed", error: `${rc.error} — cannot re-record` };
+      const t = readRerecordTarget(cp);
+      if ("error" in t) {
+        log(`  ✗ ${tag} ${cp}: ${t.error} — cannot re-record`);
+        staleItems[i] = { cassette: cp, status: "failed", error: `${t.error} — cannot re-record` };
         return false;
       }
-      const cassette = rc.cassette;
+      // An older-format cassette (below the read floor, or missing a field replay now requires) still names its
+      // scenario source; it re-records from that, and only from that — its embedded snapshot is not readable.
+      const cassette = "cassette" in t ? t.cassette : undefined;
+      const located = cassette ?? (t as { old: { scenarioSource?: string; scenario: { name?: string } } }).old;
+      const shownName = located.scenario.name ?? "(unnamed)";
       // PREFER the persisted authored-source path (robust to an authored `name:` ≠ filename — the
       // name-based probe misses that and would re-record the embedded snapshot, silently dropping edits).
-      const src = _resolveRerecordSource(cp, cassette);
+      const src = _resolveRerecordSource(cp, located);
       if (src.persistedMissing)
-        log(
-          `  ⚠ ${tag} persisted scenario source "${src.persistedMissing}" not found — falling back to name lookup for "${cassette.scenario.name}"`,
-        );
+        log(`  ⚠ ${tag} persisted scenario source "${src.persistedMissing}" not found — falling back to name lookup for "${shownName}"`);
       const diskScenario = src.path;
       log(`${tag} ↻ re-recording ${cp} (stale: ${staleness.join("; ")})`);
       try {
@@ -5746,6 +5785,13 @@ export async function cmdRecord(args: string[]) {
             allowHostInventoryFixture,
             allowHostInventoryFindings,
           });
+        } else if (cassette === undefined) {
+          const why =
+            `no on-disk scenario found for "${shownName}", and this cassette is an older format this build cannot read, so ` +
+            `there is no embedded snapshot to fall back on. Re-record it from its scenario file: \`record <scenario.yaml> --out ${cp}\``;
+          log(`  ✗ ${tag} ${why}`);
+          staleItems[i] = { cassette: cp, status: "failed", error: why };
+          return false;
         } else if (!fromEmbedded) {
           // No on-disk scenario resolved. Re-recording from the embedded snapshot silently DROPS any edits
           // to the scenario YAML (the user believes stale cassettes were refreshed from edited YAML, but the
@@ -5781,7 +5827,7 @@ export async function cmdRecord(args: string[]) {
         // A source without `fidelity:` gets the remedy worded for THIS cassette: add the tier it recorded.
         // The generic remedy leads with `container`, which on a hostloop/protocol cassette would switch the
         // tier on the next record — a recording-shaping change nobody chose.
-        const why = e instanceof FidelityMissingError ? fidelityMissingForCassette(e, cassette.scenario) : recordErrorText(e);
+        const why = e instanceof FidelityMissingError && cassette ? fidelityMissingForCassette(e, cassette.scenario) : recordErrorText(e);
         log(`  ✗ ${tag} ${cp}: ${why}`);
         if (e instanceof RecordPostRunRefusalError) staleBudget.add(budgetFields(e.result).costUsd);
         staleItems[i] = { cassette: cp, status: "failed", error: why, ...refusedRunFields(e) };
