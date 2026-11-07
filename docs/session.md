@@ -164,7 +164,7 @@ that skill instead of the shared root.
 | `model` | string | model picker | e.g. `claude-opus-4-8`. A run must resolve a model: from `--model` (or a matrix `models:` axis), this key, or `COWORK_HARNESS_MODEL`, in that order. A run that resolves none is refused before it spends. |
 | `effort` | enum | effort selector | Accepts `low` \| `medium` \| `high` \| `xhigh` \| `max` \| `extra` (`extra` is the UI label for `xhigh` — normalized to `xhigh` on load). Validated against the *resolved* model's per-model config in the platform baseline (`spawn.effortByModel` / `spawn.effortRegexDefault`), per Cowork's four model classes: a **picker model** (e.g. `claude-opus-4-8`) must use one of its offered levels, else this is a load-time error naming them; a **no-effort model** (`claude-haiku-4-5`, `claude-sonnet-4-5` — no picker in the Cowork UI at all) rejects an explicit `effort:` outright; a **regex-default model** (the fable/mythos family) validates against that class's levels; an **unrecognized/omitted model** accepts any of the six tokens with no per-model check. Omit `effort:` entirely to get Cowork's flat `medium` fallback (binary-verified: real Cowork always emits `--effort`, defaulting to `medium` rather than the model's UI-only `recommended`, for every class — it never omits the flag). Passed as the `--effort` CLI flag (the `CLAUDE_EFFORT` env var is a no-op). `run` and `eval` do not refuse `xhigh` or `max` with `extended_thinking: false`: the agent lowers the effort it sends. Only `hillclimb run` refuses that combination before spend, and checks the effort the agent actually sent ([hillclimb.md](./hillclimb.md#model-and-effort-per-variant)). |
 | `extended_thinking` | boolean | extended thinking toggle | Real, honored, **default `true` (ON)** — binary-verified (`setExtendedThinking(sessionId, enabled)`). ON resolves to the fixed `DEFAULT_MAX_THINKING_TOKENS` budget (`31999`) → `--max-thinking-tokens 31999`; OFF → `--thinking disabled`. No arbitrary N — real Cowork is always 31999-or-off. Delivered as a CLI flag only; there is **no** `MAX_THINKING_TOKENS` env in real Cowork. See `debug.max_thinking_tokens` for a fenced, non-Cowork way to emit an arbitrary budget. |
-| `agent_max_turns` | number | turn ceiling | a positive integer → the agent's `--max-turns` (early-exits after N agentic turns). Omit for the agent's own default — faithful to interactive Cowork, which passes no `--max-turns` (only scheduled tasks default to 100). **Distinct from the `max_turns` assertion**, which is a post-hoc upper-bound *check*, not a ceiling *setter*. |
+| `agent_max_turns` | number | turn ceiling | a positive integer → the agent's `--max-turns` (early-exits after N agentic turns). Omit for the agent's own default — faithful to interactive Cowork, which passes no `--max-turns` (only scheduled tasks default to 100). **Distinct from the `max_turns` assertion**, which is a post-hoc upper-bound *check*, not a ceiling *setter*. A run the cap stops ends `result: error`; a scenario that sets the cap on purpose asserts [`allow_max_turns: true`](./scenario.md) to count it as completed. |
 | `permission_mode` | enum | permission mode | `default` \| `acceptEdits` \| `plan` \| `bypassPermissions` → `--permission-mode`. Omitted, it is `default`, or `acceptEdits` for a scenario with `device_bridge: true` (what a production cloud task reports under the Manual choice). A value you set always wins. |
 | `permission_parity` | enum | (harness policy) | `cowork` (default) \| `strict`. `cowork` mirrors Cowork's permission default — unscripted tool calls are allowed; `strict` denies any tool call that no scripted answer / decider covers. Affects the harness `Decider`, not a Cowork control. |
 | `answer_channel` | enum | *(none — not a Cowork setting)* | `none` only; omit for Cowork's answer channel. Models a headless host with **nobody to answer** the agent: it is spawned with `--permission-prompts none` instead of the stdio permission tool, so permission prompts are denied inside the agent, and `AskUserQuestion`, `EnterPlanMode` and `ExitPlanMode` are removed from its toolset. Requires `permission_mode: bypassPermissions`; refuses `answers:`, `on_unanswered`, deciders, `permission_parity: strict`, `web_fetch.approved_domains`, the gate assertion keys, `questions_count_max` and `tool_called: AskUserQuestion`; refused at `hostloop`/`cowork` and on `lane: remote`; the scenario must assert a file the skill writes (`file_absent` does not count). A stop at a question is reported as `parked_at_question` (warn), not `stalled`. Every surface labels the run `[headless, no answer channel — not Cowork]`. Full contract: [headless-no-answer.md](./headless-no-answer.md). |
@@ -177,8 +177,8 @@ that skill instead of the shared root.
 
 ### Which keys reach the agent, per tier
 
-Every tier builds the agent's command line from one function, so a session key that sets an agent flag sets it on
-every tier. The table is generated from the harness's own record of its launch fields, and a test keeps it in sync.
+The two command-line builders (the sandbox tiers' and protocol's) share three segments built in one place (effort,
+thinking and the turn cap; the model; session pinning), so a session key that sets an agent flag sets it on every tier. The table is generated from the harness's own record of its launch fields, and a test keeps it in sync.
 Keys not listed here are staging, the spawn environment, or harness policy, not agent flags.
 
 <!-- session-argv-fields:start -->
@@ -190,13 +190,13 @@ Keys not listed here are staging, the spawn environment, or harness policy, not 
 | `debug.max_thinking_tokens` | `--max-thinking-tokens` | yes | yes |  |
 | `debug.thinking_display` | `--thinking-display` | yes | yes |  |
 | `agent_max_turns` | `--max-turns` | yes | yes |  |
-| `skill --session-id` | `--session-id` | yes | yes |  |
+| `skill --session-id`, each leg of a `legs:` run | `--session-id` | yes | yes |  |
 | `skill --resume` | `--resume` | yes | yes |  |
 | a staged plugin that declares hooks | `--include-hook-events` | yes | yes |  |
 | `answer_channel` | `--permission-prompt-tool` / `--permission-prompts` | yes | yes |  |
 | `plugins`, the skill folder | `--plugin-dir` | yes | yes |  |
 | `mcp.config` | `--mcp-config` | yes | yes | the sandbox tiers pass the staged guest copy; protocol passes the host path |
-| `permission_mode` | `--permission-mode` | yes | yes |  |
+| `permission_mode` | `--permission-mode` | yes | yes | protocol passes it only when set; the sandbox tiers always pass it, falling back to the baseline's value |
 <!-- session-argv-fields:end -->
 
 At `protocol`, off the managed config branch (a local login with no token), the agent reads and writes your real

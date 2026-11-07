@@ -69,7 +69,9 @@ describe("SESSION_ARGV_FIELDS: every flag-bearing launch-plan field reaches prot
 
   it("protocol: unset session fields add nothing beyond the always-on effort and thinking defaults", () => {
     const argv = protocol(plan());
+    const unset = protocol(plan({ permissionMode: undefined }));
     for (const f of ["--max-turns", "--thinking-display", "--session-id", "--resume", "--model"]) expect(argv).not.toContain(f);
+    expect(unset).not.toContain("--permission-mode");
     expect(hasRun(argv, ["--max-thinking-tokens", "31999"])).toBe(true);
   });
 });
