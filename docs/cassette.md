@@ -882,8 +882,8 @@ possible.
   live session's SHAPE. Distinct from `fingerprint.skillHash` (skill/plugin file content): a folder swapped or
   egress widened can drift the session with the skill tree untouched. Computed and hard-failed by
   `verify-cassettes` **only**, gated by the same `--skip-staleness` flag as the rest of this list — it never
-  affects the default `replay` verdict, not even under `--strict`. `sessionFingerprint` is optional even on a
-  v9+ cassette (below v9 the cassette is refused at load, not silently tolerated) — absent → silently not
+  affects the default `replay` verdict, not even under `--strict`. `sessionFingerprint` is optional on a
+  readable cassette (below v12 the cassette is refused at load, not silently tolerated) — absent → silently not
   checked (no false stale on an old, still-valid recording). A genuine mismatch is normally a hard fail —
   **except** when the session file was only resolved via a name-lookup fallback (its persisted source path
   was missing, so the cassette may have been relocated onto a tree that doesn't mirror the original layout

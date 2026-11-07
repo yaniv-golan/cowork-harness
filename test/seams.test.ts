@@ -1310,8 +1310,7 @@ describe("Cassette — protocol replay", () => {
       }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
     ];
-    // controlOut is non-empty (so hasControlOut=true / full-fidelity mode) but carries only an
-    // UNRELATED response — req-p1 has no recorded envelope → truncation.
+    // controlOut carries only an UNRELATED response — req-p1 has no recorded envelope → truncation.
     const controlOut = [
       JSON.stringify({
         type: "control_response",

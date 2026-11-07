@@ -782,8 +782,8 @@ export interface AssertContext {
    *  is NOT the same as undefined. */
   mcpErrors?: RunResult["mcpErrors"];
   /** RunResult.hookEvents — PreToolUse hook fire/block events. Undefined means no hook telemetry was
-   *  recorded for this run (an older run, or a replay whose cassette lacks `controlOut` — a custom
-   *  hook's decision lives only there) — the evidence-unavailable signal for hook_blocked/
+   *  recorded for this run (an older run; on replay a custom hook's decision is read from `controlOut`) —
+   *  the evidence-unavailable signal for hook_blocked/
    *  no_hook_blocked; an empty `[]` is a valid "no hook fired" state and is NOT the same as undefined. */
   hookEvents?: RunResult["hookEvents"];
   /** RunResult.fileToolAttempts — gated-file-tool attempt telemetry. Undefined = evidence unavailable

@@ -49,7 +49,7 @@ describe("behaviourSummary", () => {
     expect(behaviourSummary(c).gates).toBe(1);
   });
 
-  it("reports 0 gates when controlOut is absent", () => {
+  it("reports 0 gates when the fixture carries no controlOut (behaviourSummary reads the raw document)", () => {
     expect(behaviourSummary(fixture({})).gates).toBe(0);
   });
 

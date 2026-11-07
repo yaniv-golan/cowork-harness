@@ -68,6 +68,12 @@ All notable changes to this project are documented here. The format is based on
   `1`; the partial-migration `4` is gone. `--dry-run` and `--session` are still accepted and change nothing; the JSON
   payload keeps `migrated` (always `0`).
 - **`lint` no longer reports `gate-needs-controlout`**: every cassette this build reads carries `controlOut`.
+- **`verify-cassettes --json` no longer lists `controlout-missing` in `uncheckable[]`**: a gate key is always
+  checkable on a cassette this build reads.
+- **`record` refuses to write a cassette when the run's `control-out.jsonl` is missing or empty** (a post-run
+  refusal: the run's verdict and cost are still reported). Every driven session writes at least its `initialize`
+  request there, so an empty file means the control responses were not captured, and a cassette frozen from it
+  could not grade its decisions on replay.
 - **`verify-cassettes --margins` reports `questions_count_max` as not derivable (`null`) whenever the replay failed
   as a truncated cassette**, instead of only when `controlOut` was absent or empty, so an unanswered decision never
   reads as an infinite margin.

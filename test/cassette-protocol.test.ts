@@ -118,9 +118,9 @@ describe("skill_triggered / no_skill_triggered evaluate end-to-end on replay (Wa
   });
 });
 
-describe("no_scratchpad_leak evaluates end-to-end on replay (content-class, not controlOut-gated)", () => {
+describe("no_scratchpad_leak evaluates end-to-end on replay (content-class, read from the events stream)", () => {
   // present_files' tool_use (the input file list) and its own tool_result (one path per input file, in
-  // order) both live in the ordinary events stream — no controlOut needed, unlike the gate keys above.
+  // order) both live in the ordinary events stream, not in controlOut like the gate keys above.
   const CWD = "/sessions/x";
   const presentFilesEvents = (toFrom: { from: string; to: string }[]) => [
     JSON.stringify({ type: "system", subtype: "init", tools: [], cwd: CWD }),

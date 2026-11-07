@@ -385,6 +385,6 @@ decided when the cassette is recorded. A key that changes what a verdict means (
 the cassette's version stamp, so the older `replay` / `verify-cassettes` refuses it as too new instead of
 evaluating it (`replay --best-effort-future-cassette` overrides that and names the key). For `lane: remote`
 that holds for a cassette recorded on ≥ 1.16.0 (stamped v11); one recorded by 1.14.0 or 1.15.0 is stamped
-v10, and a pre-`lane` CLI ignores the key there. A meaning-neutral key leaves the
+v10, and a pre-`lane` CLI ignores the key there (5.0 reads v12+ only). A meaning-neutral key leaves the
 stamp alone and is ignored by design. Full split:
 [docs/scenario.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md#unknown-keys-the-loader-is-strict-lint-is-lenient).

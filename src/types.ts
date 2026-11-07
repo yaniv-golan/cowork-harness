@@ -3500,9 +3500,9 @@ export interface RunResult {
    *  Live-only — MCP round-trips are harness-computed, not in the SDK stdout stream, so absent on
    *  replay (the assertion then fails evidence-unavailable, never vacuously passes). */
   mcpErrors?: Array<{ server: string; code?: number; message: string }>;
-  /** PreToolUse hook fire/block events. Reconstructed on replay only when the cassette carries
-   *  `controlOut` (a custom hook's decision lives there, not in the stream) — else the hook assertions
-   *  are excluded-loud, never vacuously passed. */
+  /** PreToolUse hook fire/block events. Reconstructed on replay from the recorded `controlOut` (a custom
+   *  hook's decision lives there, not in the stream); a callback with no recorded reply fails the replay as
+   *  a truncated cassette, never read as an allow. */
   hookEvents?: Array<{ callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string }>;
   /** Attempt-level gated-file-tool telemetry (raw paths as sent). Undefined = evidence unavailable
    *  (a result recorded before this field existed); [] = captured, no gated attempts. Replay
@@ -3519,9 +3519,9 @@ export interface RunResult {
    *  on a path grounds — the PreToolUse path gate itself, a denied `can_use_tool` ask on a gated file
    *  tool with a path, and a pre-ask `permission_denied` correlated to a recorded gated attempt. Each
    *  producer independently filters to path-relevant denials (see RunRecord.pathDenials for the exact
-   *  filter each applies). Undefined = evidence unavailable (an older result, or a replay whose cassette
-   *  lacks `controlOut` — the can_use_tool source is reconstructible ONLY from controlOut); [] = captured,
-   *  no path denials. */
+   *  filter each applies). Undefined = evidence unavailable (an older result; the can_use_tool source is
+   *  reconstructible ONLY from controlOut, which every replayable cassette carries); [] = captured, no path
+   *  denials. */
   pathDenials?: Array<{
     source: "pretooluse" | "can_use_tool" | "permission_denied";
     tool: string;

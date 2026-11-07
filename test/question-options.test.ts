@@ -149,9 +149,8 @@ describe("question_options fails closed, never vacuously", () => {
 });
 
 describe("question_options wiring", () => {
-  // Sourced from ask-time capture, so it must be gated on controlOut exactly like the other gate keys —
-  // otherwise a controlOut-less replay would evaluate it against a record that never drove a decision.
-  it("is classified as a controlOut-gated replay key", () => {
+  // Sourced from ask-time capture, so it grades against the recorded controlOut exactly like the other gate keys.
+  it("is classified as a gate key (graded against controlOut on replay)", () => {
     expect(QUESTION_GATE_KEYS).toContain("question_options");
   });
 
