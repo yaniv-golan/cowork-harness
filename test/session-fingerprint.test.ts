@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync } from 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { buildSessionFingerprint, sessionFingerprintDrift, CASSETTE_VERSION, type Cassette } from "../src/run/cassette.js";
+import { DEFAULT_USER_VISIBLE_ROOTS, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 // Finding 23: a session-SHAPE fingerprint (connected folders/plugin/skill/mcp discovery config/egress
 // allowlist), distinct from `fingerprint.skillHash` (skill/plugin FILE content). Checked ONLY by
@@ -193,6 +194,8 @@ describe.skipIf(!existsSync(CLI))("verify-cassettes gates on session-fingerprint
     const cassettePath = join(d, "c.cassette.json");
     const cassette = {
       cassetteVersion: CASSETTE_VERSION,
+      controlOut: recordedControlOut(),
+      userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
       sessionFingerprint: fp,
       scenario: {
         name: "c",
@@ -220,7 +223,7 @@ describe.skipIf(!existsSync(CLI))("verify-cassettes gates on session-fingerprint
     expect(drifted.results[0].staleness.some((s: string) => /session-shape fingerprint/.test(s))).toBe(true);
   });
 
-  it("v9 cassette (no sessionFingerprint) is NOT checked even though the session drifted", () => {
+  it("a cassette with no sessionFingerprint is NOT checked even though the session drifted", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-sfd-e2e-v9-"));
     const folder = join(d, "proj");
     mkdirSync(folder, { recursive: true });
@@ -228,8 +231,10 @@ describe.skipIf(!existsSync(CLI))("verify-cassettes gates on session-fingerprint
 
     const cassettePath = join(d, "c.cassette.json");
     const cassette = {
-      cassetteVersion: 9,
-      // no sessionFingerprint — optional field, absent even at the v9 floor (backward-compat within v9+)
+      cassetteVersion: 12,
+      controlOut: recordedControlOut(),
+      userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
+      // no sessionFingerprint — an optional field
       scenario: {
         name: "c",
         baseline: "latest",

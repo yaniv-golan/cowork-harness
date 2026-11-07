@@ -1502,7 +1502,7 @@ describe("file_exists / user_visible_artifact pass on truncated cassette entries
     { path: "outputs/small.json", bytes: smallContent.length, sha256: smallSha, body: smallContent.toString("utf8") },
     { path: "outputs/non-visible/internal.log", bytes: 1, sha256: bigSha, truncated: true as const, truncationReason: "size" as const },
   ];
-  const { workRoot, truncatedPaths } = materializeManifest(entries);
+  const { workRoot, truncatedPaths } = materializeManifest(entries, ["outputs", ".projects"]);
   const base = ctx({ workRoot, truncatedPaths });
 
   it("file_exists passes for a truncated entry (existence proven by manifest)", () => {
@@ -1541,7 +1541,7 @@ describe("file_exists / user_visible_artifact pass on truncated cassette entries
     // Replay knows the read-only set (persisted on the cassette → passed into the ctx), so a body-less
     // read-only input gets the "assert on a deliverable" remedy, NOT the inert "raise --max-artifact-bytes".
     const roEntries = [{ path: "carta/input.json", bytes: 40, sha256: smallSha, truncated: true as const }];
-    const ro = materializeManifest(roEntries);
+    const ro = materializeManifest(roEntries, ["outputs", ".projects"]);
     const roCtx = ctx({ workRoot: ro.workRoot, truncatedPaths: ro.truncatedPaths, readonlyFolderRoots: ["carta"] });
     const r = evaluate([{ artifact_json: { artifact: "carta/input.json", path: "x", equals: 1 } }], roCtx);
     expect(pass(r)).toBe(false);
@@ -1600,8 +1600,8 @@ describe("replay lane: user_visible_artifact honors the cassette's stored userVi
     expect(pass(evaluate([{ user_visible_artifact: "project/report.md" }], ctx({ workRoot, userVisiblePrefixes: prefixes })))).toBe(true);
   });
 
-  it("the SAME file is INVISIBLE under the legacy default roots (proves the stored field is load-bearing)", () => {
-    const { workRoot, prefixes } = materializeManifest(entries); // default ["outputs",".projects"]
+  it("the SAME file is INVISIBLE under other roots (proves the stored field is load-bearing)", () => {
+    const { workRoot, prefixes } = materializeManifest(entries, ["outputs", ".projects"]);
     expect(pass(evaluate([{ user_visible_artifact: "project/report.md" }], ctx({ workRoot, userVisiblePrefixes: prefixes })))).toBe(false);
   });
 });

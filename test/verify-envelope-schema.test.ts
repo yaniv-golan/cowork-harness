@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import Ajv from "ajv";
+import { DEFAULT_USER_VISIBLE_ROOTS, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 // Pins the `verify-cassettes --output-format json` envelope against its published contract schema
 // (schema/verify-cassettes.json, a covered 1.0 surface — SPEC §12). Two-way drift tripwire:
@@ -42,7 +43,9 @@ function envelope(args: string[], cwd: string): unknown {
 }
 
 const cassette = (over: Record<string, unknown> = {}) => ({
-  cassetteVersion: 9,
+  cassetteVersion: 12,
+  controlOut: recordedControlOut(),
+  userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
   scenario: {
     name: "c",
     baseline: "latest",

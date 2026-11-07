@@ -95,14 +95,14 @@ describe.skipIf(!can)("rehash CLI", () => {
     expect(r.stderr).toMatch(/usage.*rehash/i);
   });
 
-  it("rehash on an empty dir exits 0 with 'nothing to migrate' message", () => {
+  it("rehash on an empty dir exits 0 saying there are no cassettes", () => {
     const dir = mkdtempSync(join(tmpdir(), "cwh-rehash-"));
     const r = spawnSync("node", [CLI, "rehash", dir], { encoding: "utf8" });
     expect(r.status).toBe(0);
-    expect(r.stderr).toMatch(/nothing to migrate/);
+    expect(r.stderr).toMatch(/no cassettes in directory/);
   });
 
-  it("rehash on a cassette without contentSig reports 're-record' and exits 1", () => {
+  it("a cassette below the read floor is reported with its re-record remedy and exits 1", () => {
     const dir = mkdtempSync(join(tmpdir(), "cwh-rehash-"));
     const body = {
       cassetteVersion: 2,
@@ -121,93 +121,10 @@ describe.skipIf(!can)("rehash CLI", () => {
         JSON.stringify({ type: "result", subtype: "success", is_error: false }),
       ],
       fingerprint: { baseline: "1.0.0", skillHash: "aabbccdd" },
-      // No contentSig — pre-v3 cassette
     };
     writeFileSync(join(dir, "s.cassette.json"), JSON.stringify(body));
     const r = spawnSync("node", [CLI, "rehash", dir], { encoding: "utf8" });
     expect(r.status).toBe(1);
-    expect(r.stderr).toMatch(/re-record/i);
-  });
-
-  // Note: the full migrate happy-path (contentSig matches + baseline matches live → action:migrated)
-  // requires knowing the live baseline at test time (from loadBaseline("latest").appVersion), making
-  // it an integration test beyond the token-free scope of this plan. The core comparison logic is
-  // covered by the computeContentSig unit tests above (determinism + change-detection). The
-  // content-mismatch CLI path is tested below.
-  // BEHAVIOUR CHANGE at the hash-format epoch. Baseline drift used to SKIP, harmless while an
-  // un-migrated cassette still replayed. It is now a trap: a pre-epoch cassette FAILS a bare replay
-  // until restamped, so skipping leaves it unplayable while rehash exits 0 saying "nothing to
-  // migrate" — which every consumer who has run `sync` would hit on every file.
-  // `fingerprint.baseline` is recorded metadata, never an input to skillHash.
-  it("does NOT dismiss a baseline-drifted cassette before the format logic runs", () => {
-    const skillDir = makeSkillDir({ "index.ts": "export const x = 1;" });
-    const sig = computeContentSig([skillDir]);
-    const dir = mkdtempSync(join(tmpdir(), "cwh-rehash-"));
-    const body = {
-      cassetteVersion: 9,
-      scenario: {
-        name: "s",
-        baseline: "not-a-real-baseline",
-        session: "(inline)",
-        fidelity: "container",
-        prompt: "hi",
-        answers: [],
-        expect_denied: [],
-        assert: [],
-      },
-      events: [
-        JSON.stringify({ type: "system", subtype: "init" }),
-        JSON.stringify({ type: "result", subtype: "success", is_error: false }),
-      ],
-      fingerprint: { baseline: "not-a-real-baseline", skillHash: "aabbccdd", contentSig: sig },
-    };
-    writeFileSync(join(dir, "s.cassette.json"), JSON.stringify(body));
-    const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
-    // Exits 0 (skipped is not an error); baseline mismatch causes skip, not error
-    const out = JSON.parse(r.stdout.trim());
-    expect(out.command).toBe("rehash");
-    // This v9 fixture still routes to a re-record via the link-identity guard — the point is that it is
-    // no longer dismissed as a baseline skip before the format logic is ever reached.
-    expect(out.results[0].reason).not.toMatch(/baseline drifted/i);
-  });
-
-  // #38: a v9 cassette that WOULD migrate cleanly (content unchanged, baseline matches, algo 4) must NOT be
-  // silently stamped to v10 — v10 records symlink/hardlink identity the old manifest never captured and
-  // rehash cannot synthesize. It routes to a re-record instead. We construct the clean-migrate case by
-  // computing the cassette's fingerprint exactly the way rehash recomputes it (buildFingerprint), so every
-  // earlier gate passes and only the v10 guard fires.
-  it("rehash refuses to stamp a v9→v10 bump even when content is unchanged (routes to re-record)", () => {
-    const liveBaseline = loadBaseline("latest").appVersion;
-    const skillDir = makeSkillDir({ "SKILL.md": "# probe\ndo a thing" });
-    const dir = mkdtempSync(join(tmpdir(), "cwh-rehash-v10-"));
-    const sessionPath = join(dir, "session.yaml");
-    writeFileSync(sessionPath, `skills:\n  local:\n    - ${skillDir}\n`);
-    // Compute the fingerprint the same way cmdRehash will (absolute session path ⇒ cassetteDir irrelevant).
-    const fp = buildFingerprint(sessionPath, liveBaseline, dir, undefined);
-    expect(fp.contentSig).toBeTruthy(); // sanity: skill dirs resolved, so we actually reach the migrate gate
-    const body = {
-      cassetteVersion: 9,
-      scenario: {
-        name: "s",
-        baseline: liveBaseline,
-        session: sessionPath,
-        fidelity: "container",
-        prompt: "hi",
-        answers: [],
-        expect_denied: [],
-        assert: [],
-      },
-      events: [
-        JSON.stringify({ type: "system", subtype: "init" }),
-        JSON.stringify({ type: "result", subtype: "success", is_error: false }),
-      ],
-      fingerprint: { baseline: liveBaseline, skillHash: fp.skillHash, contentSig: fp.contentSig },
-    };
-    writeFileSync(join(dir, "s.cassette.json"), JSON.stringify(body));
-    const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
-    expect(r.status).toBe(1); // error exit
-    const out = JSON.parse(r.stdout.trim());
-    expect(out.results[0].action).toBe("error");
-    expect(out.results[0].reason).toMatch(/v10 records symlink\/hardlink/i);
+    expect(r.stderr).toMatch(/below the minimum supported v12 — re-record it/);
   });
 });

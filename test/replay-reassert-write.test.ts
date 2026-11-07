@@ -52,7 +52,8 @@ function cassetteJson(opts: { name?: string; assert?: unknown[]; controlOut?: un
         assert: opts.assert ?? [{ result: "success" }],
       },
       events: events(),
-      controlOut: opts.controlOut ?? [],
+      controlOut: opts.controlOut ?? recordedControlOut(),
+      userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
     },
     null,
     2,
@@ -351,6 +352,7 @@ describe.skipIf(!can)("replay --reassert --write — directory (per-cassette sib
 // "unrecognized assertion … re-record" instead of "too new; upgrade". Exercised on a COPY of the committed
 // v12 example (never the original).
 import { cpSync } from "node:fs";
+import { DEFAULT_USER_VISIBLE_ROOTS, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 describe.skipIf(!can)("replay --reassert --write restamps the cassette version", () => {
   const copyExamples = () => {

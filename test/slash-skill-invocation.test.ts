@@ -8,6 +8,7 @@ import { assertContextFromRunDir } from "../src/run/verify-context.js";
 import { replayCassette } from "../src/run/cassette.js";
 import { runProvenance, formatProvenanceLine } from "../src/run/provenance.js";
 import type { RunResult, Scenario } from "../src/types.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 // A slash-command prompt (`/<skill> …` or `/<plugin>:<skill> …`) makes the agent binary expand the skill
 // itself — no `Skill` tool_use is ever emitted, and a `context: fork` skill forks directly. The fixtures are
@@ -194,7 +195,7 @@ describe("an answer that QUOTES a refusal line is still an invocation", () => {
           assert: [{ no_skill_triggered: "claude-code-internals" }],
         },
         events: events.map((e: unknown) => JSON.stringify(e)),
-        controlOut: [],
+        controlOut: recordedControlOut(),
       };
       const r = await replayCassette(cassette);
       expect(r.slashInvokedSkills).toEqual([QUALIFIED]);
@@ -276,7 +277,7 @@ describe("a slash command the binary REFUSED is not an invocation", () => {
           assert: [{ no_skill_triggered: "claude-code-internals" }],
         },
         events: events.map((e) => JSON.stringify(e)),
-        controlOut: [],
+        controlOut: recordedControlOut(),
       };
       const r = await replayCassette(cassette);
       expect(r.slashInvokedSkills).toEqual([]);
@@ -343,7 +344,7 @@ describe("replay yields the same slash channel the live lane computes", () => {
       assert,
     },
     events: f.events.map((e) => JSON.stringify(e)),
-    controlOut: [],
+    controlOut: recordedControlOut(),
   });
   it("s1: RunResult.slashInvokedSkills is the staged id, and skill_triggered passes on replay", async () => {
     mute();

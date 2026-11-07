@@ -11,6 +11,7 @@ import { CASSETTE_VERSION } from "../src/run/cassette.js";
 // (usage/boundary fail before any agent spawn; replay is deterministic). Needs `dist/cli.js`
 // (the `ci` script builds before testing); skips cleanly otherwise.
 import { fakeLimactl } from "./helpers/fake-limactl.js";
+import { DEFAULT_USER_VISIBLE_ROOTS, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 const CLI = resolve("dist/cli.js");
 // `vm status` reaches Lima; these tests talk to a scripted limactl, never to a VM on this machine.
@@ -48,7 +49,8 @@ const cassette = (assert: unknown[], text = "hello there", controlOut?: string[]
     JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text }] } }),
     JSON.stringify({ type: "result", subtype: "success", is_error: false }),
   ],
-  ...(controlOut !== undefined ? { controlOut } : {}),
+  controlOut: controlOut ?? recordedControlOut(),
+  userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
 });
 
 describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
@@ -867,9 +869,9 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     const cwd = mkdtempSync(join(tmpdir(), "cc-prov-"));
     const body = {
       ...cassette([]),
-      $schema: "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/cassette.v9.json",
+      $schema: "https://raw.githubusercontent.com/yaniv-golan/cowork-harness/main/schema/cassette.v12.json",
       generator: "cowork-harness",
-      cassetteVersion: 9,
+      cassetteVersion: 12,
     };
     writeIn(cwd, "s.cassette.json", JSON.stringify(body));
     const r = spawnSync("node", [CLI, "replay", "s.cassette.json"], { encoding: "utf8", cwd });

@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { hermeticPackageRoot } from "./helpers/hermetic-cli.js";
+import { DEFAULT_USER_VISIBLE_ROOTS, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 // Structural guard (built incrementally as commands migrate to parseArgs): every migrated command must
 // reject an unknown flag and an extra positional with exit 2, and must not mistake a value-flag's value
@@ -22,7 +23,9 @@ function run(args: string[], cwd: string) {
 
 const cassette = () =>
   JSON.stringify({
-    cassetteVersion: 9,
+    cassetteVersion: 12,
+    controlOut: recordedControlOut(),
+    userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
     scenario: {
       name: "c",
       baseline: "latest",
@@ -95,7 +98,9 @@ describe.skipIf(!can)("CLI arg guards — migrated commands fail loud", () => {
   it("replay: a cassette missing the optional `assert` key does not crash (readCassette normalizes it)", () => {
     const d = mkdtempSync(join(tmpdir(), "g-"));
     const noAssert = JSON.stringify({
-      cassetteVersion: 9,
+      cassetteVersion: 12,
+      controlOut: recordedControlOut(),
+      userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
       scenario: { name: "c", baseline: "latest", session: "(inline)", fidelity: "container", prompt: "hi", answers: [], expect_denied: [] },
       events: [JSON.stringify({ type: "result", subtype: "success" })],
     });

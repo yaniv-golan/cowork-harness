@@ -31,6 +31,7 @@ import { redactCassette, replayCassette, preSpendVerdicts, CASSETTE_VERSION, typ
 import type { LaunchPlan } from "../src/session.js";
 import type { Assertion, PlatformBaseline, Scenario } from "../src/types.js";
 import type { RedactionPolicy } from "../src/redact.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 const sha = (s: string | Buffer) => createHash("sha256").update(s).digest("hex");
 const tmp = (p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
@@ -155,7 +156,7 @@ describe("a fixture DIRECTORY never passes on fixture-only content", () => {
         JSON.stringify({ type: "system", subtype: "init", tools: [] }),
         JSON.stringify({ type: "result", subtype: "success", is_error: false }),
       ],
-      controlOut: [],
+      controlOut: recordedControlOut(),
       cassetteVersion: CASSETTE_VERSION,
       fingerprint: { baseline: LIVE },
       artifacts: [{ path: "outputs/scores/deck.json", bytes: deck.length, sha256: sha(deck), body: deck }],
@@ -232,7 +233,7 @@ describe("redaction of an untouched fixture body keeps it decidable on replay", 
         JSON.stringify({ type: "system", subtype: "init", tools: [] }),
         JSON.stringify({ type: "result", subtype: "success", is_error: false }),
       ],
-      controlOut: [],
+      controlOut: recordedControlOut(),
       cassetteVersion: CASSETTE_VERSION,
       fingerprint: { baseline: LIVE },
       artifacts: [{ path: "outputs/report.md", bytes: untouched.length, sha256: sha(untouched), body: untouched }],

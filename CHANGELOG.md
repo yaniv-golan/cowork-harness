@@ -26,6 +26,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`record --rerecord-stale` no longer overwrites a cassette written by a newer cowork-harness.** Such a cassette
+  can read as stale (its baseline moved), and the re-record then replaced it with this build's recording. It is now
+  reported as failed (`stamped vN, newer than this build (vM) — upgrade cowork-harness to re-record`) and left
+  untouched, and the batch does not exit 0; the same holds for a multi-leg cassette with such a leg.
 - **At `protocol`, the session's agent flags now reach the agent.** The protocol tier built its own command line and
   dropped `--max-turns`, the thinking flags, `--thinking-display`, and `--session-id`/`--resume`. So
   `agent_max_turns` was recorded but never applied, and `skill --session-id … --resume` at protocol started a new
@@ -59,6 +63,37 @@ All notable changes to this project are documented here. The format is based on
   `COWORK_LIVE_DOTENV`, then `~/.cowork-harness-token`, then the repository's `.env`. Before, two suites read the
   `.env` and only one read `COWORK_LIVE_DOTENV`, so the others could skip on a machine that had a token.
 - **CI's Node 22 floor job names what keeps the test runner alive after the run, and logs per-file test times.**
+- **Breaking: `replay` grades every gate key against the recorded `controlOut`.** `question_*`, `gate_*`,
+  `hook_blocked`/`no_hook_blocked` and the path-denial keys are always content assertions now; before, a cassette
+  without `controlOut` dropped them with a warning. A decision in the events with no recorded answer (an unpaired
+  `hook_callback`, or a question or permission with no response) fails the replay as a truncated cassette.
+- **Breaking: `rehash` no longer migrates; it checks each cassette is current.** It reports each one as current or
+  as needing a re-record, with the read refusal and its remedy, and rewrites nothing. It exits `0` (all current) or
+  `1`; the partial-migration `4` is gone. `--dry-run` and `--session` are still accepted and change nothing; the JSON
+  payload keeps `migrated` (always `0`).
+- **`lint` no longer reports `gate-needs-controlout`**: every cassette this build reads carries `controlOut`.
+- **`verify-cassettes --json` no longer lists `controlout-missing` in `uncheckable[]`**: a gate key is always
+  checkable on a cassette this build reads.
+- **`record` refuses to write a cassette when the run's `control-out.jsonl` is missing or empty** (a post-run
+  refusal: the run's verdict and cost are still reported). Every driven session writes at least its `initialize`
+  request there, so an empty file means the control responses were not captured, and a cassette frozen from it
+  could not grade its decisions on replay.
+- **`verify-cassettes --margins` reports `questions_count_max` as not derivable (`null`) whenever the replay failed
+  as a truncated cassette**, instead of only when `controlOut` was absent or empty, so an unanswered decision never
+  reads as an infinite margin.
+
+### Removed
+
+- **Breaking: cassettes below v12, or without `controlOut` or `userVisibleRoots`, are no longer read.** `replay`
+  refuses one (exit 2) and `verify-cassettes` reports it as could-not-verify (exit 3), naming the remedy:
+  for v10/v11, run `npx cowork-harness@4 rehash <dir/>` on it, or re-record it; for v9 and below, or a missing
+  field, re-record it. `record <dir/> --rerecord-stale` picks up every such cassette and re-records it from the
+  scenario file it names; with no scenario file on disk it fails naming the `record <scenario.yaml> --out <path>`
+  to run, since there is no readable embedded snapshot to fall back on.
+- **The pre-v12 skill-hash algorithm.** Digests are computed only the jcs1 way. No cassette this build reads
+  carries the older ones; a kept run dir that does is reported as not comparable (re-record), as before.
+- **`schema/cassette.v9.json`, `cassette.v10.json` and `cassette.v11.json`.** A cassette whose `$schema` names one
+  of them is below the read floor; its `$schema` URL now returns 404.
 
 ## [4.15.0] - 2026-11-06
 

@@ -45,7 +45,7 @@ Recording follows whatever `fidelity:` the scenario declares — a `protocol`-fi
 - [Artifact scrubbing at record time](#artifact-scrubbing-at-record-time)
 - [Assertion table](#assertion-table)
 - [Full-fidelity replay](#full-fidelity-replay)
-- [Backward compatibility (old cassettes without controlOut)](#backward-compatibility-old-cassettes-without-controlout)
+- [Older cassettes (below v12, or without controlOut)](#older-cassettes-below-v12-or-without-controlout)
 - [When to re-record](#when-to-re-record)
 - [Batch recording](#batch-recording)
 - [Privacy: cassettes are committed fixtures](#privacy-cassettes-are-committed-fixtures)
@@ -108,8 +108,8 @@ at this version or older, is a hard reject (exit 2) rather than a silent drop.
 
 A cassette recorded by **≥ 1.16.0** whose scenario carries `lane: remote` is stamped v11, which `replay`
 and `verify-cassettes` on an older CLI **refuse** — loudly. A cassette recorded by **1.14.0 or 1.15.0**
-carrying `lane: remote` is stamped v10 and is still silently misread by a pre-`lane` CLI; run `rehash` to
-re-stamp it — see [Cassette versioning](#cassette-versioning) below. **And `replay
+carrying `lane: remote` is stamped v10 and is still silently misread by a pre-`lane` CLI; this build refuses
+it as below the v12 floor — see [Older cassettes](#older-cassettes-below-v12-or-without-controlout). **And `replay
 --best-effort-future-cassette` overrides the refusal** — on that path an older CLI replays the v11
 cassette and the silent misread returns, so do not reach for that flag to work around a version refusal on
 a cassette you did not record.
@@ -119,7 +119,7 @@ back. Add **`--write`** to `--reassert` to persist the re-validated block into t
 when **only** the `assert:`/`expect_denied:` block changed; `controlOut` stays byte-identical, and `events` do too
 except that what the recorder now always removes is dropped from them (see "Always removed" below) — done even when
 the block is already current, which is how an older cassette adopts a newer scrub without a re-record. It refuses
-any key that would silently skip on this cassette (needs an artifact manifest, pre-run hashes, or `controlOut`)
+any key that would silently skip on this cassette (needs an artifact manifest or pre-run hashes)
 and, without `--allow-failing`, a failing verdict — so `--write` can't bake in a green a plain `replay` won't
 reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci) for the full propagation chain.
 
@@ -165,11 +165,11 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
 }
 ```
 
-`controlOut` is optional (old cassettes pre-dating full-fidelity replay lack it). When present it
-enables full-fidelity replay (see §Full-fidelity replay below). When absent, replay falls back to
-events-only mode with a loud warning.
+`controlOut` and `userVisibleRoots` are required: replay grades every decision against `controlOut` (see
+§Full-fidelity replay below) and replays the manifest under `userVisibleRoots`. A cassette missing either is
+refused at load, as re-recordable (see [Older cassettes](#older-cassettes-below-v12-or-without-controlout)).
 
-`artifacts` and `fingerprint` are also optional — both engage only when present, so old
+`artifacts` and `fingerprint` are optional — both engage only when present, so old
 cassettes replay unchanged.
 
 ### Cassette versioning
@@ -205,24 +205,10 @@ refusal says to upgrade instead. See [Unknown
 keys](./scenario.md#unknown-keys-the-loader-is-strict-lint-is-lenient) for what that refusal does and does
 not cover.
 
-`rehash <dir/>` migrates a cassette to the version it requires, without a re-record — the recovery path
-for both a scenario-key bump and a **hash-format** difference.
-
-**How the migration is proved.** A cassette is only rewritten when its content can be shown to be
-unchanged: `rehash` recomputes the digest under the **original** algorithm and compares it to what was
-recorded. Comparing a new-algorithm digest against an old record would be an algorithm mismatch, not a
-content check. `contentSig` is deliberately **not** the proof: it is algorithm-dependent, so comparing it across a format
-difference is the same mistake in a different field. `mode` (git/raw) and agent-scope must match too, since both change which files are hashed.
-
-Only the algorithm-derived values are then replaced. Everything else is carried through from the
-recording — including `promptAssetsHash` and `labelProvenance`, which the recompute cannot produce — and
-`fileSigs` keeps its recorded (redacted) paths, taking only new digests position by position.
-
-**A drifted baseline does NOT stop the migration.** `fingerprint.baseline` is the recorded Cowork app
-version — metadata, never an input to `skillHash` — so it says nothing about whether the content is
-unchanged. `rehash` migrates the hashes, keeps the recorded baseline, and notes the drift on the row.
-(This matters after `sync`, or for any cassette older than the current `baselines/`, which is otherwise
-every file you own.)
+**`rehash <dir/>` checks, it does not migrate.** It reports each cassette as current or as needing a
+re-record (exit 0 when all are current, 1 otherwise), and rewrites nothing. A cassette below v12 cannot be
+migrated by this build: `npx cowork-harness@4 rehash <dir/>` migrates a v10/v11 one, and anything older
+needs a re-record (`record <dir/> --rerecord-stale`).
 
 **Clearing a drifted baseline: re-record, or re-stamp.** `replay` only warns on a `baseline` finding and
 still exits 0, but `verify-cassettes` treats any staleness as not-green, so a drifted baseline reds the CI
@@ -237,8 +223,8 @@ gate until you do one of two things:
   exercises moved with it" — the tool cannot verify that for you. Re-stamp only when the baseline delta
   leaves the spawn contract, the emulated system prompt, the egress policy, the tool surface and the agent
   binary alone; if any of those changed, the recording was made against different behaviour and only a
-  re-record is honest. `promptAssetsHash` is the one piece of record-time evidence here, and `rehash` does
-  not recompute it, so a re-stamp does not and cannot confirm it. The agent binary is the one part the
+  re-record is honest. `promptAssetsHash` is the one piece of record-time evidence here, and nothing
+  recomputes it, so a re-stamp does not and cannot confirm it. The agent binary is the one part the
   tool does check, where a baseline pins it: `verify-cassettes` and `replay` print an `agent-version:`
   note when the agent version the recording's `system/init` event reports differs from the one the baseline
   its fingerprint names pins for that tier. At `container` and `microvm` that is the baseline's
@@ -247,20 +233,6 @@ gate until you do one of two things:
   there, and a `cowork` cassette that does not record its resolved tier is not checked either. The note
   does not fail the gate; re-record to clear it. A cassette already recorded on the pinned agent has no note, before
   or after a re-stamp.
-
-**It refuses rather than guessing.** `rehash` **errors** on a content mismatch, on unreadable sources, on
-a mode or agent-scope change, on `fileSigs` it cannot align entry-for-entry, and on a hand-authored digest
-it cannot recompute. Anything it refuses needs a real re-record.
-
-```bash
-cowork-harness rehash cassettes/                              # a directory
-cowork-harness rehash one.cassette.json --session s.yaml      # a MOVED cassette
-```
-
-**`--session` is for a cassette that moved.** A cassette stores `session:` relative to its own directory,
-so a `git mv`, a repo reorg or a copy into another project leaves its skill sources unresolvable — and
-therefore unprovable. `--session` says where the tree went. One cassette at a time: each may have been
-recorded against a different source, so a directory batch cannot share a single override.
 
 ### Multi-leg cassettes
 
@@ -369,12 +341,6 @@ cowork-harness verify-cassettes moved/x.cassette.json --session path/to/session.
 
 It resolves the skill sources from that session instead of the recorded cassette-relative path, so a
 moved cassette verifies without being re-recorded.
-
-**If the cassette also predates the hash-format epoch, migrate it first.** Relocation and the epoch are
-independent problems, and `--session` only solves the first: a pre-v12 cassette still reports
-`unverifiable-skill` because its digests are not comparable, whatever tree you point it at. Run
-`cowork-harness rehash <file.cassette.json> --session <session.yaml>` — that migrates *and* resolves in
-one step — then verify.
 
 Points worth knowing:
 
@@ -596,13 +562,13 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `gate_answers_delivered: false` | the inverse — asserts a *confirmed* delivery failure (at least one gate whose `delivered === false`); an unobserved (`null`) delivery satisfies neither `true` nor `false` |
 | `gate_answer_count_min` | at least N AskUserQuestion gates fired AND were delivered non-error — the presence companion to `gate_answers_delivered`'s vacuous-pass. **`: 0` asserts nothing**; `>= 1` is mutually exclusive with `questions_count_max: 0` |
 | `gates_all_scripted` | every gate was answered by a scripted rule. A replayed answer only says `replay`, so each gate is **re-classified against the cassette's frozen `answers:`**: a gate the frozen rules answer in full counts, anything else fails naming the gate. Evidence-unavailable instead when the frozen `answers:` were redacted (a redacted pattern no longer matches what it did), or when the cassette's `authoring.nonDeterministic` says a live decider answered a gate yet the frozen rules cover every gate. With `include_permissions`, a permission counts when a frozen `when_tool` rule covers it, it is a Read/Glob/Grep registry allow, or it was denied by a rule (a request the recording holds no answer for is evidence-unavailable); an off-registry allow is cowork parity's permissive auto-allow and fails; a replayed web_fetch permission cannot be attributed and fails evidence-unavailable. Zero gates passes (nothing needed a person), so pair it with `gate_answer_count_min: >= 1` or `questions_count_max` to state whether gates were expected (`lint` warns `unpaired-gates-all-scripted`). |
-| `hook_blocked` | a PreToolUse hook blocked a tool whose name matches the regex (`RunResult.hookEvents`) — replay: needs `controlOut` (a custom hook's decision lives only there) |
-| `no_hook_blocked` | no tool was hook-blocked during the run — replay: needs `controlOut`. **Only `true` is valid** |
+| `hook_blocked` | a PreToolUse hook blocked a tool whose name matches the regex (`RunResult.hookEvents`) — replay reads a custom hook's decision from `controlOut` (it lives only there) |
+| `no_hook_blocked` | no tool was hook-blocked during the run. **Only `true` is valid** |
 | `hook_event_fired` / `hook_event_blocked` / `no_hook_event_blocked` / `hook_decision` | a plugin's command hook for the named event ran / blocked (a count, or none) / decided `allow`, `deny`, `ask` or `defer` (`hook_response` system frames, their exit code and stdout JSON) — replay: content-class, re-derived from the frozen stream, no `controlOut` needed; a decision in stdout a redaction policy rewrote is evidence-unavailable. A failed or timed-out frame is read against the frozen `hookFailureBlocks`; a cassette recorded before that field existed is read by the agents its init frames report (every one 2.1.293 or earlier: no `onFailure`; any other, or none reported: unknown) |
 | `hook_output_contains` / `hook_output_not_contains` | a command hook for the named event printed / never printed a text on its `stdout` or `stderr` (the same `hook_response` frames) — replay: content-class, re-derived from the frozen stream. On a stream a redaction policy rewrote, a literal miss and any `matches` result are evidence-unavailable for either key, while a literal hit outside a token counts. `record`'s redaction self-check compares these two keys' failures by key, not message (their excerpts quote the rewritten stream); a pass that redaction turns into a failure is still refused |
-| `vm_path_denied` | **`fidelity: hostloop` only** — a path denial (`RunResult.pathDenials`, any source) targeted a `/sessions` VM path — replay: needs `controlOut`; any other tier FAILS "cannot verify" |
-| `path_denied` | **`fidelity: hostloop` only** — a path denial matched all given matchers (`tool`/`path_matches`/`source`/`agent_scope`) — replay: needs `controlOut`; any other tier FAILS "cannot verify" |
-| `no_path_denied` | **`fidelity: hostloop` only** — no path denial was recorded at all — replay: needs `controlOut`. **Only `true` is valid**; any other tier FAILS "cannot verify" |
+| `vm_path_denied` | **`fidelity: hostloop` only** — a path denial (`RunResult.pathDenials`, any source) targeted a `/sessions` VM path; any other tier FAILS "cannot verify" |
+| `path_denied` | **`fidelity: hostloop` only** — a path denial matched all given matchers (`tool`/`path_matches`/`source`/`agent_scope`); any other tier FAILS "cannot verify" |
+| `no_path_denied` | **`fidelity: hostloop` only** — no path denial was recorded at all. **Only `true` is valid**; any other tier FAILS "cannot verify" |
 | `result` | run ended with `success` or `error` |
 | `no_scratchpad_leak` | every file presented via `present_files` that was in the scratchpad was successfully promoted to `mnt/outputs` (none left behind) — vacuous pass if nothing was presented; content-class: both the tool_use and its own tool_result live in the ordinary events stream, so `RunResult.presentedFiles` re-derives on replay at container, where the agent's cwd IS the session root the live lane measures from; at hostloop the live lane measures from the session root while a re-drive has only the recorded cwd (`mnt/outputs` before Desktop 2.7032.0, `/private/var/empty` from it), so the promoted/leaked booleans there are not equivalent — immaterial to this key, which evaluates at container only; evidence-unavailable only when `presentedFiles` is absent (an older run predating the feature); **container tier only** — `present_files` *is* served on hostloop, but that branch passes a validated path through without promoting, so there is no scratch→outputs copy to leak; `microvm`/`protocol` do not serve the tool at all |
 | `present_files_called` | at least one file was delivered via `present_files` (`RunResult.presentFilesCalls` > 0 — the invocation count, which a host-path redaction policy cannot alter) — the presence companion to `no_scratchpad_leak`; content-class (re-derives identically on replay); **container + hostloop tiers** |
@@ -617,8 +583,8 @@ the rules and CI-placement rationale (why each category behaves this way), see
 
 **`question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `gates_all_scripted`, `hook_blocked`,
 `no_hook_blocked`, `vm_path_denied`, `path_denied`, `no_path_denied` require `controlOut`** (full-fidelity
-replay). On an old cassette without `controlOut` these keys are excluded from evaluation — not vacuously
-passed — and a loud warning fires (see §Backward compatibility). The hook and path-denial keys need
+replay), which every cassette this build reads carries; a decision with no recorded answer fails the replay as a
+truncated cassette. The hook and path-denial keys need
 `controlOut` for a different reason than the question keys: a custom hook's block/allow decision (and the
 `can_use_tool` source of a path denial) is an opaque async reply recorded only in `control-out.jsonl`, not in
 the `events` stream — reconstructing from the stream alone would show only the built-in Task hook's view and
@@ -731,8 +697,7 @@ second loud warning whenever a key is dropped this way:
 ::warning:: [replay] N mixed assertion(s) had their filesystem/egress half dropped — only the content half was evaluated on replay
 ```
 
-This is distinct from the full-skip warning (a pure filesystem/egress assertion with no content key,
-or a gate-key assertion on a `controlOut`-less cassette — see §Backward compatibility). The partial-skip
+This is distinct from the full-skip warning (a pure filesystem/egress assertion with no content key). The partial-skip
 warning specifically flags assertions that **passed on their content half** while their filesystem/egress
 half went unchecked, so a mixed assertion can't green unnoticed on its content half alone. Use a live
 `run` to evaluate the dropped half. (Source: `src/run/cassette.ts`.)
@@ -821,28 +786,25 @@ rather than left `undefined`: `prompt` (the scenario prompt that drove the re-dr
 run-time recompute). `resources` stays `undefined` on replay: a replay re-drive never spawns a sandbox, so
 there is no process to sample (see `max_peak_rss_bytes` above).
 
-## Backward compatibility (old cassettes without controlOut)
+## Older cassettes (below v12, or without controlOut)
 
-Cassettes recorded before full-fidelity replay lack `controlOut`. Replay handles them without silently
-regressing to the prior false-green behavior:
+`replay` and `verify-cassettes` read v12 and up, and only a cassette that carries `controlOut` and
+`userVisibleRoots`. Anything else is refused at load (`replay` exits 2, `verify-cassettes` 3) with the
+remedy named:
 
-1. **A loud warning fires** on stderr:
-   ```
-   ::warning:: [replay] cassette has no controlOut (pre-full-fidelity) — question/gate assertions
-   are NOT checked; re-record to enable them
-   ```
-2. **`question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min` are
-   excluded** from the evaluated assertion set for that run — not vacuously passed, absent.
-3. All other content assertions (transcript, tool, subagent, result) evaluate normally.
+- **v10/v11** — run `npx cowork-harness@4 rehash <dir/>` on it (a 4.x build migrates it without a run), or
+  re-record it.
+- **v9 and below, or a missing `controlOut`/`userVisibleRoots`** — re-record it.
 
-This preserves "skipped ≠ false-green." Re-record with a current harness to get the full-fidelity path.
+`record <dir/> --rerecord-stale` picks up every refused cassette in a directory and re-records it from the
+scenario file it names (`scenarioSource`); it cannot fall back on the embedded snapshot of a cassette it
+cannot read, so the scenario file must still exist.
 
 ## When to re-record
 
 Re-record a cassette when:
 - The scenario's prompt, answers, or assertions change in a way that alters the expected agent behavior.
 - The agent binary (from a Desktop update) produces different tool calls or transcript for the same prompt.
-- You need `question_asked`/`gate_answers_delivered` assertions and the cassette lacks `controlOut`.
 - `replay` exits 1 on a `replay_protocol_fidelity` mismatch — this means `serializeDecision` changed;
   review the change, confirm it's correct, then re-record to update the frozen envelope.
 
@@ -889,25 +851,11 @@ stable across these shifts; prose-level `transcript_matches` is not. Prefer stru
 possible.
 
 `verify-cassettes` reports these staleness causes:
-- **`recorded under hash format vN (now vM)`** — classed **`unverifiable-skill`**, and it means what it
-  says: the recorded digest and the one this build computes came from **different algorithms**, so they
-  cannot be compared at all. That is not the same claim as "your skill changed", and it is why the class is
-  not `format`: `format` is waivable and warns while exiting 0, which on the day of an epoch would be a
-  green run for every cassette in existence. This **fails a bare `replay`**, and an explicit `--session`
-  *escalates* it rather than quietening it — an override cannot make incomparable digests comparable.
-
-  It fires when the recorded version is below the **hash-format epoch** (v12 — the version at which
-  `skillHash`/`contentSig` are computed the way this build computes them), never merely because it is below
-  the current `cassetteVersion`. Note it is checked **before** the git/raw mode and agent-scope comparisons, which
-  would otherwise swallow a pre-epoch cassette that also had a mode flip into a waivable warning.
-
-  **The remedy is `rehash`, not necessarily a re-record.** Where the content can be proved unchanged the
-  migration is free; see the `rehash` section above, including `--session` for a cassette that moved.
-
-  A cassette at the epoch never gets this message for genuine skill drift; it gets the per-bucket
-  `skill files changed …` finding below instead, with the changed-file detail intact. (Any
-  cassette recorded below the **v9** read floor is refused at load time with a re-record error before this
-  staleness check is reached. A cassette that carries no `skillHash` is unaffected and keeps replaying.)
+- A digest recorded under a different hash format is not reported here: every cassette this build reads is
+  v12+ and records `hashFormat: "jcs1"`, and one that does not is refused at load (see
+  [Older cassettes](#older-cassettes-below-v12-or-without-controlout)). Genuine skill drift gets the per-bucket
+  finding below, with the changed-file detail intact. A cassette that carries no `skillHash` is unaffected and
+  keeps replaying.
 - **`skill files changed since record — N changed (path, …)`** — the **exact** changed/added/removed file(s),
   from the per-file manifest (`fileSigs`). **A `fileSigs` sha is not always `sha256(file)`** — it is the sha of
   the bytes that fold into `skillHash`, and a `.claude-plugin/plugin.json` folds with its `version` deleted
@@ -934,8 +882,8 @@ possible.
   live session's SHAPE. Distinct from `fingerprint.skillHash` (skill/plugin file content): a folder swapped or
   egress widened can drift the session with the skill tree untouched. Computed and hard-failed by
   `verify-cassettes` **only**, gated by the same `--skip-staleness` flag as the rest of this list — it never
-  affects the default `replay` verdict, not even under `--strict`. `sessionFingerprint` is optional even on a
-  v9+ cassette (below v9 the cassette is refused at load, not silently tolerated) — absent → silently not
+  affects the default `replay` verdict, not even under `--strict`. `sessionFingerprint` is optional on a
+  readable cassette (below v12 the cassette is refused at load, not silently tolerated) — absent → silently not
   checked (no false stale on an old, still-valid recording). A genuine mismatch is normally a hard fail —
   **except** when the session file was only resolved via a name-lookup fallback (its persisted source path
   was missing, so the cassette may have been relocated onto a tree that doesn't mirror the original layout
@@ -1021,8 +969,7 @@ source dir (a dir not in a git repo falls back to a raw filesystem walk). **OS-j
 `Thumbs.db` / `desktop.ini`) is always excluded, so a Finder touch never re-stales a cassette. Opt out of git
 mode with `COWORK_HARNESS_GITSET=0`. Set `COWORK_HARNESS_DEBUG_SKILLHASH=1` to dump the exact file set on a
 mismatch. Declare per-plugin non-runtime paths in `.cowork-hashignore` / the session `staleness.hash_ignore`.
-Any cassette recorded before this boundary is below the v9 read floor and is refused at load time with a
-re-record error — `rehash` never gets the chance to attempt a digest-only migration for it.
+Any cassette recorded before this boundary is below the v12 read floor and is refused at load time.
 
 ## Batch recording
 
@@ -1414,12 +1361,10 @@ cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'
 > Nothing in replay, the verdict, staleness or the fingerprint reads a registry description or hint, the model
 > menu, or `rate_limit_info`. The **hand-back frame is different**: it sits in the model-visible transcript, so an
 > assert such as `transcript_contains` can read it — which is what the check below exists to catch.
-> **Every path that writes it is held to the same verdict-preservation check as redaction**: `record`, `rehash` (both
-> of its rewriting branches) and
+> **Every path that writes it is held to the same verdict-preservation check as redaction**: `record` and
 > `replay --reassert --write` (when it rewrites the assert block, and when the block is already current and it
 > rewrites the events alone). When that check cannot pass, the file is still written (or, for an already-current
-> block, left as it was) with the events UNSCRUBBED and a warning naming the scrub, rather than losing the run or the
-> migration. A cassette recorded by an older harness may still carry these; re-record (or run
+> block, left as it was) with the events UNSCRUBBED and a warning naming the scrub, rather than losing the run. A cassette recorded by an older harness may still carry these; re-record (or run
 > `replay --reassert --write`) to drop them.
 
 ### Reading the result

@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { computeVerdict } from "../src/run/verdict.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 // Resolved-tier staleness class: a `fidelity: cowork` cassette records the tier the loop-decision
 // gate resolved to at record time (`effectiveFidelity`); if the current baseline resolves differently
@@ -50,7 +51,7 @@ const cassette = (over: { fidelity?: string; baseline?: string; effectiveFidelit
       assert: [{ result: "success" }],
     },
     events: okEvents(),
-    controlOut: [],
+    controlOut: recordedControlOut(),
     ...(over.effectiveFidelity !== undefined ? { effectiveFidelity: over.effectiveFidelity } : {}),
     ...(over.fingerprint !== undefined ? { fingerprint: over.fingerprint } : {}),
   }) as unknown as Cassette;

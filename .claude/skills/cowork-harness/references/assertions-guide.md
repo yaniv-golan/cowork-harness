@@ -50,15 +50,15 @@ them by what you're trying to prove:
 | the user was **shown** the right choices, in order | `question_options: {when_question, equals: [..]}` — the option SET/ORDER a gate offered (`question_asked` matches the text only); order is compared by default |
 | the user was **told something specific** at a gate | `question_context: {when_question, matches}` — a regex over the question label + option labels + option **descriptions**. Reach for this when the wording may land in an option's `description`, which `question_asked` and `question_options` cannot see |
 | every gate offered exactly one (or at most N) options of a kind | `question_option_count: {matches, exactly}` — counts the option LABELS matching a regex on EVERY sub-question asked (`when_question` narrows); zero sub-questions asked fails |
-| every gate was answered by a scripted rule (an unattended run that still asks) | `gates_all_scripted: true` with `gate_answer_count_min: 1` — fails naming any gate the LLM decider, `first`, or an external or human decider answered; `{include_permissions: true}` also fails cowork parity's permissive auto-allow (replay needs a `controlOut` cassette) |
-| a **plugin's** command hook (any event: PreToolUse, Stop, …) blocked, didn't block, or decided | `hook_event_blocked: <event>` (exit 2) or `{event, tool?, via?, max: 0}`, `no_hook_event_blocked: true`, `hook_decision: {event, decision}` — stream content, no `controlOut` needed. A failed or timed-out frame on an event with an `onFailure: "block"` hook is evidence-unavailable, and so is unscoped `no_hook_event_blocked: true` when such a hook sits on an event that streams no frame |
-| the **harness's own** hook callbacks (the built-in Task hook, a custom hook bundle) blocked / didn't block a tool | `hook_blocked: <regex>`, `no_hook_blocked: true` (replay needs a `controlOut` cassette) — a plugin's hook never reaches this list, so `no_hook_blocked` passes over a plugin block |
+| every gate was answered by a scripted rule (an unattended run that still asks) | `gates_all_scripted: true` with `gate_answer_count_min: 1` — fails naming any gate the LLM decider, `first`, or an external or human decider answered; `{include_permissions: true}` also fails cowork parity's permissive auto-allow |
+| a **plugin's** command hook (any event: PreToolUse, Stop, …) blocked, didn't block, or decided | `hook_event_blocked: <event>` (exit 2) or `{event, tool?, via?, max: 0}`, `no_hook_event_blocked: true`, `hook_decision: {event, decision}` — stream content. A failed or timed-out frame on an event with an `onFailure: "block"` hook is evidence-unavailable, and so is unscoped `no_hook_event_blocked: true` when such a hook sits on an event that streams no frame |
+| the **harness's own** hook callbacks (the built-in Task hook, a custom hook bundle) blocked / didn't block a tool | `hook_blocked: <regex>`, `no_hook_blocked: true` — a plugin's hook never reaches this list, so `no_hook_blocked` passes over a plugin block |
 | every MCP round-trip succeeded | `no_mcp_error: true` (**live-only**) |
 | a context compaction happened | `compaction_occurred: true` |
 | THIS run wrote the file (not just that it is there) | `file_exists: {path, authored: true}` (also `user_visible_artifact`, and `authored: true` on `artifact_text`/`artifact_json`) — an untouched pre-run file fails; needs the pre-run manifest, which `authored` arms |
 
-Every one of these still obeys the two axes above — several are live-only or need a `controlOut`
-cassette on replay, so check the catalog's replay class before putting one on a PR gate.
+Every one of these still obeys the two axes above — several are live-only or need an artifact
+manifest on replay, so check the catalog's replay class before putting one on a PR gate.
 `cowork-harness assertions --list` prints the full, always-current key set with one-line semantics
 straight from the schema — treat it (and the catalog) as the source of truth; this map is a
 goal-oriented index into it, not a second catalog.

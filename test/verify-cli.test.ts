@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { DEFAULT_USER_VISIBLE_ROOTS, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 // Exercises the built `verify-cassettes` CLI gate exit codes. Token/agent-free. Needs dist/cli.js
 // (the `ci` script builds before testing); skips cleanly otherwise.
@@ -21,7 +22,9 @@ function run(args: string[], cwd: string) {
 }
 
 const cassette = (events: string[]) => ({
-  cassetteVersion: 9,
+  cassetteVersion: 12,
+  controlOut: recordedControlOut(),
+  userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
   scenario: {
     name: "c",
     baseline: "latest",
@@ -150,12 +153,27 @@ describe.skipIf(!can)("verify-cassettes CLI gate", () => {
     expect(JSON.stringify(r.json)).toMatch(/invalid cassette JSON|unreadable/);
   });
 
+  it("a well-formed v11 cassette → exit 3 (refused at the read floor), naming the 4.x rehash remedy — and still privacy-scanned", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
+    const c = cassette([JSON.stringify({ type: "result", subtype: "success" })]) as Record<string, unknown>;
+    c.cassetteVersion = 11;
+    writeFileSync(join(d, "old.cassette.json"), JSON.stringify(c));
+    const r = run(["verify-cassettes", join(d, "old.cassette.json"), "--output-format", "json"], d);
+    expect(r.code).toBe(3);
+    expect(r.json.ok).toBe(false);
+    const res = r.json.results[0];
+    expect(res.error).toContain("below the minimum supported v12");
+    expect(res.error).toContain("npx cowork-harness@4 rehash <dir/>");
+    expect(res.error).toContain("record <dir/> --rerecord-stale");
+    expect(res.privacyScanned).toBe(true);
+  });
+
   it("a genuine baseline DRIFT cassette (fingerprint.baseline stale) → exit 1 (verified & failed), landed in the `staleness` bucket, NOT `unverifiable`", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
     const c = cassette([JSON.stringify({ type: "result", subtype: "success" })]) as Record<string, unknown>;
     // A stale, non-live baseline appVersion — genuine `class: "baseline"` drift, not `unverifiable-baseline`
     // (the live baseline itself always loads fine in this repo's test env).
-    c.fingerprint = { baseline: "0.0.0-does-not-exist" };
+    c.fingerprint = { baseline: "0.0.0-does-not-exist", hashFormat: "jcs1" };
     writeFileSync(join(d, "drift.cassette.json"), JSON.stringify(c));
     const r = run(["verify-cassettes", join(d, "drift.cassette.json"), "--output-format", "json"], d);
     expect(r.code).toBe(1);

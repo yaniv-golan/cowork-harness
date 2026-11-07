@@ -166,22 +166,10 @@ import { jsonEnvelope, jsonPayloadEnvelope, fail, isJsonOutput, pkgVersion, publ
 import { parseArgs } from "../cli-args.js";
 import { resolveInputs } from "./inputs.js";
 import { realProbe } from "./doctor.js";
-import {
-  hashSkillDirs,
-  hashSharedOnly,
-  computeContentSig,
-  skillHashEntries,
-  OS_JUNK_PATTERN,
-  agentSkillName,
-  ACTIVE_HASH_ALGO,
-  foldSnapshot,
-  renderWireEntries,
-  contentSigFromSnapshot,
-} from "./skill-hash.js";
+import { hashSkillDirs, hashSharedOnly, computeContentSig, skillHashEntries, OS_JUNK_PATTERN, agentSkillName } from "./skill-hash.js";
 
-/** What NEW fingerprints record. Absent on a fingerprint means the legacy transform, so only the post-epoch
- *  algorithm is ever written out. */
-const ACTIVE_HASH_FORMAT: "jcs1" | undefined = ACTIVE_HASH_ALGO === "jcs1" ? "jcs1" : undefined;
+/** The manifest transform every fingerprint is hashed under (the only one this build implements). */
+const ACTIVE_HASH_FORMAT = "jcs1" as const;
 import { computeVerdict } from "./verdict.js";
 import { redactJsonLine, redactText, redactStructural, loadRedactionPolicy, type RedactionPolicy } from "../redact.js";
 import { collectSecrets, scrubField } from "../secrets.js";
@@ -379,14 +367,15 @@ export interface Cassette {
   cassetteVersion?: number;
   scenario: Scenario;
   events: string[]; // recorded child→driver stdout (events.jsonl) — the cassette source
-  controlOut?: string[]; // driver→child control_responses (control-out.jsonl) — for full-fidelity replay
+  // driver→child control_responses (control-out.jsonl). REQUIRED: replay grades every recorded decision against it.
+  // A real recording always holds at least the `initialize` response; `[]` means zero recorded responses.
+  controlOut: string[];
   effectiveFidelity?: string; // the tier the live record actually resolved to (e.g. cowork → hostloop)
   artifacts?: ManifestEntry[]; // user-visible-roots snapshot (paths + hashes + small JSON bodies)
   fingerprint?: Fingerprint; // cassette→skill/baseline staleness tripwire
-  // v4: the user-visible mount roots captured at record time (`outputs` + each connected folder's resolved
-  // mount name). Replay reads THIS instead of a hardcoded `["outputs",".projects"]` prefix — folder mount
-  // names are dynamic/gated. ABSENT on pre-v4 cassettes → replay falls back to the legacy prefix.
-  userVisibleRoots?: string[];
+  // The user-visible mount roots captured at record time (`outputs` + each connected folder's resolved mount name).
+  // REQUIRED: replay materializes the manifest under exactly these (folder mount names are dynamic/gated).
+  userVisibleRoots: string[];
   // (v8 removed the cassette-level `readonlyFolderRoots` list — replay now reads WHY a body-less entry
   // is body-less from each `ManifestEntry.truncationReason`, which is self-describing and redaction-immune.)
   // the authored scenario SOURCE file this cassette was recorded from, RELATIVE to the cassette dir
@@ -399,8 +388,7 @@ export interface Cassette {
   // NO cassetteVersion bump (CassetteShape is a looseObject and cassette.v7.json has no
   // additionalProperties:false, so older readers pass it through; readers here branch LOUDLY on absence —
   // a pre-field cassette EXCLUDES the key from replay with a warning, never a vacuous pass). Always
-  // co-present with `userVisibleRoots` (both written by the same record assembly below), so the legacy
-  // `["outputs",".projects"]` replay-roots fallback can never apply to a cassette that carries this field.
+  // co-present with `userVisibleRoots` (both written by the same record assembly below).
   preRunPaths?: string[];
   // Per-path sha256 of the user-visible tree BEFORE the agent ran (RunResult.preRunHashes). Powers
   // `input_unmodified` on replay. Nulled out (see buildCassette's post-scrub pass below) for any path
@@ -513,8 +501,7 @@ export interface Cassette {
 //  SHAPE change, not a fingerprint-algorithm change), so a v9 cassette's skill fingerprint stays directly
 //  comparable and this bump alone forces no re-record. ABSENT linkKind on a pre-v10 entry = regular file
 //  (the pre-fix behavior — such a cassette simply never captured links; safe because it can't have
-//  recorded a link stray in the first place). `rehash` cannot synthesize link entries from an old
-//  manifest, so it routes a v9→v10 bump to a re-record (see cmdRehash).
+//  recorded a link stray in the first place).
 // v11 (P8): `cassetteVersion` stops meaning "which recorder wrote this" and starts meaning "the minimum
 //  format version a reader needs to INTERPRET this cassette correctly" — see requiredVersionFor below.
 //  The only value that currently needs v11 is `lane: "remote"` (changes replay-verdict semantics a
@@ -573,11 +560,11 @@ export interface FrozenCommandMetric {
   interpreter?: string;
 }
 
-/** Minimum cassette format version this build will read. Pre-1.0.0: no legacy-format compatibility is
- *  maintained below this floor — an older cassette must be re-recorded, not silently tolerated. Raising
- *  this floor is how the pre-v9 legacy-reconstruction branches (buildFolderPrefixMap, cmdRehash's
- *  pre-v3/pre-v6 checks, contentSigAlgoOf) became dead code and were deleted. */
-export const MIN_SUPPORTED_CASSETTE_VERSION = 9;
+/** Minimum cassette format version this build will read — the hash-format epoch, so every readable
+ *  cassette carries `jcs1` digests. An older cassette is refused with its remedy (`belowFloorRefusal`):
+ *  re-record, or migrate it with a 4.x `rehash` first. Raising this floor is how the pre-epoch hash
+ *  algorithm and `rehash`'s migration path were deleted. */
+export const MIN_SUPPORTED_CASSETTE_VERSION = 12;
 
 // The contentSig algorithm version: every v9+ cassette (the read floor) was recorded under this same
 // algorithm — skillHash folds fixed-length content shas and contentSig/link entries are type-prefixed &
@@ -590,10 +577,8 @@ const CONTENTSIG_ALGO = 5;
  *  algorithm) — v7→v8 bumped CONTENTSIG_ALGO 3→4 to fix the two framing collisions (see CHANGELOG). v9
  *  and v10 both changed the cassette SHAPE (sessionFingerprint/folderPrefixMap; ManifestEntry.linkKind)
  *  without touching skillHash/contentSig — their own comments above say so explicitly — and v11 (P8)
- *  changes neither; it's a per-scenario interpretation floor, not a hash-format change. computeStaleness's
- *  "recorded under an older hash format" classification keys off THIS constant, not CASSETTE_VERSION —
- *  otherwise a correctly-current v9/v10/v11 cassette with genuine skill drift would get a false "older
- *  format" finding and lose its per-bucket drift attribution. */
+ *  changes neither; it's a per-scenario interpretation floor, not a hash-format change. v12 is the jcs1
+ *  epoch, which is also the read floor. `requiredVersionFor` derives its BASE from this constant. */
 const HASH_FORMAT_EPOCH = 12;
 
 /** Canonical URL of the JSON Schema for a given STAMPED cassette version.
@@ -824,8 +809,8 @@ export const INPUT_ROOTS = ["uploads"] as const;
 
 export function buildManifest(
   workRoot: string,
-  cap?: number,
-  roots: string[] = ["outputs", ".projects"],
+  cap: number | undefined,
+  roots: string[],
   bodyLessPrefixes: string[] = [],
   inputRoots: string[] = [...INPUT_ROOTS],
 ): ManifestEntry[] {
@@ -897,7 +882,7 @@ function decodeBody(e: ManifestEntry): Buffer {
  *  against its recorded sha256 (over the decoded RAW bytes) — a mismatch fails replay (throws). */
 export function materializeManifest(
   entries: ManifestEntry[],
-  roots: string[] = ["outputs", ".projects"],
+  roots: string[],
 ): { workRoot: string; prefixes: string[]; truncatedPaths: Map<string, ManifestEntry["truncationReason"]>; linkPaths: Set<string> } {
   const workRoot = mkdtempSync(join(tmpdir(), "cwh-replay-"));
   // path → why the body is absent (from the entry's truncationReason; `undefined` on a pre-v8 entry that
@@ -1394,150 +1379,8 @@ export function checkLabelProvenance(stamp: Fingerprint["labelProvenance"], dirs
   return drift;
 }
 
-/**
- * Recompute a cassette's digests from ONE walk, under BOTH algorithms.
- *
- * The migration proof needs the LEGACY digest (to show a pre-epoch recording is unchanged) and the new
- * one (to write). Two separate walks would let a concurrent edit pass the proof and then migrate different
- * content, so both are folded from a single snapshot.
- *
- * `contentSig` is deliberately NOT the proof. It is algorithm-DEPENDENT (the manifest transform feeds it)
- * and, worse, it is blind to `D:` directory markers pre-v5 — an added empty directory moves `skillHash`
- * and leaves `contentSig` identical, so a contentSig-only proof would vouch for genuinely drifted content.
- */
-export function recomputeBothAlgos(
-  sessionPath: string,
-  cassetteDir: string | undefined,
-  scopeSkills: string[] | undefined,
-  baselineAppVersion: string,
-): {
-  legacyHash: string;
-  legacySigs: [string, string][];
-  live: Fingerprint;
-  mode: "git" | "raw";
-  agentScoped: boolean;
-  readErrors?: string[];
-} | null {
-  const { dirs, baseDir, hashIgnore } = skillSourceDirs(sessionPath, cassetteDir);
-  if (dirs.length === 0) return null;
-  const res = hashSkillDirs(dirs, scopeSkills, hashIgnore); // ONE walk — everything below folds from res.snapshot
-  const entries = renderWireEntries(res.snapshot);
-  const live: Fingerprint = {
-    baseline: baselineAppVersion,
-    hashFormat: ACTIVE_HASH_FORMAT,
-    skillHash: res.hash,
-    contentSig: contentSigFromSnapshot(res.snapshot),
-    skillSources: dirs.sort().map((d) => relative(baseDir, d)),
-    // Scoped cassettes carry `sharedHash` so `computeStaleness` can name WHICH bucket drifted. Three
-    // constraints, and only one implementation satisfies all of them:
-    //   - it must be RECOMPUTED, not carried over — `.claude-plugin/plugin.json` lives in the shared root,
-    //     so its digest moves under jcs1 for any unsorted manifest;
-    //   - it must not be DROPPED — `computeStaleness` splits buckets only when BOTH sides carry it, so
-    //     losing it silently costs attribution forever;
-    //   - it must be the value LIVE VERIFY will recompute. That rules out folding a filtered snapshot: the
-    //     snapshot is git-tracked-filtered and agent-scope-blind, while `hashSharedOnly` does a raw walk and
-    //     drops skill-named agents under COWORK_HARNESS_AGENT_SCOPE=skill. Either divergence produces a
-    //     migrated value that can never match, so every later bucket split would report a false
-    //     `shared-root`. Call the SAME function `buildFingerprint` calls, guard included.
-    ...sharedHashFor(dirs, hashIgnore, scopeSkills),
-    ...(res.mode === "git" ? { mode: "git" as const } : {}),
-    ...(res.agentScoped ? { agentScope: "skill" as const } : {}),
-    ...(entries.length > MANIFEST_MAX_FILES
-      ? { fileSigsOmitted: true }
-      : { fileSigs: entries.map((e) => [e.path, e.sha] as [string, string]) }),
-  };
-  return {
-    legacyHash: foldSnapshot(res.snapshot, "legacy"),
-    // The pre-epoch per-file manifest, for the alignment proof. `live.fileSigs` is already jcs1, so it
-    // cannot be compared against what a pre-epoch cassette actually recorded.
-    legacySigs: renderWireEntries(res.snapshot, "legacy").map((e) => [e.path, e.sha] as [string, string]),
-    live,
-    mode: res.mode,
-    agentScoped: res.agentScoped,
-    ...(res.readErrors ? { readErrors: res.readErrors } : {}),
-  };
-}
-
-/**
- * Migrate a fingerprint across a hash-format bump: replace ONLY the algorithm-derived values, carry
- * everything else through from the RECORDING.
- *
- * A `{ ...liveFingerprint }` spread looks equivalent and is not. `buildFingerprint` cannot produce
- * `promptAssetsHash` unless it is handed a baseline object (rehash does not hand it one), and it never
- * produces `labelProvenance` at all — so the spread silently DELETED both provenance guards on every
- * migration. Measured: a recorded `promptAssetsHash` of 491afe2862dc67ea became absent.
- *
- * `fileSigs` keeps its RECORDED paths and takes only the new digests, index-aligned. Cassette paths are
- * redacted before writing, so rebuilding the list from a live walk would write unredacted source paths
- * back into a redacted cassette — a privacy regression. Alignment is validated first (an aggregate digest
- * proof says nothing about whether the array is well-formed), and absence is preserved rather than
- * materialised into a fresh live list.
- */
-export function migrateFingerprint(
-  recorded: Fingerprint,
-  live: Fingerprint,
-  legacySigs?: [string, string][],
-): { fingerprint: Fingerprint } | { error: string } {
-  // ALIGNMENT IS A PRECONDITION, not a best-effort. An aggregate digest proof says nothing about whether
-  // the recorded manifest array is well-formed, and silently keeping OLD per-file digests beside a NEW
-  // `skillHash` + `hashFormat: jcs1` would stamp a fingerprint that contradicts itself — every later
-  // drift attribution would then name the wrong file while the cassette claimed to be current.
-  if (recorded.fileSigs && live.fileSigs) {
-    if (recorded.fileSigs.length !== live.fileSigs.length)
-      return {
-        error: `fileSigs entry count differs (recorded ${recorded.fileSigs.length}, live ${live.fileSigs.length}) — cannot migrate`,
-      };
-    for (let i = 0; i < recorded.fileSigs.length; i++) {
-      const recIsLink = recorded.fileSigs[i][1].startsWith("lnk:");
-      const liveIsLink = live.fileSigs[i][1].startsWith("lnk:");
-      if (recIsLink !== liveIsLink) return { error: `fileSigs entry ${i} changed kind (file <-> link) — cannot migrate` };
-    }
-    // THE SEQUENCE PROOF. Count and kind do not establish that entry i is the SAME file on both sides: a
-    // sort change, or two roots sharing a root-relative path, would pair a redacted path with another
-    // file's digest while `rehash` still reported "migrated". Compare against the LEGACY manifest
-    // recomputed from the proof snapshot — `live.fileSigs` is already jcs1 and cannot be compared to what
-    // a pre-epoch cassette recorded.
-    // MANDATORY, not opportunistic. Absence of the legacy recompute is a REFUSAL, not a skip: without it
-    // count and kind would stamp `hashFormat: "jcs1"` beside index-aligned swaps that were never shown to
-    // pair the same files. `migrateFingerprint` is exported, so a caller that omits it must not get a
-    // weaker guarantee than `rehash` does.
-    if (!legacySigs) return { error: "no legacy manifest to compare against — cannot prove fileSigs alignment; cannot migrate" };
-    {
-      if (legacySigs.length !== recorded.fileSigs.length)
-        return {
-          error: `fileSigs count differs from the legacy recompute (recorded ${recorded.fileSigs.length}, legacy ${legacySigs.length}) — cannot migrate`,
-        };
-      for (let i = 0; i < recorded.fileSigs.length; i++) {
-        if (recorded.fileSigs[i][1] !== legacySigs[i][1])
-          return { error: `fileSigs entry ${i} does not match the legacy recompute — order or content differs; cannot migrate` };
-      }
-    }
-  } else if (recorded.fileSigs && !live.fileSigs) {
-    // Recorded a manifest, cannot rebuild one: refuse rather than leave stale per-file digests beside a
-    // new aggregate. The reverse is FINE — a cassette that never recorded `fileSigs` (pre-v5, or
-    // `fileSigsOmitted` above the cap) keeps its absence; materialising a fresh live list would both
-    // invent data the recording never had and write unredacted paths.
-    return { error: "recorded fileSigs cannot be rebuilt from the current tree — cannot migrate" };
-  }
-  const out: Fingerprint = { ...recorded };
-  out.skillHash = live.skillHash;
-  out.hashFormat = live.hashFormat;
-  if (live.contentSig !== undefined) out.contentSig = live.contentSig;
-  else delete out.contentSig;
-  if (live.sharedHash !== undefined) out.sharedHash = live.sharedHash;
-  else delete out.sharedHash;
-  out.mode = live.mode;
-  // Index-aligned digest swap, RECORDED paths preserved (they are redacted; a live rebuild would write
-  // unredacted source paths back into a redacted cassette). Absence is preserved, never materialised.
-  if (recorded.fileSigs && live.fileSigs) {
-    out.fileSigs = recorded.fileSigs.map(([p], i) => [p, live.fileSigs![i][1]] as [string, string]);
-  }
-  return { fingerprint: out };
-}
-
-/** The `sharedHash` rule, in ONE place. Both `buildFingerprint` and the migration must produce the same
- *  number or bucket attribution reports drift that is not there — so neither may reimplement the filter.
- *  Only set when every dir is a plugin-root: a mix including individual-skill mounts makes the split
+/** The `sharedHash` rule, in ONE place: live verify must recompute the number `buildFingerprint` recorded, or
+ *  bucket attribution reports drift that is not there. Only set when every dir is a plugin-root: a mix including individual-skill mounts makes the split
  *  unreliable, since those dirs feed `skillHash` but not `sharedHash`. */
 function sharedHashFor(dirs: string[], hashIgnore: string[], scopeSkills: string[] | undefined): { sharedHash?: string } {
   if (!scopeSkills || scopeSkills.length === 0) return {};
@@ -1632,8 +1475,8 @@ export function buildFingerprint(
   else fp.fileSigs = entries.map((e) => [e.path, e.sha] as [string, string]);
   if (scopeSkills && scopeSkills.length) fp.skillScope = [...scopeSkills].sort();
   // Scoped cassettes carry the shared-root hash so checkStaleness can name the changed bucket. The
-  // rule lives in `sharedHashFor` because the MIGRATION must produce the identical number — two
-  // implementations of this filter is how a scoped rehash starts reporting a false `shared-root`.
+  // rule lives in `sharedHashFor` so live verify recomputes the identical number — two
+  // implementations of this filter is how a scoped cassette starts reporting a false `shared-root`.
   Object.assign(fp, sharedHashFor(dirs, hashIgnore, scopeSkills));
   return fp;
 }
@@ -1656,15 +1499,16 @@ export function fingerprintSkillDrift(rec: Fingerprint, live: Fingerprint): stri
   // idea what to do. Same shape as the two config discriminators above it: name the real cause instead of
   // letting an incomparable digest masquerade as drift.
   //
-  // ABSENT means the LEGACY transform, never "raw" — a pre-epoch run's manifest digests are already
-  // version-stripped. An UNKNOWN id is reported loudly rather than coerced to either format: silently
-  // treating a future `jcs2` as legacy would compare across algorithms and call it source drift again.
-  const recFormat = rec.hashFormat ?? "legacy";
-  const liveFormat = live.hashFormat ?? "legacy";
+  // ABSENT means a run kept before the jcs1 format (its manifest digests used a transform this build no
+  // longer implements). An UNKNOWN id is reported loudly rather than coerced: either way the digests are
+  // not comparable, and calling the mismatch source drift would be false.
+  const recFormat = rec.hashFormat;
+  const liveFormat = live.hashFormat ?? ACTIVE_HASH_FORMAT;
   if (recFormat !== liveFormat) {
-    if (recFormat !== "legacy" && recFormat !== "jcs1")
-      return `recorded under an unrecognized hash format '${recFormat}' — this build cannot verify it; re-record`;
-    return `recorded under hash format '${recFormat}', this build hashes '${liveFormat}' — digests are not comparable; re-record`;
+    if (recFormat === undefined) return `recorded before hash format '${liveFormat}' — digests are not comparable; re-record`;
+    return recFormat !== "jcs1"
+      ? `recorded under an unrecognized hash format '${recFormat}' — this build cannot verify it; re-record`
+      : `recorded under hash format '${recFormat}', this build hashes '${liveFormat}' — digests are not comparable; re-record`;
   }
   if (live.skillHash !== rec.skillHash) return "the skill/plugin source changed since this run was recorded";
   return null;
@@ -2844,27 +2688,6 @@ export function computeStaleness(
         class: "unverifiable-skill",
         message: `skill dirs not resolvable ${where}${detail || (why === undefined ? (fp.skillHash !== undefined ? " — the session resolved and its dirs exist, but some could not be READ, so the hash was dropped as unreliable" : " — the session resolved but declares no skill dirs to hash") : "")} — cannot verify skill staleness (can't verify ⇒ not green)`,
       });
-    } else if (fp.skillHash !== undefined && recordedVersion < HASH_FORMAT_EPOCH) {
-      // EPOCH, ahead of every WAIVABLE branch. Mode and agent-scope compare values produced by two
-      // different algorithms, so reaching them first is meaningless — and worse, both are classed
-      // `format`, which sits outside SKILL_DRIFT_CLASSES and outside the default replay gate. A pre-epoch
-      // cassette that ALSO had a mode flip would warn and exit 0: a false green across the whole
-      // pre-epoch corpus, on the exact day the epoch lands.
-      //
-      // It sits BELOW the unresolvable branch on purpose. That one is already a hard `unverifiable-skill`
-      // too, and "the skill dirs cannot be found" is the more specific, more actionable diagnosis — the
-      // operator's real problem is the session path, not the hash format.
-      //
-      // Class is `unverifiable-skill`, NOT `format`: it already means "these two numbers cannot be
-      // compared, so this is not verified". It fails a bare replay, and it ESCALATES under an explicit
-      // `--session` rather than being quietened by it, which is right — an override cannot make
-      // incomparable digests comparable.
-      findings.push({
-        class: "unverifiable-skill",
-        message:
-          `recorded under hash format v${recordedVersion} (now v${HASH_FORMAT_EPOCH}) — digests are not comparable across the change. ` +
-          `Run \`cowork-harness rehash <dir>\` to migrate, or \`rehash <file> --session <session>\` if the cassette has moved, or re-record`,
-      });
     } else if (recMode !== liveMode)
       // A hash from a different boundary mode is not comparable — re-record, don't emit a misleading
       // content diff. Classed `format` (not skill drift): a mode flip is an env/config mismatch, not source drift.
@@ -3041,12 +2864,9 @@ function minimalRec(): RunRecord {
  * CassetteAgentSession: replays a recorded control-protocol cassette deterministically —
  * no token, no model, no flakiness.
  *
- * When `controlOut` is present (full-fidelity mode): decision events are yielded so Run drives
- * the decision pipeline; respond() re-serializes and compares to the frozen recording (re-serialization guard).
- *
- * When `controlOut` is absent/empty (legacy events-only mode): decision events are skipped
- * (the decider does not run) — a backward-compat warning is emitted and question/gate assertions
- * are excluded from evaluation (not vacuously passed) to honour "no silent false-greens".
+ * Decision events are always yielded so Run drives the decision pipeline; respond() re-serializes and
+ * compares to the frozen `controlOut` recording (re-serialization guard). A decision with no recorded
+ * response is a truncated cassette and fails `replay_protocol_fidelity` — never a silent allow.
  */
 class CassetteAgentSession implements AgentSession {
   /** Indexed by decision req.id; populated during start() for use in respond(). */
@@ -3073,15 +2893,15 @@ class CassetteAgentSession implements AgentSession {
    *  whose request_id matches a known decision req.id — skips init-1 and mcp_response lines).
    *  Exposed (readonly) so replayCassette can hand it to the ReplayDecider without re-parsing. */
   readonly controlOutIndex: Map<string, Record<string, unknown>>;
-  /** true when controlOut was present and non-empty */
-  readonly hasControlOut: boolean;
+  /** `hook_callback` request ids in the stream with no recorded response: a truncated cassette. Replay never turns
+   *  one into a hook event (an absent reply is not an allow); replayCassette reports each as a cassette-format failure. */
+  readonly unpairedHookCallbacks: string[] = [];
 
   constructor(
     private readonly events: string[],
-    controlOut: string[] | undefined,
+    controlOut: string[],
   ) {
-    this.hasControlOut = !!(controlOut && controlOut.length > 0);
-    const { index, differingDuplicates, malformedLines } = buildControlOutIndex(controlOut ?? []);
+    const { index, differingDuplicates, malformedLines } = buildControlOutIndex(controlOut);
     this.controlOutIndex = index;
     this.duplicateControlOutIds.push(...differingDuplicates);
     this.malformedControlOutLines.push(...malformedLines);
@@ -3126,7 +2946,6 @@ class CassetteAgentSession implements AgentSession {
         if (ev.type === "decision") {
           // Track the request for respond() (mirrors LiveAgentSession behaviour)
           this.reqById.set(ev.request.id, ev.request);
-          if (!this.hasControlOut) continue; // legacy: skip decision events
         }
         yield ev;
       }
@@ -3139,7 +2958,6 @@ class CassetteAgentSession implements AgentSession {
     // Replay never re-sends to a live process — the answer is "delivered" to the recording by
     // definition. Always report delivered:true so run.ts records "answered" exactly as before on this
     // lane; the delivered:false path is a LIVE-only session-teardown condition (#20).
-    if (!this.hasControlOut) return { delivered: true }; // no-op in legacy mode
     const req = this.reqById.get(id);
     if (!req) return { delivered: true };
     // Re-serialize the response through serializeDecision (the live path) and compare to the
@@ -3276,12 +3094,6 @@ function withPartlyScriptedFindings(inner: Decider, rules: Scenario["answers"] |
     },
   };
 }
-
-const NOOP_DECIDER: Decider = {
-  async decide() {
-    return ABSTAIN;
-  },
-};
 
 /** Frozen tool_result text by tool_use_id (string or text-block content), for the record-time guard. */
 function frozenToolResults(events: string[]): Map<string, string> {
@@ -4111,6 +3923,10 @@ export function defaultCassettePath(scenarioName: string): string {
  * it was deliberately tightened for the hash-format epoch. This function does NOT relax it; it is a
  * separate, narrower door for the one job that never needed document validity in the first place.
  *
+ * Deliberately LENIENT about the read floor and the replay contract too: a cassette below v12, or one without
+ * `controlOut`/`userVisibleRoots`, is refused by `readCassette` but still scanned here — an old file is as
+ * likely to carry a leak as a new one.
+ *
  * The only hard requirement is `events: string[]`. Everything else is best-effort and dropped when it is
  * not the expected shape, because a partially-corrupt document must still be scannable — that is the
  * entire point. Two consequences worth being explicit about:
@@ -4284,7 +4100,21 @@ export function quarantineCassette(
 /** Read + parse a cassette, never throwing — a malformed `*.cassette.json` must be TALLIED, not crash a
  *  whole batch (a crash mid-walk reads as "the rest were fine" — a false-green by abort).
  *  Exported for tests (the validate-and-warn-on-assert behavior). */
-export function readCassette(path: string): { cassette: Cassette } | { error: string } {
+/** A refusal `record --rerecord-stale` can act on: the file is an old format, not a broken one, so its scenario source
+ *  is read leniently and the cassette re-recorded. Set on the read-floor and missing-required-field refusals. */
+export type CassetteReadResult = { cassette: Cassette } | { error: string; rerecordable?: true };
+
+/** The read-floor refusal, one wording for every reader. A v10/v11 cassette (recorded before 2.0.0's hash-format
+ *  epoch) can still be migrated by a 4.x `rehash`; a v9 one cannot, so the only remedy named for it is a re-record. */
+export function belowFloorRefusal(recordedVersion: number): string {
+  const head =
+    `cassette recorded at v${recordedVersion} (before 2.0.0) is below the minimum supported ` + `v${MIN_SUPPORTED_CASSETTE_VERSION}`;
+  return recordedVersion >= 10
+    ? `${head} — run \`npx cowork-harness@4 rehash <dir/>\` on it, or re-record it (\`record <dir/> --rerecord-stale\`)`
+    : `${head} — re-record it (\`record <dir/> --rerecord-stale\`); a 4.x \`rehash\` cannot migrate a v${recordedVersion} cassette`;
+}
+
+export function readCassette(path: string): CassetteReadResult {
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(path, "utf8"));
@@ -4305,7 +4135,7 @@ export function readCassette(path: string): { cassette: Cassette } | { error: st
 
 /** Validate an already-parsed single-prompt cassette object — readCassette's checks without the file read. A
  *  multi-leg cassette nests one per prompt leg and validates each through here. Never throws. */
-export function parseCassetteObject(raw: unknown): { cassette: Cassette } | { error: string } {
+export function parseCassetteObject(raw: unknown): CassetteReadResult {
   const parsed = CassetteShape.safeParse(raw);
   if (!parsed.success) {
     // A NEWER format can fail this build's shape for reasons this build cannot know: say "too new", not "invalid",
@@ -4328,21 +4158,37 @@ export function parseCassetteObject(raw: unknown): { cassette: Cassette } | { er
   // from replay evaluation and green by omission. A cassette recorded by a NEWER harness (future version) may
   // legitimately carry an assertion key this build doesn't know: keep warn-and-tolerate there (forward-compat).
   const recordedVersion = cassette.cassetteVersion ?? 0;
-  if (recordedVersion < MIN_SUPPORTED_CASSETTE_VERSION) {
+  // Shape first (above), then the floor, then the required fields: a file that is not a cassette at all says so,
+  // and only a well-formed old cassette is told how to migrate.
+  if (recordedVersion < MIN_SUPPORTED_CASSETTE_VERSION) return { error: belowFloorRefusal(recordedVersion), rerecordable: true };
+  // `controlOut` and `userVisibleRoots` are required: replay grades every recorded decision against `controlOut` and
+  // materializes the manifest under `userVisibleRoots`. A recorder has written both since before 2.0.0, so an
+  // absent one is an old or hand-made cassette; there is no fallback that would grade it honestly.
+  const stringArray = (v: unknown): boolean => Array.isArray(v) && v.every((x) => typeof x === "string");
+  // A NEWER format missing one of them is judged "too new" first, never "re-record it": a re-record here would
+  // overwrite a cassette written by a newer build with an older one's recording (and `--rerecord-stale` acts
+  // on `rerecordable`, so it must not be set).
+  if (
+    recordedVersion > CASSETTE_VERSION &&
+    (!stringArray((cassette as { controlOut?: unknown }).controlOut) ||
+      !stringArray((cassette as { userVisibleRoots?: unknown }).userVisibleRoots))
+  )
     return {
-      error:
-        `cassette recorded at v${recordedVersion} is older than the minimum supported version ` +
-        `v${MIN_SUPPORTED_CASSETTE_VERSION} — re-record this cassette (pre-1.0, no compatibility is ` +
-        `maintained for cassette formats below v${MIN_SUPPORTED_CASSETTE_VERSION})`,
+      error: `cassette format too new: v${recordedVersion} > this harness's v${CASSETTE_VERSION} — upgrade cowork-harness to read it`,
     };
-  }
+  if (!stringArray((cassette as { controlOut?: unknown }).controlOut))
+    return {
+      error: "cassette has no `controlOut` (the recorded control responses replay grades decisions against) — re-record it",
+      rerecordable: true,
+    };
+  if (!stringArray((cassette as { userVisibleRoots?: unknown }).userVisibleRoots))
+    return {
+      error: "cassette has no `userVisibleRoots` (the mount roots its manifest is replayed under) — re-record it",
+      rerecordable: true,
+    };
   // VERSION/FORMAT INVARIANT, at the read boundary. `cassetteVersion` says which reader is required;
   // `fingerprint.hashFormat` says which transform produced the digests. Nothing else ties them together,
-  // and the "absent means legacy" rule would silently mis-read a v12 document that forgot the stamp.
-  //
-  // Bound to the KNOWN current version only. A future v13/`jcs2` must NOT be rejected here — that belongs
-  // to the future-cassette policy just below, which is the surface that already knows how to talk about
-  // versions this build does not understand.
+  // and a document that forgot the stamp would have its digests compared as though they were `jcs1`.
   if (cassette.fingerprint !== undefined) {
     const fmt = cassette.fingerprint.hashFormat;
     const shown = fmt === undefined ? "(absent)" : `'${fmt}'`;
@@ -4351,23 +4197,12 @@ export function parseCassetteObject(raw: unknown): { cassette: Cassette } | { er
     // does not understand. The check applies to a baseline-only fingerprint too: `hashFormat` is stamped on
     // every buildFingerprint return path, so its absence at the current version is a genuine inconsistency
     // rather than a shape this build ever writes.
-    // Bound to HASH_FORMAT_EPOCH, not CASSETTE_VERSION: every KNOWN version from the epoch up (v12, and
-    // v13 — a shape/interpretation-only bump that left the epoch at 12) is written with `jcs1`. Keyed on
-    // the shape version alone, a v12 fingerprint missing `hashFormat` would load, D7's "absent ⇒ legacy"
-    // would apply to an epoch-stamped document, and live `jcs1` digests would be compared as though they
-    // were the same algorithm. `requiredVersionFor` derives its BASE from the epoch for this same reason.
-    if (recordedVersion >= HASH_FORMAT_EPOCH && recordedVersion <= CASSETTE_VERSION && fmt !== "jcs1") {
+    // Every version the floor admits (v12 up — the epoch is the floor) is written with `jcs1`.
+    if (recordedVersion <= CASSETTE_VERSION && fmt !== "jcs1") {
       return {
         error:
           `cassette is stamped v${recordedVersion} but its fingerprint carries hashFormat ${shown} — a v${HASH_FORMAT_EPOCH}+ ` +
           `cassette must record 'jcs1'. The stamp and the digests disagree, so neither can be trusted; re-record`,
-      };
-    }
-    if (recordedVersion < HASH_FORMAT_EPOCH && fmt !== undefined) {
-      return {
-        error:
-          `cassette is stamped v${recordedVersion} (pre-epoch) but its fingerprint carries hashFormat ${shown} — a ` +
-          `pre-v${HASH_FORMAT_EPOCH} cassette predates that field entirely, so the stamp and the digests disagree; re-record`,
       };
     }
   }
@@ -4814,6 +4649,31 @@ export function _resolveRerecordSource(
   }
   const fallback = _findScenarioOnDisk(cassettePath, cassette.scenario.name);
   return { path: fallback, via: fallback ? "name-lookup" : "none" };
+}
+
+/** What `record --rerecord-stale` needs from a cassette: the cassette itself, or — when this build refuses it as an
+ *  older format (`rerecordable`) — just the two fields that locate its scenario source, read LENIENTLY from the raw
+ *  JSON. Such a cassette has no readable embedded snapshot, so it can only be re-recorded from the on-disk scenario.
+ *  Any other refusal (unparseable, malformed) is an error: there is nothing trustworthy to re-record from. */
+export type RerecordTarget =
+  { cassette: Cassette } | { old: { refusal: string; scenarioSource?: string; scenario: { name?: string } } } | { error: string };
+export function readRerecordTarget(path: string): RerecordTarget {
+  const rc = readCassette(path);
+  if (!("error" in rc)) return { cassette: rc.cassette };
+  if (!rc.rerecordable) return { error: rc.error };
+  try {
+    const raw = JSON.parse(readFileSync(path, "utf8")) as { scenarioSource?: unknown; scenario?: { name?: unknown } };
+    return {
+      old: {
+        refusal: rc.error,
+        ...(typeof raw.scenarioSource === "string" ? { scenarioSource: raw.scenarioSource } : {}),
+        scenario: typeof raw.scenario?.name === "string" ? { name: raw.scenario.name } : {},
+      },
+    };
+  } catch (caught) {
+    rethrowIfExit(caught);
+    return { error: rc.error };
+  }
 }
 
 export function _findScenarioOnDisk(cassettePath: string, scenarioName: string | undefined): string | null {
@@ -5800,8 +5660,9 @@ export async function cmdRecord(args: string[]) {
     // frozen scenario (the stale set is cassettes, not YAML).
     const staleNames: string[] = [];
     for (const { path: cp } of stale) {
-      const rc = readCassette(cp);
-      if (!("error" in rc)) staleNames.push(rc.cassette.scenario.name);
+      const t = readRerecordTarget(cp);
+      if ("cassette" in t) staleNames.push(t.cassette.scenario.name);
+      else if ("old" in t && t.old.scenario.name !== undefined) staleNames.push(t.old.scenario.name);
     }
     // Every item must resolve a model, checked before the first re-record for the same reason as the budget:
     // an item refused mid-batch would come after the earlier ones were paid for. Each item is resolved the way
@@ -5809,9 +5670,9 @@ export async function cmdRecord(args: string[]) {
     // that cannot be resolved or loaded here is left to the loop, which reports it.
     const staleUnpinned: string[] = [];
     for (const { path: cp } of stale) {
-      const rc = readCassette(cp);
-      if ("error" in rc) continue;
-      const src = _resolveRerecordSource(cp, rc.cassette);
+      const t = readRerecordTarget(cp);
+      if ("error" in t) continue;
+      const src = _resolveRerecordSource(cp, "cassette" in t ? t.cassette : t.old);
       let sc: Scenario | undefined;
       if (src.path) {
         try {
@@ -5820,8 +5681,8 @@ export async function cmdRecord(args: string[]) {
           rethrowIfExit(caught);
           continue;
         }
-      } else if (fromEmbedded) {
-        sc = embeddedPairwiseRefs(embeddedScenario(rc.cassette.scenario, cp), cp);
+      } else if (fromEmbedded && "cassette" in t) {
+        sc = embeddedPairwiseRefs(embeddedScenario(t.cassette.scenario, cp), cp);
       }
       if (sc && unresolvedModelPreflight(sc, modelOverride)) staleUnpinned.push(src.path ?? cp);
     }
@@ -5838,8 +5699,19 @@ export async function cmdRecord(args: string[]) {
     if (!noRedact) {
       const preflightItems: Array<{ scenario: Scenario; policyDirs: string[] }> = [];
       for (const { path: cp } of stale) {
-        const rc = readCassette(cp);
-        if (!("error" in rc)) preflightItems.push({ scenario: rc.cassette.scenario, policyDirs: [process.cwd(), dirname(cp)] });
+        const t = readRerecordTarget(cp);
+        let scenario: Scenario | undefined;
+        if ("cassette" in t) scenario = t.cassette.scenario;
+        else if ("old" in t) {
+          // An older-format cassette re-records from its on-disk scenario; preflight THAT, when it resolves and parses.
+          const src = _resolveRerecordSource(cp, t.old).path;
+          try {
+            if (src) scenario = parseScenarioFile(src);
+          } catch (caught) {
+            rethrowIfExit(caught);
+          }
+        }
+        if (scenario) preflightItems.push({ scenario, policyDirs: [process.cwd(), dirname(cp)] });
       }
       const preflight = redactionPreflightMessage(preflightItems);
       if (preflight) warn(preflight);
@@ -5859,9 +5731,27 @@ export async function cmdRecord(args: string[]) {
         // batch unless --allow-budget-stop, a record batch stopped by its cap still exits 0.
         return true;
       }
+      // A cassette written by a NEWER build reads through the forward-compat tolerance and can look stale (its
+      // baseline moved), but re-recording it here would overwrite that recording with an older build's: refuse.
+      const tooNew = (v: number | undefined): string | undefined =>
+        (v ?? 0) > CASSETTE_VERSION
+          ? `stamped v${v}, newer than this build (v${CASSETTE_VERSION}) — upgrade cowork-harness to re-record`
+          : undefined;
       // A multi-leg cassette re-records from the legs: scenario it names, into the same file.
       if (isMultiLegCassetteFile(cp)) {
         const m = readMultiLegCassette(cp);
+        const newer =
+          "error" in m
+            ? undefined
+            : (tooNew(m.cassette.cassetteVersion) ??
+              m.cassette.legs
+                .map((l) => ("cassette" in l ? tooNew((l as { cassette: Cassette }).cassette.cassetteVersion) : undefined))
+                .find((x) => x !== undefined));
+        if (newer) {
+          log(`  ✗ ${tag} ${cp}: ${newer}`);
+          staleItems[i] = { cassette: cp, status: "failed", error: newer };
+          return false;
+        }
         const srcPath = "error" in m || !m.cassette.scenarioSource ? undefined : join(dirname(cp), m.cassette.scenarioSource);
         if (!srcPath || !existsSync(srcPath)) {
           const why = "error" in m ? m.error : `its scenario source ${srcPath ?? "(none recorded)"} is not there`;
@@ -5895,20 +5785,28 @@ export async function cmdRecord(args: string[]) {
           return false;
         }
       }
-      const rc = readCassette(cp);
-      if ("error" in rc) {
-        log(`  ✗ ${tag} ${cp}: ${rc.error} — cannot re-record`);
-        staleItems[i] = { cassette: cp, status: "failed", error: `${rc.error} — cannot re-record` };
+      const t = readRerecordTarget(cp);
+      if ("error" in t) {
+        log(`  ✗ ${tag} ${cp}: ${t.error} — cannot re-record`);
+        staleItems[i] = { cassette: cp, status: "failed", error: `${t.error} — cannot re-record` };
         return false;
       }
-      const cassette = rc.cassette;
+      const newer = "cassette" in t ? tooNew(t.cassette.cassetteVersion) : undefined;
+      if (newer) {
+        log(`  ✗ ${tag} ${cp}: ${newer}`);
+        staleItems[i] = { cassette: cp, status: "failed", error: newer };
+        return false;
+      }
+      // An older-format cassette (below the read floor, or missing a field replay now requires) still names its
+      // scenario source; it re-records from that, and only from that — its embedded snapshot is not readable.
+      const cassette = "cassette" in t ? t.cassette : undefined;
+      const located = cassette ?? (t as { old: { scenarioSource?: string; scenario: { name?: string } } }).old;
+      const shownName = located.scenario.name ?? "(unnamed)";
       // PREFER the persisted authored-source path (robust to an authored `name:` ≠ filename — the
       // name-based probe misses that and would re-record the embedded snapshot, silently dropping edits).
-      const src = _resolveRerecordSource(cp, cassette);
+      const src = _resolveRerecordSource(cp, located);
       if (src.persistedMissing)
-        log(
-          `  ⚠ ${tag} persisted scenario source "${src.persistedMissing}" not found — falling back to name lookup for "${cassette.scenario.name}"`,
-        );
+        log(`  ⚠ ${tag} persisted scenario source "${src.persistedMissing}" not found — falling back to name lookup for "${shownName}"`);
       const diskScenario = src.path;
       log(`${tag} ↻ re-recording ${cp} (stale: ${staleness.join("; ")})`);
       try {
@@ -5926,6 +5824,13 @@ export async function cmdRecord(args: string[]) {
             allowHostInventoryFixture,
             allowHostInventoryFindings,
           });
+        } else if (cassette === undefined) {
+          const why =
+            `no on-disk scenario found for "${shownName}", and this cassette is an older format this build cannot read, so ` +
+            `there is no embedded snapshot to fall back on. Re-record it from its scenario file: \`record <scenario.yaml> --out ${cp}\``;
+          log(`  ✗ ${tag} ${why}`);
+          staleItems[i] = { cassette: cp, status: "failed", error: why };
+          return false;
         } else if (!fromEmbedded) {
           // No on-disk scenario resolved. Re-recording from the embedded snapshot silently DROPS any edits
           // to the scenario YAML (the user believes stale cassettes were refreshed from edited YAML, but the
@@ -5961,7 +5866,7 @@ export async function cmdRecord(args: string[]) {
         // A source without `fidelity:` gets the remedy worded for THIS cassette: add the tier it recorded.
         // The generic remedy leads with `container`, which on a hostloop/protocol cassette would switch the
         // tier on the next record — a recording-shaping change nobody chose.
-        const why = e instanceof FidelityMissingError ? fidelityMissingForCassette(e, cassette.scenario) : recordErrorText(e);
+        const why = e instanceof FidelityMissingError && cassette ? fidelityMissingForCassette(e, cassette.scenario) : recordErrorText(e);
         log(`  ✗ ${tag} ${cp}: ${why}`);
         if (e instanceof RecordPostRunRefusalError) staleBudget.add(budgetFields(e.result).costUsd);
         staleItems[i] = { cassette: cp, status: "failed", error: why, ...refusedRunFields(e) };
@@ -6656,6 +6561,14 @@ export async function freezeRecordedRun(
   });
   // Read once — the decision stream feeds both the cassette body and the label-provenance stamp below.
   const recordedControlOut = safeLines(join(result.outDir, "control-out.jsonl"));
+  // Every driven session writes at least its `initialize` request to control-out.jsonl, so an empty one means the
+  // file is missing or was never written: freezing it would mint a cassette whose decisions cannot be graded.
+  if (recordedControlOut.length === 0)
+    throw new RecordPostRunRefusalError(
+      `control-out.jsonl in ${result.outDir} is missing or empty — the run's control responses were not captured, so a ` +
+        `cassette could not grade its decisions on replay. Re-run the record.`,
+      result,
+    );
   const base: Cassette = {
     $schema: cassetteSchemaUrl(stampedVersion),
     generator: "cowork-harness",
@@ -6668,8 +6581,7 @@ export async function freezeRecordedRun(
     userVisibleRoots: recordRoots,
     // (v8: no cassette-level readonlyFolderRoots — the read-only reason rides per-entry on
     // ManifestEntry.truncationReason, set by buildManifest above from RunResult.readonlyFolderRoots.)
-    // co-present with userVisibleRoots by construction — a cassette carrying preRunPaths never hits
-    // replay's legacy-roots fallback.
+    // co-present with userVisibleRoots by construction.
     preRunPaths: result.preRunPaths,
     preRunOrigin: result.preRunOrigin, // baseline provenance — replay fails evidence-unavailable on a non-local-walk baseline
     // Nulled (not `result.preRunHashes` verbatim) for any path whose artifact body was secret-scrubbed
@@ -6834,9 +6746,7 @@ export interface BehaviourSummary {
 
 /** Count the AskUserQuestion gates a cassette recorded. Sourced from `controlOut` (the decision stream),
  *  where an answered gate appears as a control_response whose `updatedInput` carries `questions[]` — the
- *  same shape the replay decision pipeline reads. A cassette without controlOut reports 0 gates, which is
- *  indistinguishable from "no gates fired"; that ambiguity is why the delta line says "0 → 2" rather than
- *  claiming a regression. */
+ *  same shape the replay decision pipeline reads. */
 export function behaviourSummary(cassette: Pick<Cassette, "controlOut" | "events" | "artifacts">): BehaviourSummary {
   let gates = 0;
   for (const raw of cassette.controlOut ?? []) {
@@ -7309,7 +7219,7 @@ export function sessionFingerprintDrift(
  *  from the rest: `record` freezes live-only keys and replay STRIPS them (never a NEW false-green), so
  *  `--write` may persist them; every OTHER reason means a key that would SILENTLY SKIP — a permanent
  *  false-green if frozen — so `--write` refuses it. */
-type UncheckableReason = "manifest-missing" | "prerunpaths-missing" | "prerunhashes-missing" | "controlout-missing" | "live-only";
+type UncheckableReason = "manifest-missing" | "prerunpaths-missing" | "prerunhashes-missing" | "live-only";
 
 /** Classify which on-disk `assert:` keys are NOT evaluable on this cassette (reason code + human message
  *  per key), plus whether `expect_denied` changed. The shared core behind BOTH the warn path
@@ -7322,11 +7232,10 @@ export function classifyUncheckableOnDiskKeys(
 ): { keys: Map<keyof Assertion, { code: UncheckableReason; message: string }>; expectDeniedChanged: boolean } {
   const asserts = onDisk.assert ?? [];
   const hasManifest = !!cassette.artifacts?.length;
-  const hasControlOut = !!cassette.controlOut?.length;
-  // Reuse the exported classification constants — a hand-copied gateKeys list drifted once already (it was
-  // missing computer_links_resolve on the manifest side), silently suppressing the on-disk warning.
+  // Reuse the exported classification constants — a hand-copied key list drifted once already (it was missing
+  // computer_links_resolve on the manifest side), silently suppressing the on-disk warning. Gate keys are always
+  // checkable: `controlOut` is a required field.
   const manifestKeys = new Set<keyof Assertion>(MANIFEST_KEYS);
-  const gateKeys = new Set<keyof Assertion>(QUESTION_GATE_KEYS);
   const liveOnlyKeys = new Set<keyof Assertion>(LIVE_ONLY_KEYS);
   const hasPreRun = cassette.preRunPaths !== undefined;
   const hasPreRunHashes = cassette.preRunHashes !== undefined;
@@ -7358,7 +7267,6 @@ export function classifyUncheckableOnDiskKeys(
         };
       else if (k !== "no_unexpected_files" && k !== "input_unmodified" && manifestKeys.has(k) && !hasManifest)
         entry = { code: "manifest-missing", message: "no artifact manifest in this cassette" };
-      else if (gateKeys.has(k) && !hasControlOut) entry = { code: "controlout-missing", message: "no controlOut in this cassette" };
       if (entry) keys.set(k, entry);
     }
   }
@@ -8054,9 +7962,9 @@ interface MarginRow {
  *  sync with the schema — a key missing here silently drops from the margin report. The 6 budget-field keys
  *  reuse `budgetFields` (identical to what the asserts evaluate); the array-count keys read the same RunResult
  *  fields the AssertContext builder does. `questions_count_max` counts SUB-questions off the re-drive's
- *  `decisions[]` (matching the assert, which folds `rec.questions`); a controlOut-less cassette re-drives with
- *  no question decisions, so `computeCassetteMargins` nulls its recorded count there (see the guard below)
- *  rather than report a false-infinite margin off a spurious 0. */
+ *  `decisions[]` (matching the assert, which folds `rec.questions`); a re-drive that failed as a truncated
+ *  cassette answered no questions, so `computeCassetteMargins` nulls its recorded count there (see the guard
+ *  below) rather than report a false-infinite margin off a spurious 0. */
 const COUNT_BOUND_MARGIN_KEYS: {
   key: keyof Assertion;
   kind: MarginKind;
@@ -8096,11 +8004,12 @@ async function computeCassetteMargins(cassette: Cassette, cassetteDir: string, s
   if (present.length === 0) return [];
   const result = await replayCassette(cassette, [], { cassetteDir, sessionOverride });
   const bf = budgetFields(result);
-  const hasControlOut = !!cassette.controlOut?.length;
+  // The re-drive answered its gates only when it reported no cassette-format failure (an unanswered question or an
+  // unpaired decision). Otherwise the sub-question count is a spurious 0 → a false-infinite margin: report "not
+  // derivable" (null) instead.
+  const answeredItsGates = !(result.assertions ?? []).some((a) => a.source === "cassette-format");
   return present.map(({ spec, budget }) => {
-    // A controlOut-less cassette re-drives with no question decisions (a truncated/legacy recording), so its
-    // sub-question count is a spurious 0 → a false-infinite margin. Report "not derivable" (null) instead.
-    const rec = spec.key === "questions_count_max" && !hasControlOut ? undefined : spec.recorded(result, bf);
+    const rec = spec.key === "questions_count_max" && !answeredItsGates ? undefined : spec.recorded(result, bf);
     const recorded = rec === undefined ? null : rec;
     let margin: number | null = null;
     if (recorded !== null)
@@ -8726,20 +8635,15 @@ export async function cmdVerifyCassettes(args: string[]) {
   return exitWith(exitCode);
 }
 
-/** `cowork-harness rehash <dir/> [--dry-run] [--output-format text|json]`
+/** `cowork-harness rehash <dir/> [--output-format text|json]`
  *  `cowork-harness rehash <file.cassette.json> --session <session.yaml>`
  *
- *  Migrates cassettes recorded under an older `cassetteVersion` — including across a HASH-FORMAT epoch —
- *  to the current version WITHOUT a full re-record, but ONLY when the content is provably unchanged.
- *
- *  The proof recomputes the recording's digest under the **ORIGINAL** algorithm and compares it to what was
- *  stored. `contentSig` is deliberately NOT the proof: it follows the same manifest transform `skillHash`
- *  does, so it is not comparable across a format change either, and it is blind to `D:` directory markers,
- *  so an added empty directory would slip past it while the real digest moved. `mode` and agent-scope must
- *  match as well, since both change which files are hashed.
- *
- *  Anything unprovable is REFUSED, never migrated. `--session` supplies the tree for a cassette that moved.
- *  Safe to run repeatedly: already-current cassettes are reported as skipped. */
+ *  CHECK-ONLY. It used to migrate a cassette across a hash-format change by proving its content unchanged
+ *  under the old algorithm; that algorithm is gone with the read floor, so there is nothing left to migrate.
+ *  Each cassette is reported `skipped` (it loads, and its stamp is at least the version its scenario needs)
+ *  or `error` (it does not load — the read refusal is reported verbatim, with its remedy — or it is stamped
+ *  below its scenario's version). Nothing is ever written. `--dry-run` and `--session` are still accepted and
+ *  change nothing: a 4.x script that passes them keeps working. */
 export async function cmdRehash(args: string[]): Promise<void> {
   // isJsonOutput (not a bare `p.options` read): it works even when parseArgs throws below, and honors the
   // --output-format=json equals-form and the COWORK_HARNESS_OUTPUT_FORMAT env var a bare check would miss.
@@ -8759,24 +8663,18 @@ export async function cmdRehash(args: string[]): Promise<void> {
     return fail("rehash", "usage", (e as Error).message, undefined, asJson);
   }
   applyParsedCommandGlobals("rehash", p, asJson);
-  const USAGE =
-    "usage: rehash <dir/> [--dry-run] [--output-format text|json]   |   rehash <file.cassette.json> --session <session.yaml> [--dry-run]";
+  const USAGE = "usage: rehash <dir/> [--output-format text|json]   |   rehash <file.cassette.json> --session <session.yaml>";
   if (p.positionals.length !== 1) {
     return fail("rehash", "usage", USAGE, undefined, asJson);
   }
   const target = p.positionals[0];
   const sessionOverride = expandHome(p.options["--session"]);
-  // A MOVED cassette cannot resolve its recorded `session:` from its own directory, so it can never be
-  // proved unchanged — and the hash-format epoch makes migration MANDATORY, which would leave it failing
-  // every bare replay with no remedy at all. Mirrors `replay --session`: ONE cassette at a time, because
-  // each may have been recorded against a different tree, so a directory batch cannot share one override.
+  // `--session` keeps its single-FILE contract (a 4.x invocation still parses the same way); the session
+  // itself is no longer read — a check needs no tree.
   if (sessionOverride !== undefined) {
     if (!existsSync(target) || statSync(target).isDirectory()) {
       return fail("rehash", "usage", `rehash --session takes a single cassette FILE, not a directory: ${target}`, undefined, asJson);
     }
-    // `isFile()` too, matching `replay --session`: a directory otherwise passes the existence gate and only
-    // surfaces much later as "skill dirs not resolvable", which reads as a cassette problem rather than a
-    // typo in the flag. One flag, one contract.
     if (!existsSync(sessionOverride) || !statSync(sessionOverride).isFile()) {
       return fail("rehash", "usage", `rehash --session: not a session file: ${sessionOverride}`, undefined, asJson);
     }
@@ -8784,313 +8682,62 @@ export async function cmdRehash(args: string[]): Promise<void> {
     const hint = existsSync(target) ? " — pass a directory, or a single cassette with --session <session.yaml>" : "";
     return fail("rehash", "usage", `rehash: not a directory: ${target}${hint}`, undefined, asJson);
   }
-  const dir = target;
-
   const dryRun = p.flags["--dry-run"] ?? false;
-
-  let liveBaseline: string;
-  try {
-    liveBaseline = loadBaseline("latest").appVersion;
-  } catch (e) {
-    rethrowIfExit(e);
-    return fail("rehash", "runtime", `rehash: cannot load latest baseline — ${(e as Error).message}`, undefined, asJson, 1);
-  }
 
   const files =
     sessionOverride !== undefined
-      ? [dir] // single-cassette mode: `dir` is the file itself, guarded above
-      : readdirSync(dir)
+      ? [target] // single-cassette mode: `target` is the file itself, guarded above
+      : readdirSync(target)
           .filter((f) => f.endsWith(".cassette.json"))
           .sort()
-          .map((f) => join(dir, f));
+          .map((f) => join(target, f));
 
+  // `migrated` stays in the JSON payload (always 0) so a consumer reading the 4.x envelope still parses it.
   if (files.length === 0) {
     if (asJson) out(jsonPayloadEnvelope("rehash", true, { dryRun, migrated: 0, skipped: 0, errors: 0, results: [] }));
-    else log("✓ rehash: nothing to migrate — no cassettes in directory");
+    else log("✓ rehash: no cassettes in directory");
     return exitWith(0);
   }
 
-  type Action = "migrated" | "skipped" | "error";
-  const results: { file: string; action: Action; reason: string }[] = [];
-
+  const results: { file: string; action: "skipped" | "error"; reason: string }[] = [];
   for (const file of files) {
     const rc = readCassette(file);
     if ("error" in rc) {
       results.push({ file, action: "error", reason: rc.error });
       continue;
     }
-    const { cassette } = rc;
-    const recordedVersion = cassette.cassetteVersion ?? 0;
-    // The version THIS scenario requires — not CASSETTE_VERSION (the build's max). Without this,
-    // `rehash` would bump a lane-free v10 cassette to v11 for no interpretive reason, reintroducing the
-    // blanket cost P8 exists to avoid via the very command this plan names as the recovery path.
-    const requiredVersion = requiredVersionFor(cassette.scenario, cassette);
-
-    // INVARIANT BEFORE SKIP. `cassetteVersion` says which reader is required; `fingerprint.hashFormat`
-    // says which transform produced the digests. Nothing ties them together, and the skip below returns
-    // before anything inspects the fingerprint — so a v12 cassette missing `hashFormat` would be waved
-    // through as current while carrying legacy digests, and the "absent means legacy" rule would then
-    // mis-read it forever.
-    // Same binding as the read boundary, and deliberately NOT gated on `skillHash`: a baseline-only v12
-    // fingerprint without `hashFormat` is just as inconsistent, and gating would skip it as "current".
-    if (
-      recordedVersion >= HASH_FORMAT_EPOCH &&
-      recordedVersion <= CASSETTE_VERSION &&
-      cassette.fingerprint !== undefined &&
-      cassette.fingerprint.hashFormat !== "jcs1"
-    ) {
-      results.push({
-        file,
-        action: "error",
-        reason: `v${recordedVersion} cassette is missing fingerprint.hashFormat — inconsistent with its stamped version; re-record`,
-      });
-      continue;
-    }
-    // Already at (or above) the version this scenario requires — nothing to do.
-    if (recordedVersion >= requiredVersion) {
-      results.push({ file, action: "skipped", reason: `already at v${recordedVersion}` });
-      continue;
-    }
-
-    // v10 records symlink/hardlink identity (ManifestEntry.linkKind) that the CONTENTSIG algorithm is
-    // blind to, so `rehash`'s content-unchanged check cannot vouch for it — and rehash has only the old
-    // manifest, not the vanished work tree, so it cannot synthesize the link entries a v10 cassette
-    // promises. A silent version-stamp would mint a v10-labeled cassette that never actually captured its
-    // links. Route a v9→v10 bump to a re-record. Placed AFTER the "already current" skip but this only
-    // needs to block the eventual STAMP — the content/baseline gates below still run and their own
-    // error reasons (content mismatch, unreadable sources, mode/agent-scope change) fire first, so this is reached only when a cassette would
-    // otherwise have migrated cleanly.
-    const crossesIntoV10 = recordedVersion < 10 && requiredVersion >= 10;
-
-    // No fingerprint — no skill dirs were tracked; only baseline staleness applies, which requires re-record.
-    if (!cassette.fingerprint?.skillHash) {
-      // NO skillHash. `buildFingerprint` omits it in TWO different situations — genuinely zero skill
-      // sources, and files that could not be read ("can't verify"). Treating both as "nothing to prove"
-      // would bless an UNVERIFIABLE recording as current-format, so absence alone is not evidence.
-      //
-      // A metadata-only restamp needs POSITIVE proof of the zero-source case: a recorded
-      // `sessionFingerprint` that still matches a resolvable session. That says the recording's session
-      // shape is intact and genuinely declared nothing to hash. Without it, refuse.
-      // A matching sessionFingerprint proves the session SHAPE is intact — it does NOT prove the session
-      // declared nothing to hash. A recording whose hash failed over real, declared roots has a perfectly
-      // matching shape too, and migrating that would bless an unverifiable recording as current-format.
-      // So: shape intact AND the session resolves AND it declares ZERO roots.
-      const zeroSession = sessionOverride !== undefined ? resolve(sessionOverride) : cassette.scenario.session;
-      const shapeIntact =
-        cassette.sessionFingerprint !== undefined && cassette.sessionFingerprint === buildSessionFingerprint(zeroSession, dirname(file));
-      // `dirs` is the SURVIVING mounts — `declaredSkillDirs` has already dropped paths that do not exist —
-      // so an empty `dirs` is ambiguous between "declared nothing" and "declared roots that are all
-      // missing". The second is exactly the case this proof exists to reject: a cassette recorded against a
-      // typo'd plugin path has no `skillHash` BECAUSE the hash failed, and a perfectly valid
-      // `sessionFingerprint`. `failure` is the discriminator the resolver already computes for this —
-      // absent means "resolved fine, and it genuinely declares none". (It never throws; it reports.)
-      const zeroRes = skillSourceDirs(zeroSession, dirname(file));
-      const genuinelyZero = zeroRes.failure === undefined && zeroRes.dirs.length === 0;
-      if (!shapeIntact || !genuinelyZero) {
-        results.push({
-          file,
-          // ERROR, not "skipped": a pre-epoch cassette still fails every bare replay, so reporting it as
-          // "nothing to migrate" lets a batch exit 0 while leaving it unlabelled and broken. A failed proof
-          // is a failure, exactly like a content mismatch.
-          action: "error",
-          reason:
-            zeroRes.failure?.kind === "declared-dirs-missing"
-              ? `no skillHash, and the session declares ${zeroRes.failure.declared} skill root(s) that do not resolve — absence means the hash FAILED, not that there was nothing to hash; re-record`
-              : zeroRes.failure !== undefined
-                ? `no skillHash, and the session could not be resolved (${zeroRes.failure.kind}) — cannot prove the recording had zero skill sources; re-record`
-                : "no skillHash, and no matching session shape to prove the recording genuinely had zero skill sources — re-record if this cassette needs to be current",
-        });
-        continue;
-      }
-      // The v9→v10 link-identity refusal applies to EVERY migration path, including this one: a v9
-      // baseline-only cassette never captured the symlink identity a v10+ stamp promises, and rehash
-      // cannot synthesize it. Without this the metadata branch would stamp it current regardless.
-      if (crossesIntoV10) {
-        results.push({
-          file,
-          action: "error",
-          reason: `v10 records symlink/hardlink identity (#38) the v${recordedVersion} manifest could not capture — \`rehash\` cannot add it; re-record to migrate`,
-        });
-        continue;
-      }
-      if (!dryRun) {
-        // Metadata-only: no digest to migrate — but the version/format invariant still applies, so the
-        // fingerprint must declare the current format rather than being left to read as legacy.
-        const stamped: Cassette = {
-          ...cassette,
-          $schema: cassetteSchemaUrl(requiredVersion),
-          cassetteVersion: requiredVersion,
-          ...(cassette.fingerprint ? { fingerprint: { ...cassette.fingerprint, hashFormat: ACTIVE_HASH_FORMAT } } : {}),
-        };
-        // A rewrite path must not re-publish what the recorder now removes (scrubRecordedAgentData), held to record's
-        // verdict-preservation check; if that cannot pass, the migration still lands with the events unscrubbed.
-        writeFileAtomic(file, JSON.stringify((await verifiedRescrub(stamped, dirname(file), `rehash ${file}`)).cassette, null, 2));
-      }
-      results.push({ file, action: "migrated", reason: `v${recordedVersion} → v${requiredVersion} (metadata only — zero skill sources)` });
-      continue;
-    }
-
-    // BASELINE DRIFT DOES NOT BLOCK A FORMAT MIGRATION. `fingerprint.baseline` is the resolved Cowork app
-    // version at record time — recorded metadata, never an input to `skillHash` — so it says nothing about
-    // whether the content is provably unchanged.
-    //
-    // Skipping on it used to be harmless: an un-migrated cassette still replayed. After the epoch it is a
-    // TRAP. A pre-epoch cassette fails a bare `replay` until it is restamped, so "skip" leaves it unplayable
-    // while `rehash` exits 0 and prints "nothing to migrate" — and anyone who has run `sync`, or whose
-    // committed cassettes predate the current `baselines/`, hits that on every file. The release notes sell
-    // `rehash` as the one-command fix; a silent no-op reporting success is the opposite of that.
-    //
-    // So: migrate the hashes, KEEP the recorded baseline, and let baseline drift stay what it already is —
-    // its own staleness finding at verify time, which a re-record (not a rehash) resolves.
-    const baselineDrifted = cassette.fingerprint.baseline !== liveBaseline;
-
-    // ONE resolution, ONE walk: `recomputeBothAlgos` folds BOTH the legacy proof and the replacement
-    // fingerprint from the SAME snapshot. A second independent walk would let a file change in between,
-    // so the proof would validate one tree while the migration wrote digests from another.
-    //
-    // An override is resolved ABSOLUTE: `skillSourceDirs` only joins `cassetteDir` for a RELATIVE session,
-    // so passing both a relative override and its own dirname would double-join them.
-    // An INLINE cassette has no session file, so there is nothing an override can point at. `replay` and
-    // `verify-cassettes` get this for free because `resolveCassetteSessionPath` short-circuits on the
-    // sentinel BEFORE considering an override — but substituting the override AS the session path here
-    // bypasses that. Without this guard, an override tree that happened to match the recorded digest would
-    // report "migrated" and stamp v12/jcs1 while the cassette still says `(inline)`: a bare `replay` then
-    // fails with `inline-without-config`, `replay --session` is refused, and the operator has been told the
-    // cassette is current with no recovery path left.
-    if (sessionOverride !== undefined && cassette.scenario.session === "(inline)") {
-      results.push({
-        file,
-        action: "error",
-        reason: "--session cannot apply to an INLINE scenario (it has no session file to override) — re-record",
-      });
-      continue;
-    }
-    const migrateSession = sessionOverride !== undefined ? resolve(sessionOverride) : cassette.scenario.session;
-    const proof = recomputeBothAlgos(migrateSession, dirname(file), cassette.scenario.skills, cassette.fingerprint.baseline);
-    if (!proof) {
-      results.push({ file, action: "error", reason: "skill dirs not resolvable from cassette location — cannot prove content unchanged" });
-      continue;
-    }
-    if (proof.readErrors?.length) {
-      results.push({ file, action: "error", reason: "unreadable skill sources — cannot prove content unchanged; re-record" });
-      continue;
-    }
-    // `mode` and `agentScope` change the FILE SET, so a matching digest under a different boundary proves
-    // nothing about the same content.
-    const recModeR = cassette.fingerprint.mode ?? "raw";
-    if (recModeR !== proof.mode) {
-      results.push({
-        file,
-        action: "error",
-        reason: `recorded in '${recModeR}' file-set mode, now '${proof.mode}' — re-record under the same mode`,
-      });
-      continue;
-    }
-    if ((cassette.fingerprint.agentScope ?? "off") !== (proof.agentScoped ? "skill" : "off")) {
-      results.push({ file, action: "error", reason: "agent-scope differs from the recording — re-record under the same setting" });
-      continue;
-    }
-    if (proof.legacyHash !== cassette.fingerprint.skillHash) {
-      results.push({
-        file,
-        action: "error",
-        reason: "skill content changed since recording (legacy skillHash mismatch) — re-record required",
-      });
-      continue;
-    }
-
-    // Content is provably unchanged, so a pure version-stamp WOULD be safe for a hash-only bump — but a
-    // v9→v10 bump also promises symlink/hardlink identity that the old manifest never captured and rehash
-    // cannot synthesize. Refuse the stamp and route to a re-record (see the crossesIntoV10 note above).
-    if (crossesIntoV10) {
-      results.push({
-        file,
-        action: "error",
-        reason: `v10 records symlink/hardlink identity (#38) the v${recordedVersion} manifest could not capture — \`rehash\` cannot add it; re-record to migrate`,
-      });
-      continue;
-    }
-
-    // Content is provably unchanged. Build the migrated fingerprint — selective, allow-listed, and able to
-    // REFUSE: a manifest that cannot be aligned entry-for-entry must not be stamped `jcs1` while carrying
-    // the old per-file digests, or the cassette would claim to be current while every attribution lied.
-    const migrated = migrateFingerprint(cassette.fingerprint, proof.live, proof.legacySigs);
-    if ("error" in migrated) {
-      results.push({ file, action: "error", reason: `${migrated.error} — re-record required` });
-      continue;
-    }
-
-    if (!dryRun) {
-      const updated: Cassette = {
-        ...cassette,
-        $schema: cassetteSchemaUrl(requiredVersion),
-        generator: "cowork-harness",
-        cassetteVersion: requiredVersion,
-        fingerprint: migrated.fingerprint,
-      };
-      // Same as the metadata branch: drop what the recorder removes before rewriting, verdict-checked (verifiedRescrub).
-      writeFileAtomic(file, JSON.stringify((await verifiedRescrub(updated, dirname(file), `rehash ${file}`)).cassette, null, 2)); // atomic in-place rehash write (staleness keys on contentSig, not mtime — rename is safe)
-    }
-    results.push({
-      file,
-      action: "migrated",
-      reason:
-        `v${recordedVersion} → v${requiredVersion}${dryRun ? " (dry-run)" : ""}` +
-        (baselineDrifted
-          ? ` — NOTE: baseline still reads ${cassette.fingerprint.baseline} (live ${liveBaseline}); re-record to clear that separately`
-          : ""),
-    });
+    const recordedVersion = rc.cassette.cassetteVersion ?? 0;
+    // The version THIS scenario requires — not CASSETTE_VERSION (the build's max).
+    const requiredVersion = requiredVersionFor(rc.cassette.scenario, rc.cassette);
+    results.push(
+      recordedVersion >= requiredVersion
+        ? { file, action: "skipped", reason: "current: nothing to re-stamp" }
+        : { file, action: "error", reason: `stamped v${recordedVersion}, its scenario needs v${requiredVersion} — re-record` },
+    );
   }
 
-  const migrated = results.filter((r) => r.action === "migrated").length;
   const skipped = results.filter((r) => r.action === "skipped").length;
-  const errors = results.filter((r) => r.action === "error").length;
-
-  const code = rehashExitCode({ migrated, errors });
+  const errors = results.length - skipped;
+  const code = rehashExitCode({ errors });
 
   if (asJson) {
-    out(jsonPayloadEnvelope("rehash", errors === 0, { dryRun, migrated, skipped, errors, results }));
+    out(jsonPayloadEnvelope("rehash", errors === 0, { dryRun, migrated: 0, skipped, errors, results }));
   } else {
-    // Summary FIRST. It used to print last, after every per-file line had scrolled past — and these two
-    // counts ARE the decision, so a reader had to scroll back up to find them. The per-file lines below
-    // are the detail behind it, not the thing being reported.
-    if (migrated > 0 || errors > 0) {
-      const glyph = errors > 0 ? (migrated > 0 ? "!" : "✗") : "✓";
-      const verb = dryRun ? "migratable" : "migrated";
-      // No single target version here — P8 stamps per-scenario (requiredVersionFor), so a batch can
-      // migrate some cassettes to v10 and others to v11; each row's own reason already says which.
-      log(
-        `${glyph} rehash: ${migrated} ${verb}` +
-          (errors > 0 ? `, ${errors} require a re-record` : "") +
-          (skipped > 0 ? `, ${skipped} already current` : "") +
-          (dryRun ? " (dry-run — nothing written)" : ""),
-      );
-    } else {
-      log("✓ rehash: nothing to migrate");
-    }
-    for (const r of results) {
-      const glyph = r.action === "migrated" ? "✓" : r.action === "error" ? "✗" : "·";
-      log(`${glyph} ${r.file}: ${r.reason}`);
-    }
+    // Summary FIRST — the counts are the decision; the per-file lines below are the detail.
+    log(
+      errors > 0
+        ? `✗ rehash: ${errors} require a re-record${skipped > 0 ? `, ${skipped} current` : ""}`
+        : `✓ rehash: ${skipped} cassette(s) current — nothing to re-stamp`,
+    );
+    for (const r of results) log(`${r.action === "error" ? "✗" : "·"} ${r.file}: ${r.reason}`);
   }
   return exitWith(code);
 }
 
-/** `rehash`'s exit code, documented in SPEC §11 and in its `--help`.
- *
- *  PARTIAL success gets its own code. `4 migrated, 18 failed` and `0 migrated, 22 failed` demand opposite
- *  responses — commit the four and budget a re-record for the rest, versus nothing here is salvageable —
- *  and while both were `1`, a shell consumer reading only the exit code could not tell them apart. The
- *  JSON envelope always carried the split as `migrated`/`skipped`/`errors`; a bare terminal run did not.
- *
- *  `4` rather than `3`: the exit-code space is per-command, and `3`'s "could not verify" meaning is
- *  load-bearing on `verify-cassettes` — a migration that partly succeeded is not a failed verification.
- *
- *  `skipped` is deliberately not an input: an already-current cassette needs no action, so it cannot
- *  turn a clean run dirty or a total failure partial. */
-export function rehashExitCode(tally: { migrated: number; errors: number }): 0 | 1 | 4 {
-  if (tally.errors === 0) return 0;
-  return tally.migrated > 0 ? 4 : 1;
+/** `rehash`'s exit code, documented in SPEC §11 and in its `--help`: `0` when every cassette is current,
+ *  `1` when any is not. (`4`, partial migration, is no longer produced — nothing migrates.) */
+export function rehashExitCode(tally: { errors: number }): 0 | 1 {
+  return tally.errors === 0 ? 0 : 1;
 }
 
 /** Record-time connected-folder host-path -> resolved-mount-name map (Finding 24), persisted onto a
@@ -9472,21 +9119,9 @@ export async function replayCassette(
   if (opts.notesSink) opts.notesSink(stalenessNotes);
   else for (const n of stalenessNotes) warn(`::notice:: [replay] cassette note: ${n}\n`);
 
-  // backward compat: warn loudly when controlOut is absent so the user knows question/gate
-  // assertions are being EXCLUDED (not vacuously evaluated) from this run.
-  if (!session.hasControlOut) {
-    warn(
-      "::warning:: [replay] cassette has no controlOut (pre-full-fidelity) — question/gate assertions are NOT checked; re-record to enable them\n",
-    );
-  }
-
-  // ReplayDecider: look up recorded decision body → deserialize → return.
-  // Only constructed (and only drives the decision pipeline) when controlOut is present.
-  // Reuse the session's already-parsed controlOut index for the decider (no re-parsing).
-  const replayDecider = withPartlyScriptedFindings(
-    session.hasControlOut ? buildReplayDecider(session, session.controlOutIndex) : NOOP_DECIDER,
-    cassette.scenario.answers,
-  );
+  // ReplayDecider: look up recorded decision body → deserialize → return. Reuses the session's already-parsed
+  // controlOut index (no re-parsing). `controlOut` is required, so every recorded decision is graded against it.
+  const replayDecider = withPartlyScriptedFindings(buildReplayDecider(session, session.controlOutIndex), cassette.scenario.answers);
 
   // pass Infinity as dialogTimeoutMs — the synchronous decider resolves before any timer,
   // and there is no child, so the synchronous respond() is safe here.
@@ -9511,12 +9146,11 @@ export async function replayCassette(
   const replayHookFailureBlocks = resolveHookFailureBlocks(cassette.hookFailureBlocks, initAgentVersions(cassette.events));
   // Reconstruct hook fire/block events from the recorded stream + control-out. A hook_callback is a
   // control_request in the stream; the harness's reply (built-in or custom) is the matching
-  // control_response in controlOut. Both are already recorded — no cassette field needed. Only when
-  // controlOut is present: a custom hook's decision exists ONLY there, so without it we cannot know
-  // whether a custom hook blocked, and the hook keys must exclude-loud rather than reconstruct a
-  // partial (built-in-only) view that could false-green no_hook_blocked.
+  // control_response in controlOut. Both are already recorded — no cassette field needed. A request with NO recorded
+  // response is a truncated cassette, never an allow: it is skipped here and reported as a cassette-format failure,
+  // because reading it as allow would pass `no_hook_blocked` over a block the recording lost.
   let replayHookEvents: RunResult["hookEvents"];
-  if (session.hasControlOut) {
+  {
     replayHookEvents = [];
     for (const line of cassette.events) {
       let m: any;
@@ -9529,6 +9163,11 @@ export async function replayCassette(
       if (m?.type !== "control_request" || m?.request?.subtype !== "hook_callback") continue;
       const reqId = typeof m.request_id === "string" ? m.request_id : undefined;
       const reply = reqId ? session.controlOutIndex.get(reqId) : undefined;
+      if (reply === undefined) {
+        const id = reqId ?? `(no request_id, callback ${String(m.request.callback_id)})`;
+        if (!session.unpairedHookCallbacks.includes(id)) session.unpairedHookCallbacks.push(id);
+        continue;
+      }
       replayHookEvents.push(
         hookEventFrom(
           m.request.callback_id,
@@ -9553,11 +9192,9 @@ export async function replayCassette(
   //  - producer (3) permission_denied: pure stream content (the tool_use + system_event both live in the
   //    ordinary events stream, not controlOut) — the re-drive reproduces it identically via run.ts's own
   //    correlation filter, so it's merged straight from `rec.pathDenials`.
-  // Only when controlOut is present: without it, source (2) never even reaches the re-drive (a
-  // can_use_tool `decision` event is skipped by CassetteAgentSession.start() in legacy mode), and source
-  // (1)'s custom-hook decision doesn't exist anywhere else — so the whole channel is evidence-unavailable.
+  // An unpaired path-gate callback is the truncation the hook-event loop above already reports: skipped, never allow.
   let replayPathDenials: RunResult["pathDenials"];
-  if (session.hasControlOut) {
+  {
     replayPathDenials = [];
     for (const line of cassette.events) {
       let m: any;
@@ -9572,7 +9209,7 @@ export async function replayCassette(
       const reply = reqId ? session.controlOutIndex.get(reqId) : undefined;
       if (m.request?.subtype === "hook_callback") {
         const callbackId = m.request.callback_id;
-        if (callbackId !== HOSTLOOP_PATH_GATE_ID) continue;
+        if (callbackId !== HOSTLOOP_PATH_GATE_ID || reply === undefined) continue;
         const toolUseId = typeof m.request.tool_use_id === "string" ? m.request.tool_use_id : undefined;
         const hev = hookEventFrom(callbackId, reply, m.request.input, toolUseId);
         if (hev.decision !== "block") continue;
@@ -9619,8 +9256,6 @@ export async function replayCassette(
     replayPathDenials.push(...rec.pathDenials.filter((d) => d.source === "permission_denied"));
   }
 
-  // build a conditional contentKeys — omit question/gate keys when controlOut is absent
-  // (they would evaluate vacuously/incorrectly).
   const alwaysContentKeys = ALWAYS_CONTENT_KEYS;
   const questionGateKeys = QUESTION_GATE_KEYS;
   // with an artifact manifest, the filesystem assertions become replay-checkable (materialized below).
@@ -9652,8 +9287,7 @@ export async function replayCassette(
     ...(iumReplayable ? (["input_unmodified"] as (keyof Assertion)[]) : []),
   ];
   // DELIBERATE asymmetry (live vs replay): live/verify-run without preRunPaths ⇒ evidence-unavailable
-  // HARD-FAIL; replay of a baseline-less cassette ⇒ loud EXCLUDE here (same contract as gate keys
-  // without controlOut) — the recording cannot support the key, not a vacuous pass.
+  // HARD-FAIL; replay of a baseline-less cassette ⇒ loud EXCLUDE here — the recording cannot support the key, not a vacuous pass.
   if (cassette.scenario.assert.some((a) => a.no_unexpected_files !== undefined) && nufExcludedLoudly)
     warn(
       "::warning:: [replay] no_unexpected_files: cassette has no pre-run manifest (recorded before the manifest seam) — key skipped on replay; re-record on a current harness\n",
@@ -9690,7 +9324,7 @@ export async function replayCassette(
     truncatedPaths: replayTruncatedPaths,
     linkPaths: replayLinkPaths,
   } = manifestKeys.length
-    ? materializeManifest(cassette.artifacts!, cassette.userVisibleRoots ?? ["outputs", ".projects"])
+    ? materializeManifest(cassette.artifacts!, cassette.userVisibleRoots)
     : {
         workRoot: "",
         prefixes: [] as string[],
@@ -9711,10 +9345,7 @@ export async function replayCassette(
   // across repeated replays. `replayWorkRoot` is declared OUTSIDE the try (visible in finally); the
   // returned object carries no reference into it, so post-return cleanup is safe.
   try {
-    const contentKeys: (keyof Assertion)[] = [
-      ...(session.hasControlOut ? [...alwaysContentKeys, ...questionGateKeys] : alwaysContentKeys),
-      ...manifestKeys,
-    ];
+    const contentKeys: (keyof Assertion)[] = [...alwaysContentKeys, ...questionGateKeys, ...manifestKeys];
 
     // with AND-semantics in check(), we must STRIP each assertion to only its active content keys
     // before evaluating — otherwise a mixed object (e.g. {question_asked, result} with controlOut
@@ -9731,14 +9362,13 @@ export async function replayCassette(
 
     // footgun: replay must be LOUD about anything it can't check, in two distinct classes —
     // a silent partial false-green is the project's cardinal sin.
-    //  • FULL skip  — an assertion with no evaluated key at all (pure filesystem/egress, or pure
-    //    gate-keys when controlOut is absent) + every `expect_denied` host. Not evaluated on replay.
+    //  • FULL skip  — an assertion with no evaluated key at all (pure filesystem/egress) + every
+    //    `expect_denied` host. Not evaluated on replay.
     //  • PARTIAL skip — a MIXED assertion whose content half IS evaluated but whose genuine
     //    filesystem/egress half is silently dropped by stripToContent (e.g. {result, file_exists}).
     //    Counted separately so a mixed assertion can't green on its content half alone unnoticed.
     // `contentishKeys` (always-content ∪ question/gate) marks keys that are NEVER filesystem/egress;
-    // a key outside it is genuinely live-only. (Gate keys dropped purely for missing controlOut are
-    // already announced by the controlOut warning above, so they don't count as a PARTIAL drop.)
+    // a key outside it is genuinely live-only.
     const contentishKeys = new Set<keyof Assertion>([...alwaysContentKeys, ...questionGateKeys, ...manifestKeys]);
     let fullSkipCount = cassette.scenario.expect_denied?.length ?? 0;
     let partialSkipCount = 0;
@@ -9824,9 +9454,7 @@ export async function replayCassette(
       recordedNonDeterministic: cassette.authoring?.nonDeterministic === true,
       gateOptions: rec.gateOptions,
       // A truncated cassette could not be driven, so `gateOptions` is empty because nothing was OBSERVED
-      // — not because no gate fired. Flag it so question_options fails evidence-unavailable. (A cassette
-      // with no controlOut needs no flag: the whole QUESTION_GATE_KEYS bucket is excluded from that
-      // replay, so the key is never reached.)
+      // — not because no gate fired. Flag it so question_options fails evidence-unavailable.
       gateOptionsMissing: truncatedMsg !== undefined,
       hostPathLeaked: false,
       selfHealRan: false,
@@ -9868,14 +9496,12 @@ export async function replayCassette(
       resources: undefined,
       // live-only — a cassette carries no frozen search corpus; the search_corpus_* keys are LIVE_ONLY_KEYS.
       searchCorpus: undefined,
-      // reconstructed above from cassette.events + controlOut; undefined when controlOut is absent
-      // (excludes hook_blocked/no_hook_blocked loud, never a vacuous pass).
+      // reconstructed above from cassette.events + controlOut (an unpaired callback fails the replay as truncated).
       hookEvents: replayHookEvents,
       // content-class — the tool_use blocks are frozen stream content, so the re-drive reproduces
       // fileToolAttempts exactly like the live lane (same reasoning as presentedFiles below).
       fileToolAttempts: rec.fileToolAttempts,
-      // reconstructed above (beside replayHookEvents) from cassette.events + controlOut; undefined when
-      // controlOut is absent.
+      // reconstructed above (beside replayHookEvents) from cassette.events + controlOut.
       pathDenials: replayPathDenials,
       // content-class — re-derived by the re-drive above exactly like the live lane; uncollapsed so an
       // empty [] (nothing presented) vacuous-passes no_scratchpad_leak instead of reading as
@@ -10128,6 +9754,15 @@ export async function replayCassette(
         source: "cassette-format",
       });
     }
+    // The same truncation for a hook callback: its reply decides block or allow, so without it nothing is known.
+    for (const id of session.unpairedHookCallbacks) {
+      assertions.push({
+        assertion: { replay_protocol_fidelity: true },
+        pass: false,
+        message: `hook_callback ${id} present in events.jsonl has no matching control_response in control-out.jsonl — cassette is truncated; re-record`,
+        source: "cassette-format",
+      });
+    }
 
     // A truncated QUESTION (no recorded answer) surfaces here too — same exit-1 class as the permission case.
     if (truncatedMsg) {
@@ -10277,14 +9912,14 @@ export async function replayCassette(
       hookFailureBlocks: replayHookFailureBlocks,
       deviceBridge: cassette.deviceBridge, // what the recording modeled, as frozen
       mcpErrors: undefined, // live-only — the re-drive never produces mcp_error
-      hookEvents: replayHookEvents, // reconstructed above from cassette.events + controlOut; undefined when controlOut is absent
+      hookEvents: replayHookEvents, // reconstructed above from cassette.events + controlOut
       // Content-class: the tool_use blocks live in the ordinary events stream (not controlOut), so the
       // re-drive reproduces fileToolAttempts automatically — same reasoning as presentedFiles below.
       fileToolAttempts: rec.fileToolAttempts,
       toolCalls: rec.toolCalls, // content-class too: re-derived from the frozen tool_use blocks
       // reconstructed above (beside replayHookEvents) from cassette.events + controlOut, pairing the
       // pretooluse/can_use_tool sources with their controlOut reply and merging the permission_denied
-      // source from the re-drive; undefined when controlOut is absent.
+      // source from the re-drive.
       pathDenials: replayPathDenials,
       // Content-class: the tool_use/tool_result pair lives in the ordinary events stream (not
       // controlOut), so the re-drive reproduces it exactly like mcpErrors' live-only counterpart does
@@ -10337,7 +9972,7 @@ function safeLines(path: string): string[] {
       .filter((l) => l.trim());
   } catch (err: unknown) {
     rethrowIfExit(err);
-    // File-not-found is normal (e.g. no control-out.jsonl on legacy cassettes) — stay quiet.
+    // File-not-found is quiet here; a caller that needs the file refuses on the empty result itself.
     // Any other error (permissions, corrupted inode, etc.) is unexpected and must be loud.
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== "ENOENT") {

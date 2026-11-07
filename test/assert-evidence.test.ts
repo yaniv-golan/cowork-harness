@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { evaluate, type AssertContext } from "../src/assert.js";
 import { CASSETTE_VERSION } from "../src/run/cassette.js";
+import { recordedControlOut, DEFAULT_USER_VISIBLE_ROOTS } from "./helpers/minimal-cassette.js";
 
 function ctx(over: Partial<AssertContext> = {}): AssertContext {
   return {
@@ -129,7 +130,8 @@ describe.skipIf(!can)("replay --explain — prints the passing-assert evidence t
           JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "hello there" }] } }),
           JSON.stringify({ type: "result", subtype: "success", is_error: false }),
         ],
-        controlOut: [],
+        controlOut: recordedControlOut(),
+        userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
       }),
     );
     const r = spawnSync("node", [CLI, "replay", "c.cassette.json", "--explain"], { encoding: "utf8", cwd });

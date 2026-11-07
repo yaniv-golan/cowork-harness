@@ -50,7 +50,8 @@ describe("a v12-only reader's view of a v13 cassette", () => {
         assert: [{ tool_called: { tool: "Bash", inputz: "a key from the future" } }],
       },
       events: [],
-      controlOut: [],
+      controlOut: recordedControlOut(),
+      userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
     });
 
   const readCassetteFromString = (text: string) => {
@@ -78,6 +79,7 @@ import { replayCassette } from "../src/run/cassette.js";
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { recordedControlOut, DEFAULT_USER_VISIBLE_ROOTS } from "./helpers/minimal-cassette.js";
 
 const futureCassette = () => ({
   cassetteVersion: CASSETTE_VERSION + 1,
@@ -99,7 +101,8 @@ const futureCassette = () => ({
     }),
     JSON.stringify({ type: "result", subtype: "success", is_error: false }),
   ],
-  controlOut: [],
+  controlOut: recordedControlOut(),
+  userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
 });
 
 describe("replay refuses a future cassette before evaluating it", () => {

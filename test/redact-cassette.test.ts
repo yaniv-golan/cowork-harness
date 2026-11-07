@@ -17,7 +17,7 @@ const scenario = (assert: unknown[], prompt = "hi") => ({
 });
 
 function cassetteWith(events: string[], assert: unknown[], prompt = "hi"): any {
-  return { scenario: scenario(assert, prompt), events };
+  return withReplayContract({ scenario: scenario(assert, prompt), events });
 }
 
 describe("redactCassette — whole-surface content redaction", () => {
@@ -385,7 +385,7 @@ describe("preRunHashes wiring: cassette → replay RunResult", () => {
         JSON.stringify({ type: "system", subtype: "init", tools: [] }),
         JSON.stringify({ type: "result", subtype: "success", is_error: false }),
       ],
-      controlOut: [],
+      controlOut: recordedControlOut(),
       preRunPaths: ["outputs/seed.md"],
       preRunHashes: { "outputs/seed.md": sha },
       artifacts: [{ path: "outputs/seed.md", bytes: body.length, sha256: sha, body, encoding: undefined }],
@@ -403,6 +403,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { recordedControlOut, withReplayContract } from "./helpers/minimal-cassette.js";
 
 describe("binary artifact bodies round-trip byte-exact via a base64 encoding marker", () => {
   it("buildManifest stores non-UTF-8 bytes as base64; materializeManifest restores them exactly", () => {
@@ -414,7 +415,7 @@ describe("binary artifact bodies round-trip byte-exact via a base64 encoding mar
     // a normal text file should stay utf8 (no marker) for readable cassettes
     writeFileSync(join(root, "outputs", "note.txt"), "hello world");
 
-    const manifest = buildManifest(root);
+    const manifest = buildManifest(root, undefined, ["outputs", ".projects"]);
     const blob = manifest.find((m) => m.path === "outputs/blob.bin")!;
     const note = manifest.find((m) => m.path === "outputs/note.txt")!;
     expect(blob.encoding).toBe("base64"); // binary → base64 marker
@@ -425,7 +426,7 @@ describe("binary artifact bodies round-trip byte-exact via a base64 encoding mar
     expect(blob.sha256).toBe(createHash("sha256").update(binary).digest("hex"));
 
     // record → replay: materialize and confirm the bytes are EXACTLY the original (no utf8 corruption)
-    const { workRoot } = materializeManifest(manifest);
+    const { workRoot } = materializeManifest(manifest, ["outputs", ".projects"]);
     expect(readFileSync(join(workRoot, "outputs", "blob.bin")).equals(binary)).toBe(true);
     expect(readFileSync(join(workRoot, "outputs", "note.txt"), "utf8")).toBe("hello world");
   });
@@ -438,16 +439,16 @@ describe("materializeManifest rejects a cassette entry that escapes the temp wor
   };
 
   it("throws on a ../escape relative path", () => {
-    expect(() => materializeManifest([entry("../escape")])).toThrow(/escape|traversal/i);
+    expect(() => materializeManifest([entry("../escape")], ["outputs", ".projects"])).toThrow(/escape|traversal/i);
   });
   it("throws on a deep ../../outside traversal", () => {
-    expect(() => materializeManifest([entry("../../outside/x.json")])).toThrow(/escape|traversal/i);
+    expect(() => materializeManifest([entry("../../outside/x.json")], ["outputs", ".projects"])).toThrow(/escape|traversal/i);
   });
   it("throws on an absolute path", () => {
-    expect(() => materializeManifest([entry("/etc/passwd")])).toThrow(/absolute|relative/i);
+    expect(() => materializeManifest([entry("/etc/passwd")], ["outputs", ".projects"])).toThrow(/absolute|relative/i);
   });
   it("accepts a normal contained path", () => {
-    const { workRoot } = materializeManifest([entry("outputs/ok.json")]);
+    const { workRoot } = materializeManifest([entry("outputs/ok.json")], ["outputs", ".projects"]);
     expect(readFileSync(join(workRoot, "outputs", "ok.json"), "utf8")).toBe("x");
   });
 });
@@ -461,7 +462,7 @@ describe("materializeManifest fails replay on a body that does not match its rec
       sha256: createHash("sha256").update(Buffer.from("{}")).digest("hex"),
       body: '{"evil":true}',
     };
-    expect(() => materializeManifest([tampered])).toThrow(/sha256|corrupt|tampered/i);
+    expect(() => materializeManifest([tampered], ["outputs", ".projects"])).toThrow(/sha256|corrupt|tampered/i);
   });
 
   it("passes when the body matches its recorded sha256 (including a base64 binary body)", () => {
@@ -473,13 +474,13 @@ describe("materializeManifest fails replay on a body that does not match its rec
       body: binary.toString("base64"),
       encoding: "base64" as const,
     };
-    const { workRoot } = materializeManifest([good]);
+    const { workRoot } = materializeManifest([good], ["outputs", ".projects"]);
     expect(readFileSync(join(workRoot, "outputs", "blob.bin")).equals(binary)).toBe(true);
   });
 
   it("does NOT verify a truncated (hash-only) entry — it carries no body", () => {
     const truncated = { path: "outputs/huge.bin", bytes: 9_000_000, sha256: "deadbeef", truncated: true };
-    const { workRoot } = materializeManifest([truncated]);
+    const { workRoot } = materializeManifest([truncated], ["outputs", ".projects"]);
     expect(readFileSync(join(workRoot, "outputs", "huge.bin"), "utf8")).toBe(""); // empty placeholder, no throw
   });
 });

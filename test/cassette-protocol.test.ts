@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { replayCassette, parseMaxArtifactBytes, buildManifest, readCassette, defaultCassettePath } from "../src/run/cassette.js";
 import { slugForPath } from "../src/run/execute.js";
+import { DEFAULT_USER_VISIBLE_ROOTS, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 /** Silence ::warning:: noise these tests intentionally provoke. */
 const origWrite = process.stderr.write.bind(process.stderr);
@@ -96,7 +97,7 @@ describe("skill_triggered / no_skill_triggered evaluate end-to-end on replay (Wa
       }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
     ];
-    const cassette: any = { scenario: makeScenario([{ skill_triggered: "my-pdf-skill" }]), events, controlOut: [] };
+    const cassette: any = { scenario: makeScenario([{ skill_triggered: "my-pdf-skill" }]), events, controlOut: recordedControlOut() };
     const r = await replayCassette(cassette);
     expect(r.assertions.every((a) => a.pass)).toBe(true);
   });
@@ -111,15 +112,15 @@ describe("skill_triggered / no_skill_triggered evaluate end-to-end on replay (Wa
       }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
     ];
-    const cassette: any = { scenario: makeScenario([{ no_skill_triggered: "my-pdf-skill" }]), events, controlOut: [] };
+    const cassette: any = { scenario: makeScenario([{ no_skill_triggered: "my-pdf-skill" }]), events, controlOut: recordedControlOut() };
     const r = await replayCassette(cassette);
     expect(r.assertions.some((a) => !a.pass)).toBe(true);
   });
 });
 
-describe("no_scratchpad_leak evaluates end-to-end on replay (content-class, not controlOut-gated)", () => {
+describe("no_scratchpad_leak evaluates end-to-end on replay (content-class, read from the events stream)", () => {
   // present_files' tool_use (the input file list) and its own tool_result (one path per input file, in
-  // order) both live in the ordinary events stream — no controlOut needed, unlike the gate keys above.
+  // order) both live in the ordinary events stream, not in controlOut like the gate keys above.
   const CWD = "/sessions/x";
   const presentFilesEvents = (toFrom: { from: string; to: string }[]) => [
     JSON.stringify({ type: "system", subtype: "init", tools: [], cwd: CWD }),
@@ -158,7 +159,7 @@ describe("no_scratchpad_leak evaluates end-to-end on replay (content-class, not 
     const cassette: any = {
       scenario: makeScenario([{ no_scratchpad_leak: true }]),
       events,
-      controlOut: [],
+      controlOut: recordedControlOut(),
       effectiveFidelity: "container",
     };
     const r = await replayCassette(cassette);
@@ -172,7 +173,7 @@ describe("no_scratchpad_leak evaluates end-to-end on replay (content-class, not 
     const cassette: any = {
       scenario: makeScenario([{ no_scratchpad_leak: true }]),
       events,
-      controlOut: [],
+      controlOut: recordedControlOut(),
       effectiveFidelity: "container",
     };
     const r = await replayCassette(cassette);
@@ -188,7 +189,7 @@ describe("no_scratchpad_leak evaluates end-to-end on replay (content-class, not 
     const cassette: any = {
       scenario: makeScenario([{ no_scratchpad_leak: true }]),
       events,
-      controlOut: [],
+      controlOut: recordedControlOut(),
       effectiveFidelity: "container",
     };
     const r = await replayCassette(cassette);
@@ -217,7 +218,7 @@ describe("budget assertions evaluate end-to-end on replay (Wave 1 / E6a)", () =>
     const cassette: any = {
       scenario: makeScenario([{ max_cost_usd: 0.05 }, { max_tokens: 200 }, { tool_calls_max: 5 }]),
       events,
-      controlOut: [],
+      controlOut: recordedControlOut(),
     };
     const r = await replayCassette(cassette);
     expect(r.assertions.every((a) => a.pass)).toBe(true);
@@ -229,7 +230,7 @@ describe("budget assertions evaluate end-to-end on replay (Wave 1 / E6a)", () =>
       JSON.stringify({ type: "system", subtype: "init", tools: [] }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false, total_cost_usd: 1.5 }),
     ];
-    const cassette: any = { scenario: makeScenario([{ max_cost_usd: 0.5 }]), events, controlOut: [] };
+    const cassette: any = { scenario: makeScenario([{ max_cost_usd: 0.5 }]), events, controlOut: recordedControlOut() };
     const r = await replayCassette(cassette);
     expect(r.assertions.some((a) => !a.pass)).toBe(true);
   });
@@ -242,11 +243,11 @@ describe("max_turns evaluates end-to-end on replay (Wave 2 / E6b)", () => {
       JSON.stringify({ type: "system", subtype: "init", tools: [] }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false, num_turns: 3 }),
     ];
-    const passCassette: any = { scenario: makeScenario([{ max_turns: 5 }]), events, controlOut: [] };
+    const passCassette: any = { scenario: makeScenario([{ max_turns: 5 }]), events, controlOut: recordedControlOut() };
     const passResult = await replayCassette(passCassette);
     expect(passResult.assertions.every((a) => a.pass)).toBe(true);
 
-    const failCassette: any = { scenario: makeScenario([{ max_turns: 2 }]), events, controlOut: [] };
+    const failCassette: any = { scenario: makeScenario([{ max_turns: 2 }]), events, controlOut: recordedControlOut() };
     const failResult = await replayCassette(failCassette);
     expect(failResult.assertions.some((a) => !a.pass)).toBe(true);
   });
@@ -266,7 +267,7 @@ describe("replay surfaces usage/cost from the re-driven record (Wave 0 seam)", (
         num_turns: 3,
       }),
     ];
-    const cassette: any = { scenario: makeScenario([{ result: "success" as const }]), events, controlOut: [] };
+    const cassette: any = { scenario: makeScenario([{ result: "success" as const }]), events, controlOut: recordedControlOut() };
     const r = await replayCassette(cassette);
     expect(r.usage).toMatchObject({ output_tokens: 5, turns: 3 });
     expect(r.cost).toMatchObject({ usd: 0.02 });
@@ -286,7 +287,7 @@ describe("a malformed control frame in events fails per-cassette (does not throw
       }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
     ];
-    const cassette: any = { scenario: makeScenario([{ result: "success" as const }]), events, controlOut: [] };
+    const cassette: any = { scenario: makeScenario([{ result: "success" as const }]), events, controlOut: recordedControlOut() };
     // Must NOT throw — the per-line catch converts it to a failing assertion.
     const r = await replayCassette(cassette);
     const fail = r.assertions.find((a) => !a.pass && /malformed control frame/.test(a.message ?? ""));
@@ -305,7 +306,7 @@ describe("a malformed control frame in events fails per-cassette (does not throw
       }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
     ];
-    const cassette: any = { scenario: makeScenario([{ result: "success" as const }]), events, controlOut: [] };
+    const cassette: any = { scenario: makeScenario([{ result: "success" as const }]), events, controlOut: recordedControlOut() };
     const r = await replayCassette(cassette);
     expect(r.assertions.some((a) => !a.pass && /malformed control frame/.test(a.message ?? ""))).toBe(true);
   });
@@ -328,7 +329,9 @@ describe("COWORK_HARNESS_MAX_ARTIFACT_BYTES uses the same positive-integer valid
     process.env.COWORK_HARNESS_MAX_ARTIFACT_BYTES = "garbage";
     try {
       // buildManifest with no explicit cap → defaultBodyCap() reads the env and must throw.
-      expect(() => buildManifest(d)).toThrow(/COWORK_HARNESS_MAX_ARTIFACT_BYTES must be a positive integer/);
+      expect(() => buildManifest(d, undefined, ["outputs", ".projects"])).toThrow(
+        /COWORK_HARNESS_MAX_ARTIFACT_BYTES must be a positive integer/,
+      );
     } finally {
       if (prev === undefined) delete process.env.COWORK_HARNESS_MAX_ARTIFACT_BYTES;
       else process.env.COWORK_HARNESS_MAX_ARTIFACT_BYTES = prev;
@@ -363,10 +366,16 @@ describe("scenario.assert validation: reject unknown/malformed for current-or-ol
     muteStderr();
     const d = mkdtempSync(join(tmpdir(), "cwh-a29-"));
     const cp = join(d, "fwd.cassette.json");
-    // transcript_contains must be a string — a number is a malformed assertion shape. At the v9 floor = current-or-older.
+    // transcript_contains must be a string — a number is a malformed assertion shape. At the v12 floor = current-or-older.
     writeFileSync(
       cp,
-      JSON.stringify({ cassetteVersion: 9, scenario: makeScenario([{ transcript_contains: 123 }, { result: "success" }]), events }),
+      JSON.stringify({
+        cassetteVersion: 12,
+        controlOut: recordedControlOut(),
+        userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
+        scenario: makeScenario([{ transcript_contains: 123 }, { result: "success" }]),
+        events,
+      }),
     );
     const r = readCassette(cp);
     expect("error" in r).toBe(true);
@@ -377,7 +386,16 @@ describe("scenario.assert validation: reject unknown/malformed for current-or-ol
     muteStderr();
     const d = mkdtempSync(join(tmpdir(), "cwh-a29b-"));
     const cp = join(d, "fwd.cassette.json");
-    writeFileSync(cp, JSON.stringify({ cassetteVersion: 9, scenario: makeScenario([{ some_future_assertion_key: "value" }]), events }));
+    writeFileSync(
+      cp,
+      JSON.stringify({
+        cassetteVersion: 12,
+        controlOut: recordedControlOut(),
+        userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
+        scenario: makeScenario([{ some_future_assertion_key: "value" }]),
+        events,
+      }),
+    );
     expect("error" in readCassette(cp)).toBe(true);
   });
 
@@ -386,7 +404,16 @@ describe("scenario.assert validation: reject unknown/malformed for current-or-ol
     const d = mkdtempSync(join(tmpdir(), "cwh-a29c-"));
     const cp = join(d, "fwd.cassette.json");
     // cassetteVersion > CASSETTE_VERSION → a newer harness may have added this key; tolerate, don't reject.
-    writeFileSync(cp, JSON.stringify({ cassetteVersion: 999, scenario: makeScenario([{ some_future_assertion_key: "value" }]), events }));
+    writeFileSync(
+      cp,
+      JSON.stringify({
+        cassetteVersion: 999,
+        controlOut: recordedControlOut(),
+        userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
+        scenario: makeScenario([{ some_future_assertion_key: "value" }]),
+        events,
+      }),
+    );
     expect("error" in readCassette(cp)).toBe(false);
     expect(lines.join("")).toMatch(/unrecognized assertion \(tolerated/);
   });

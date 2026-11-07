@@ -29,10 +29,11 @@ import { loadBaseline } from "../src/baseline.js";
 import { ScenarioObject } from "../src/types.js";
 import type { Cassette } from "../src/run/cassette.js";
 import type { RunResult, Scenario } from "../src/types.js";
+import { INIT_CONTROL_LINE, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 const LIVE = loadBaseline("latest").appVersion;
 const line = (o: unknown) => JSON.stringify(o);
-const cassetteOf = (events: string[]): Cassette => ({ events, controlOut: [] }) as unknown as Cassette;
+const cassetteOf = (events: string[]): Cassette => ({ events, controlOut: recordedControlOut() }) as unknown as Cassette;
 
 const RATE = line({
   type: "rate_limit_event",
@@ -348,7 +349,7 @@ describe("freezeRecordedRun and the scrub's verdict-preservation check", () => {
         line({ type: "result", subtype: "success", is_error: false }),
       ].join("\n"),
     );
-    writeFileSync(join(outDir, "control-out.jsonl"), "");
+    writeFileSync(join(outDir, "control-out.jsonl"), INIT_CONTROL_LINE + "\n");
     const scenario = ScenarioObject.parse({ name: "scrub-freeze", fidelity: "container", prompt: "hi" }) as unknown as Scenario;
     const result = {
       mode: "run",

@@ -11,12 +11,11 @@ import {
   checkStaleness,
   replayCassette,
   buildFingerprint,
-  buildSessionFingerprint,
   type Cassette,
 } from "../src/run/cassette.js";
 import { ScenarioObject } from "../src/types.js";
 import { loadBaseline } from "../src/baseline.js";
-import { skillHashSnapshot, foldSnapshot, renderWireEntries } from "../src/run/skill-hash.js";
+import { DEFAULT_USER_VISIBLE_ROOTS, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 // `cassetteVersion` means "the minimum format version a reader needs to INTERPRET this cassette
 // correctly", not "which recorder wrote it". An earlier design of this mechanism keyed the stamp on KEY
@@ -116,6 +115,8 @@ describe("staleness — hash-format epoch, not CASSETTE_VERSION", () => {
 
     const cassette = {
       cassetteVersion: HASH_FORMAT_EPOCH_FOR_TEST, // AT the epoch — its digests are comparable, so drift is real drift
+      controlOut: recordedControlOut(),
+      userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
       scenario: {
         name: "s",
         baseline: "latest",
@@ -152,6 +153,8 @@ describe("a future-version cassette is refused by a capped reader; the escape ha
     ];
     const future = {
       cassetteVersion: CASSETTE_VERSION + 1,
+      controlOut: recordedControlOut(),
+      userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
       scenario: {
         name: "c",
         baseline: "latest",
@@ -178,6 +181,8 @@ describe("a future-version cassette is refused by a capped reader; the escape ha
     const cwd = mkdtempSync(join(tmpdir(), "cwh-p8-verify-"));
     const body = {
       cassetteVersion: CASSETTE_VERSION + 1,
+      controlOut: recordedControlOut(),
+      userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
       scenario: {
         name: "c",
         baseline: "latest",
@@ -210,127 +215,19 @@ function makeSkillDir(files: Record<string, string>): string {
   return d;
 }
 
-// The write-site fix: `rehash` must stamp `requiredVersionFor(scenario)`, not CASSETTE_VERSION
-// unconditionally — otherwise `rehash <dir>` over a directory of clean, lane-free v10 cassettes bumps
-// every one to v11, reintroducing the blanket cost P8 exists to avoid, via the very command the plan
-// names as the recovery path. This is the counter-test the P8 spec calls out as EXPECTED TO FAIL against
-// pre-fix code.
-describe.skipIf(!can)("rehash — conditional re-stamp", () => {
+// `rehash` is CHECK-ONLY: nothing below the read floor can be migrated by this build, so it reports each
+// cassette as current (`skipped`) or not (`error`, with the read refusal or the version gap), and never writes.
+describe.skipIf(!can)("rehash — check-only", () => {
   const liveBaseline = loadBaseline("latest").appVersion;
+  const INIT_LINE = JSON.stringify({ type: "control_request", request_id: "init-1", request: { subtype: "initialize" } });
 
-  function cassetteFixture(lane: "local" | "remote" | undefined, extraEvents: string[] = [], assert: unknown[] = []): string {
+  function cassetteFixture(version: number, assert: unknown[] = []): { dir: string; file: string } {
     const skillDir = makeSkillDir({ "SKILL.md": "# probe\ndo a thing\n" });
-    const dir = mkdtempSync(join(tmpdir(), "cwh-p8-rehash-"));
+    const dir = mkdtempSync(join(tmpdir(), "cwh-rehash-check-"));
     const sessionPath = join(dir, "session.yaml");
     writeFileSync(sessionPath, `skills:\n  local:\n    - ${skillDir}\n`);
-    // Compute the fingerprint the same way `rehash` will (absolute session path ⇒ cassetteDir irrelevant),
-    // so the content-unchanged gate passes and the migration reaches the version-stamp logic under test.
-    // A FAITHFUL pre-epoch artifact: legacy digests and NO `hashFormat`. Building a CURRENT fingerprint
-    // and stamping an old version is internally inconsistent — the read boundary rejects that pairing,
-    // because the stamp and the digests would be describing different algorithms.
-    const built = buildFingerprint(sessionPath, liveBaseline, dir, undefined);
-    const snap = skillHashSnapshot([skillDir]);
-    const fp = {
-      ...built,
-      hashFormat: undefined,
-      skillHash: foldSnapshot(snap, "legacy"),
-      fileSigs: renderWireEntries(snap, "legacy").map((e) => [e.path, e.sha] as [string, string]),
-    };
-    expect(built.contentSig).toBeTruthy(); // sanity: skill dir resolved
-    const scenario: Record<string, unknown> = {
-      name: "s",
-      baseline: liveBaseline,
-      session: sessionPath,
-      fidelity: "container",
-      prompt: "hi",
-      answers: [],
-      expect_denied: [],
-      assert,
-    };
-    if (lane !== undefined) scenario.lane = lane;
     const body = {
-      cassetteVersion: 10,
-      scenario,
-      events: [
-        JSON.stringify({ type: "system", subtype: "init" }),
-        ...extraEvents,
-        JSON.stringify({ type: "result", subtype: "success", is_error: false }),
-      ],
-      fingerprint: { baseline: liveBaseline, skillHash: fp.skillHash, contentSig: fp.contentSig },
-    };
-    writeFileSync(join(dir, "s.cassette.json"), JSON.stringify(body));
-    return dir;
-  }
-
-  it("migrates a pre-epoch lane-free cassette to the epoch floor — the bump IS necessary now", () => {
-    const dir = cassetteFixture(undefined);
-    const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
-    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
-    const out = JSON.parse(r.stdout.trim());
-    // P8's rule was "do not re-stamp a cassette whose scenario needs no new reader", to avoid a blanket
-    // migration cost. A HASH-FORMAT bump is the case where that cost IS warranted: a pre-epoch cassette's
-    // digests came from a different algorithm, so a v10 reader and a v12 reader genuinely disagree about it.
-    expect(out.results[0].action, out.results[0].reason).toBe("migrated");
-    const onDisk = JSON.parse(readFileSync(join(dir, "s.cassette.json"), "utf8"));
-    expect(onDisk.cassetteVersion).toBe(HASH_FORMAT_EPOCH_FOR_TEST);
-    expect(onDisk.fingerprint.hashFormat).toBe("jcs1"); // the version/hashFormat invariant holds after migration
-  });
-
-  // A rewrite path must not re-publish what the recorder now removes from every cassette.
-  it("the migrating rewrite drops what the recorder no longer keeps (rate_limit_info, the model menu)", () => {
-    const dir = cassetteFixture(undefined, [
-      JSON.stringify({
-        type: "rate_limit_event",
-        rate_limit_info: { status: "allowed", unifiedWindows: { five_hour: { utilization: 0.5 } } },
-      }),
-      JSON.stringify({
-        type: "control_response",
-        response: {
-          request_id: "init-1",
-          response: { commands: [], agents: [], models: [{ value: "m", description: "· $1/$2 per Mtok" }] },
-        },
-      }),
-    ]);
-    const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
-    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
-    expect(JSON.parse(r.stdout.trim()).results[0].action).toBe("migrated");
-    const raw = readFileSync(join(dir, "s.cassette.json"), "utf8");
-    expect(raw).not.toMatch(/utilization|per Mtok/);
-    const ev = (JSON.parse(raw).events as string[]).map((l) => JSON.parse(l));
-    expect(ev.find((e) => e.type === "rate_limit_event").rate_limit_info).toEqual({});
-    expect(ev.find((e) => e.type === "control_response").response.response.models).toEqual([]);
-  });
-
-  // The rewrite's scrub is held to record's verdict-preservation check. Here it WOULD flip a verdict: the scenario
-  // asserts on the frame text the scrub removes from the transcript. So the migration lands, the events stay
-  // unscrubbed, and a warning names the scrub — nothing recorded is lost.
-  it("a scrub that would flip a verdict is not applied: migrated, events unscrubbed, warned", () => {
-    const frame = "[Subagent hand-back] SYNTHETIC FRAME";
-    const dir = cassetteFixture(
-      undefined,
-      [JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: `done\n${frame}` }] } })],
-      [{ transcript_contains: "[Subagent hand-back]" }],
-    );
-    const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
-    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
-    expect(JSON.parse(r.stdout.trim()).results[0].action).toBe("migrated");
-    expect(r.stderr).toMatch(
-      /::warning:: rehash .*s\.cassette\.json: the recorder's scrub \(subagent-hand-back-frame\) could not be verified/,
-    );
-    const onDisk = JSON.parse(readFileSync(join(dir, "s.cassette.json"), "utf8"));
-    expect(onDisk.fingerprint.hashFormat).toBe("jcs1"); // the migration itself landed
-    expect(JSON.stringify(onDisk.events)).toContain(frame); // ...with the events left as recorded
-  });
-
-  // The OTHER rewriting branch: a cassette whose session declares zero skill sources migrates metadata-only, and its
-  // scrub is held to the same check.
-  it("metadata-only branch: a scrub that would flip a verdict is not applied — migrated, events unscrubbed, warned", () => {
-    const dir = mkdtempSync(join(tmpdir(), "cwh-rehash-meta-"));
-    const sessionPath = join(dir, "session.yaml");
-    writeFileSync(sessionPath, "skills:\n  local: []\n");
-    const frame = "[Subagent hand-back] SYNTHETIC FRAME";
-    const body = {
-      cassetteVersion: 10,
+      cassetteVersion: version,
       scenario: {
         name: "s",
         baseline: liveBaseline,
@@ -339,48 +236,71 @@ describe.skipIf(!can)("rehash — conditional re-stamp", () => {
         prompt: "hi",
         answers: [],
         expect_denied: [],
-        assert: [{ transcript_contains: "[Subagent hand-back]" }],
+        assert,
       },
       events: [
         JSON.stringify({ type: "system", subtype: "init" }),
-        JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: `done\n${frame}` }] } }),
         JSON.stringify({ type: "result", subtype: "success", is_error: false }),
       ],
-      sessionFingerprint: buildSessionFingerprint(sessionPath, dir),
-      fingerprint: { baseline: liveBaseline },
+      controlOut: [INIT_LINE],
+      userVisibleRoots: ["outputs"],
+      fingerprint: buildFingerprint(sessionPath, liveBaseline, dir, undefined),
     };
-    writeFileSync(join(dir, "s.cassette.json"), JSON.stringify(body));
-    const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
+    const file = join(dir, "s.cassette.json");
+    writeFileSync(file, JSON.stringify(body));
+    return { dir, file };
+  }
+  const rehash = (...args: string[]) => spawnSync("node", [CLI, "rehash", "--output-format", "json", ...args], { encoding: "utf8" });
+
+  it("a current cassette is skipped as current, exit 0, and the file is untouched", () => {
+    const { dir, file } = cassetteFixture(HASH_FORMAT_EPOCH_FOR_TEST);
+    const before = readFileSync(file, "utf8");
+    const r = rehash(dir);
     expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    const out = JSON.parse(r.stdout.trim());
+    expect(out.results[0]).toMatchObject({ action: "skipped", reason: "current: nothing to re-stamp" });
+    expect(out.migrated).toBe(0);
+    expect(readFileSync(file, "utf8")).toBe(before);
+  });
+
+  it("--dry-run and --session are still accepted and change nothing", () => {
+    const { dir, file } = cassetteFixture(HASH_FORMAT_EPOCH_FOR_TEST);
+    expect(rehash(dir, "--dry-run").status).toBe(0);
+    const r = rehash(file, "--session", join(dir, "session.yaml"));
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    expect(JSON.parse(r.stdout.trim()).results[0].action).toBe("skipped");
+  });
+
+  it("a v10/v11 cassette is an error naming both remedies (4.x rehash, or re-record); exit 1, untouched", () => {
+    const { dir, file } = cassetteFixture(11);
+    const before = readFileSync(file, "utf8");
+    const r = rehash(dir);
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(1);
     const res = JSON.parse(r.stdout.trim()).results[0];
-    expect(res.action, res.reason).toBe("migrated");
-    expect(res.reason).toMatch(/metadata only/);
-    expect(r.stderr).toMatch(
-      /::warning:: rehash .*s\.cassette\.json: the recorder's scrub \(subagent-hand-back-frame\) could not be verified/,
+    expect(res.action).toBe("error");
+    expect(res.reason).toBe(
+      "cassette recorded at v11 (before 2.0.0) is below the minimum supported v12 — run `npx cowork-harness@4 rehash <dir/>` on it, or re-record it (`record <dir/> --rerecord-stale`)",
     );
-    const onDisk = JSON.parse(readFileSync(join(dir, "s.cassette.json"), "utf8"));
-    expect(onDisk.fingerprint.hashFormat).toBe("jcs1");
-    expect(JSON.stringify(onDisk.events)).toContain(frame);
+    expect(readFileSync(file, "utf8")).toBe(before);
   });
 
-  it("lane: local (explicit) migrates the same way — the floor does not depend on scenario keys", () => {
-    const dir = cassetteFixture("local");
-    const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
-    const out = JSON.parse(r.stdout.trim());
-    expect(out.results[0].action, out.results[0].reason).toBe("migrated");
-    const onDisk = JSON.parse(readFileSync(join(dir, "s.cassette.json"), "utf8"));
-    expect(onDisk.cassetteVersion).toBe(HASH_FORMAT_EPOCH_FOR_TEST);
+  it("a v9 cassette is an error that names re-record as the only remedy", () => {
+    const { dir } = cassetteFixture(9);
+    const r = rehash(dir);
+    expect(r.status).toBe(1);
+    expect(JSON.parse(r.stdout.trim()).results[0].reason).toBe(
+      "cassette recorded at v9 (before 2.0.0) is below the minimum supported v12 — re-record it (`record <dir/> --rerecord-stale`); a 4.x `rehash` cannot migrate a v9 cassette",
+    );
   });
 
-  it("its partner: a lane: remote cassette lands on the COMPUTED stamp, not a constant", () => {
-    const dir = cassetteFixture("remote");
-    const r = spawnSync("node", [CLI, "rehash", "--output-format", "json", dir], { encoding: "utf8" });
-    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
-    const out = JSON.parse(r.stdout.trim());
-    expect(out.results[0].action, out.results[0].reason).toBe("migrated");
-    expect(out.results[0].reason).toMatch(new RegExp(`v10 → v${HASH_FORMAT_EPOCH_FOR_TEST}`));
-    const onDisk = JSON.parse(readFileSync(join(dir, "s.cassette.json"), "utf8"));
-    expect(onDisk.cassetteVersion).toBe(HASH_FORMAT_EPOCH_FOR_TEST);
-    expect(onDisk.$schema).toMatch(new RegExp(`cassette\\.v${HASH_FORMAT_EPOCH_FOR_TEST}\\.json$`));
+  it("a cassette that loads but is stamped below its scenario's version is an error with the gap", () => {
+    const { dir } = cassetteFixture(HASH_FORMAT_EPOCH_FOR_TEST, [{ allow_max_turns: true }]);
+    const need = requiredVersionFor({ assert: [{ allow_max_turns: true }] });
+    expect(need).toBeGreaterThan(HASH_FORMAT_EPOCH_FOR_TEST);
+    const r = rehash(dir);
+    expect(r.status).toBe(1);
+    expect(JSON.parse(r.stdout.trim()).results[0].reason).toBe(
+      `stamped v${HASH_FORMAT_EPOCH_FOR_TEST}, its scenario needs v${need} — re-record`,
+    );
   });
 });

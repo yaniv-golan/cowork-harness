@@ -27,6 +27,7 @@ import { loadBaseline } from "../src/baseline.js";
 import { assertContextFromRunDir } from "../src/run/verify-context.js";
 import { runHookFailureBlocks } from "../src/run/execute.js";
 import { Assertion, ScenarioObject, type RunResult, type Scenario } from "../src/types.js";
+import { INIT_CONTROL_LINE, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 type Frame = Record<string, unknown>;
 let n = 0;
@@ -383,7 +384,7 @@ function cassetteOf(frames: Frame[], extra: Partial<Cassette> = {}, agent: strin
       ...frames.map(line),
       line({ type: "result", subtype: "success", is_error: false }),
     ],
-    controlOut: [],
+    controlOut: recordedControlOut(),
     cassetteVersion: CASSETTE_VERSION,
     userVisibleRoots: ["outputs"],
     fingerprint: { baseline: LIVE },
@@ -444,7 +445,7 @@ describe("record freezes the inventory and stamps v16 only when it is non-empty"
         line({ type: "result", subtype: "success", is_error: false }),
       ].join("\n"),
     );
-    writeFileSync(join(outDir, "control-out.jsonl"), "");
+    writeFileSync(join(outDir, "control-out.jsonl"), INIT_CONTROL_LINE + "\n");
     const scenario = ScenarioObject.parse({
       name: "onfail-freeze",
       fidelity: "container",

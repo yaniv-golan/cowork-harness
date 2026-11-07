@@ -13,6 +13,7 @@ import { computeVerdict } from "../src/run/verdict.js";
 import { assertContextFromRunDir } from "../src/run/verify-context.js";
 import type { Mount } from "../src/session.js";
 import type { Scenario } from "../src/types.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 const mounts: Mount[] = [
   { hostPath: "/x/p", mountPath: "proj", mode: "rw", kind: "folder" },
@@ -74,7 +75,7 @@ function cassetteOf(extra: Partial<Cassette> = {}): Cassette {
       line({ type: "system", subtype: "init", tools: [], skills: [], claude_code_version: "2.1.295" }),
       line({ type: "result", subtype: "success", is_error: false }),
     ],
-    controlOut: [],
+    controlOut: recordedControlOut(),
     cassetteVersion: CASSETTE_VERSION,
     userVisibleRoots: ["outputs"],
     fingerprint: { baseline: loadBaseline("latest").appVersion },

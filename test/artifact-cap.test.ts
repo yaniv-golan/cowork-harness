@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildManifest, artifactJsonTargetsTruncated, artifactJsonGlobWalkGap } from "../src/run/cassette.js";
 import type { Scenario } from "../src/types.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 /** The inline-body cap is configurable, and a `record` truncates a body over the cap to hash-only. */
 function workRootWith(files: Record<string, string>): string {
@@ -19,7 +20,7 @@ function workRootWith(files: Record<string, string>): string {
 describe("configurable artifact body cap + record-time truncation guard", () => {
   it("buildManifest inlines a body at/under the cap and truncates (hash-only) over it", () => {
     const root = workRootWith({ "outputs/small.json": "{}", "outputs/big.json": JSON.stringify({ x: "y".repeat(200) }) });
-    const m = buildManifest(root, 64); // cap = 64 bytes
+    const m = buildManifest(root, 64, ["outputs", ".projects"]); // cap = 64 bytes
     const small = m.find((e) => e.path === "outputs/small.json")!;
     const big = m.find((e) => e.path === "outputs/big.json")!;
     expect(small.body).toBeDefined();
@@ -32,7 +33,7 @@ describe("configurable artifact body cap + record-time truncation guard", () => 
   it("a generous cap inlines what the default would truncate", () => {
     const big = JSON.stringify({ x: "y".repeat(200) });
     const root = workRootWith({ "outputs/big.json": big });
-    const m = buildManifest(root, 1024 * 1024);
+    const m = buildManifest(root, 1024 * 1024, ["outputs", ".projects"]);
     expect(m[0].truncated).toBeUndefined();
     expect(m[0].body).toBe(big);
   });
@@ -50,7 +51,7 @@ describe("configurable artifact body cap + record-time truncation guard", () => 
 
   it("flags an artifact_json that targets a TRUNCATED artifact (the green-record/red-replay trap)", () => {
     const root = workRootWith({ "outputs/big.json": JSON.stringify({ x: "y".repeat(200) }) });
-    const manifest = buildManifest(root, 64);
+    const manifest = buildManifest(root, 64, ["outputs", ".projects"]);
     const hits = artifactJsonTargetsTruncated(scenarioAsserting("outputs/big.json"), root, manifest);
     expect(hits).toEqual(["outputs/big.json"]);
   });
@@ -59,7 +60,7 @@ describe("configurable artifact body cap + record-time truncation guard", () => 
   // that cannot help (the key fails on that lane whatever the cap). No advice there.
   it("gives no truncation advice on lane: remote", () => {
     const root = workRootWith({ "outputs/big.json": JSON.stringify({ x: "y".repeat(200) }) });
-    const manifest = buildManifest(root, 64);
+    const manifest = buildManifest(root, 64, ["outputs", ".projects"]);
     const remote = { ...scenarioAsserting("outputs/big.json"), lane: "remote" } as Scenario;
     expect(artifactJsonTargetsTruncated(remote, root, manifest)).toEqual([]);
     const glob = { ...remote, assert: [{ artifact_json: { artifact: "outputs/*.json", match: "any", path: "x" } }] } as unknown as Scenario;
@@ -69,14 +70,14 @@ describe("configurable artifact body cap + record-time truncation guard", () => 
 
   it("normalizes ./-prefixed assertion paths against the manifest walk paths", () => {
     const root = workRootWith({ "outputs/big.json": JSON.stringify({ x: "y".repeat(200) }) });
-    const manifest = buildManifest(root, 64);
+    const manifest = buildManifest(root, 64, ["outputs", ".projects"]);
     const hits = artifactJsonTargetsTruncated(scenarioAsserting("./outputs/big.json"), root, manifest);
     expect(hits).toEqual(["./outputs/big.json"]);
   });
 
   it("does NOT flag when the asserted artifact fits under the cap (committed body present)", () => {
     const root = workRootWith({ "outputs/small.json": "{}" });
-    const manifest = buildManifest(root, 64);
+    const manifest = buildManifest(root, 64, ["outputs", ".projects"]);
     const hits = artifactJsonTargetsTruncated(scenarioAsserting("outputs/small.json"), root, manifest);
     expect(hits).toEqual([]);
   });
@@ -132,7 +133,7 @@ describe("buildManifest — bodyLessPrefixes (T3 read-only connected-folder capt
         assert: [],
       },
       events: [],
-      controlOut: [],
+      controlOut: recordedControlOut(),
       artifacts,
       userVisibleRoots: ["outputs", "carta-folder"], // full root set survives — only the body was stripped
     } as unknown as Parameters<typeof scanCassette>[0];

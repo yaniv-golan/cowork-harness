@@ -26,6 +26,7 @@ import { warnAmbiguousHookOutput } from "../src/run/hook-events.js";
 import type { RunResult, Scenario } from "../src/types.js";
 import type { LaunchPlan } from "../src/session.js";
 import { loadHookDecisionFrames, loadHookFrames } from "./helpers/hook-frames.js";
+import { INIT_CONTROL_LINE, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 /** contextEvents as Run records them, optionally with each frame's fields edited (still the recorded frames). */
 function recorded(edit?: (f: Record<string, unknown>) => Record<string, unknown>) {
@@ -253,7 +254,7 @@ function framesCassette(assert: Record<string, unknown>[], frames: Record<string
       ...frames.map(line),
       line({ type: "result", subtype: "success", is_error: false }),
     ],
-    controlOut: [],
+    controlOut: recordedControlOut(),
     cassetteVersion: CASSETTE_VERSION,
     userVisibleRoots: ["outputs"],
     fingerprint: { baseline: LIVE },
@@ -584,7 +585,7 @@ describe("freezeRecordedRun emits the hook_output_* redaction finding", () => {
         line({ type: "result", subtype: "success", is_error: false }),
       ].join("\n"),
     );
-    writeFileSync(join(outDir, "control-out.jsonl"), "");
+    writeFileSync(join(outDir, "control-out.jsonl"), INIT_CONTROL_LINE + "\n");
     const scenario = ScenarioObject.parse({
       name: "hook-output-freeze",
       fidelity: "container",

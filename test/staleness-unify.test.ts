@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { type Cassette, computeStaleness, buildFingerprint, replayCassette, CASSETTE_VERSION } from "../src/run/cassette.js";
 import { loadBaseline } from "../src/baseline.js";
 import type { Fingerprint } from "../src/types.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 // Coverage for the staleness UNIFICATION (computeStaleness): the gaps the plan called out that the first
 // implementation pass left untested — replay carries the per-file detail, a GITSET / agent-scope FLIP is
@@ -53,7 +54,7 @@ function cassetteFor(sessionPath: string, fp: Fingerprint, skills?: string[]): C
       ...(skills ? { skills } : {}),
     },
     events: okEvents(),
-    controlOut: [],
+    controlOut: recordedControlOut(),
     fingerprint: fp,
   } as unknown as Cassette;
 }

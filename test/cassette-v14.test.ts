@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CASSETTE_VERSION, V14_ASSERT_FEATURES, requiredVersionFor, readCassette, cassetteSchemaUrl } from "../src/run/cassette.js";
 import { ScenarioObject } from "../src/types.js";
+import { recordedControlOut, DEFAULT_USER_VISIBLE_ROOTS } from "./helpers/minimal-cassette.js";
 
 // v14 is ONE interpretation bump shared by the keys that need a v14 reader. Its first user is
 // `semantic_matches.include_fork_results`: live-only, but `readCassette` strict-parses every frozen assert
@@ -59,7 +60,8 @@ describe("a v13-only reader's view of a v14 cassette", () => {
         assert: [{ semantic_matches: { rubric: ["r"], include_key_from_the_future: true } }],
       },
       events: [],
-      controlOut: [],
+      controlOut: recordedControlOut(),
+      userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
     });
   const read = (text: string) => {
     const f = join(mkdtempSync(join(tmpdir(), "cwh-v14-")), "c.cassette.json");

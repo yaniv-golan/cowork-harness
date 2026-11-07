@@ -23,6 +23,7 @@ import { computeVerdict } from "../src/run/verdict.js";
 import { loadBaseline } from "../src/baseline.js";
 import type { LaunchPlan } from "../src/session.js";
 import type { PlatformBaseline, RunResult } from "../src/types.js";
+import { INIT_CONTROL_LINE } from "./helpers/minimal-cassette.js";
 
 const LIVE = loadBaseline("latest").appVersion;
 const tmp = (p: string) => realpathSync(mkdtempSync(join(tmpdir(), p)));
@@ -100,7 +101,7 @@ async function recordIt(markTokenised: string[] = []) {
       JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "done" }),
     ].join("\n"),
   );
-  writeFileSync(join(outDir, "control-out.jsonl"), "");
+  writeFileSync(join(outDir, "control-out.jsonl"), INIT_CONTROL_LINE + "\n");
   const result = {
     mode: "run",
     command: "record",

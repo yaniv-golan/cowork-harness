@@ -4,6 +4,7 @@ import { Run } from "../src/run/run.js";
 import { ScriptedDecider } from "../src/decide/decider.js";
 import { evaluate, runSemanticJudges, toolResultEvidence, type AssertContext, type SemanticJudge } from "../src/assert.js";
 import { SKILL_RESULT_ASSERT_CAP, type Assertion } from "../src/types.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 // A main-agent `Skill` result — where a foreground `context: fork` skill's WHOLE answer arrives — is captured
 // at SKILL_RESULT_ASSERT_CAP; every other tool result keeps the 10,240-char assert cap. Driven through the REAL
@@ -176,7 +177,7 @@ describe("the Skill-result cap holds on replay too (replay re-drives the frozen 
           assert: [{ tool_result_contains: "TAIL-SENTINEL" }, { tool_result_contains: "BASH-TAIL" }],
         },
         events,
-        controlOut: [],
+        controlOut: recordedControlOut(),
         cassetteVersion: CASSETTE_VERSION,
         userVisibleRoots: ["outputs"],
         fingerprint: { baseline: loadBaseline("latest").appVersion },

@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { loadBaseline } from "../src/baseline.js";
 import { CASSETTE_VERSION, RECORDING_SHAPING_FIELDS } from "../src/run/cassette.js";
+import { recordedControlOut, DEFAULT_USER_VISIBLE_ROOTS } from "./helpers/minimal-cassette.js";
 
 // On-disk re-assert opt-in + per-result verdict — exercised through the BUILT CLI so the
 // cmdReplay→replayCassette wiring is covered (a unit test on replayCassette can't see the flag plumbing).
@@ -72,7 +73,8 @@ function cassetteJson(opts: {
       assert: opts.assert ?? [{ result: "success" }],
     },
     events: events("hello there", opts.endQuestion ?? false),
-    controlOut: [],
+    controlOut: recordedControlOut(),
+    userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
     // Stamped at CASSETTE_VERSION, so a hand-built fingerprint must declare the current hash format —
     // the read boundary refuses a stamp/format mismatch, because the two would describe different algorithms.
     ...(opts.fingerprint ? { fingerprint: { hashFormat: "jcs1", ...opts.fingerprint } } : {}),
@@ -278,7 +280,8 @@ describe.skipIf(!can)("replay opt-in — --assert-from / --reassert, safe by con
         assert: [{ result: "success" }],
       },
       events: events(),
-      controlOut: [],
+      controlOut: recordedControlOut(),
+      userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
     });
     write(cwd, "c.cassette.json", frozen);
     const base = "name: c\nfidelity: container\nprompt: do the thing\n";
@@ -323,7 +326,8 @@ describe.skipIf(!can)("replay opt-in — --assert-from / --reassert, safe by con
           assert: [{ result: "success" }],
         },
         events: events(),
-        controlOut: [],
+        controlOut: recordedControlOut(),
+        userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
       }),
     );
     write(
@@ -561,7 +565,8 @@ describe.skipIf(!can)("P2 — unknown top-level frozen-scenario key on a future-
         ...extraKeys,
       },
       events: events("hello there", false),
-      controlOut: [],
+      controlOut: recordedControlOut(),
+      userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
     });
   }
 

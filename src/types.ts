@@ -888,9 +888,7 @@ export const Assertion = z.strictObject({
   vm_path_denied: z
     .literal(true)
     .optional()
-    .describe(
-      "hostloop-only: at least one recorded path denial targeted a /sessions VM path (any source). Only `true` is valid. Needs controlOut on replay (else skipped-and-surfaced).",
-    ),
+    .describe("hostloop-only: at least one recorded path denial targeted a /sessions VM path (any source). Only `true` is valid."),
   path_denied: z
     .strictObject({
       tool: toolGlob.optional().describe("glob over the denied tool name"),
@@ -949,7 +947,7 @@ export const Assertion = z.strictObject({
     })
     .optional()
     .describe(
-      "hostloop-only composite: ties ONE dispatch's resolved type to ITS OWN delivered write and path-cleanliness via parentToolUseId — the per-dispatch correlation `subagent_file_write` (which matches ANY sub-agent write) lacks. `type` matches the dispatch's resolvedAgentType OR dispatchAgentType OR description (a regex can narrow to one dispatch in a same-agent-type fleet). Content-class (fileToolAttempts + toolResults), replay-checkable without controlOut.",
+      "hostloop-only composite: ties ONE dispatch's resolved type to ITS OWN delivered write and path-cleanliness via parentToolUseId — the per-dispatch correlation `subagent_file_write` (which matches ANY sub-agent write) lacks. `type` matches the dispatch's resolvedAgentType OR dispatchAgentType OR description (a regex can narrow to one dispatch in a same-agent-type fleet). Content-class (fileToolAttempts + toolResults), replay-checkable.",
     ),
   subagent_dispatched: z
     .string()
@@ -1133,13 +1131,13 @@ export const Assertion = z.strictObject({
     .string()
     .optional()
     .describe(
-      "one of the harness's own PreToolUse hook callbacks (the built-in Task hook, a custom hook bundle) blocked a tool whose name matches this regex (RunResult.hookEvents) — replay needs controlOut. A plugin's command hook never reaches this list: use hook_event_blocked / hook_decision",
+      "one of the harness's own PreToolUse hook callbacks (the built-in Task hook, a custom hook bundle) blocked a tool whose name matches this regex (RunResult.hookEvents). A plugin's command hook never reaches this list: use hook_event_blocked / hook_decision",
     ),
   no_hook_blocked: z
     .literal(true)
     .optional()
     .describe(
-      "no tool was blocked by the harness's own hook callbacks (distinguishes a real tool crash from an intentional block) — replay needs controlOut; only `true` is valid. A plugin's command hook never reaches this list, so this passes over a plugin block: use no_hook_event_blocked",
+      "no tool was blocked by the harness's own hook callbacks (distinguishes a real tool crash from an intentional block); only `true` is valid. A plugin's command hook never reaches this list, so this passes over a plugin block: use no_hook_event_blocked",
     ),
   hook_event_fired: z
     .enum(KNOWN_HOOK_EVENTS)
@@ -2142,9 +2140,8 @@ export interface Fingerprint {
   skillSources?: string[]; // the local dirs that fed skillHash (for the replay recompute + diagnostics)
   skillScope?: string[]; // the skills the hash was scoped to (empty/absent = whole-tree); diagnostics
   sharedHash?: string; // shared-root hash for scoped cassettes; absent on whole-tree or non-plugin-root mounts
-  // Content fingerprint over the same file set as skillHash, used by `rehash` to prove content unchanged
-  // across a format bump. NOT algorithm-independent: it follows the same manifest transform skillHash does,
-  // so it cannot be compared across a hash-format epoch — the proof recomputes the LEGACY skillHash instead.
+  // Content fingerprint over the same file set as skillHash (eval/hillclimb compare arms by it). It follows
+  // the same manifest transform skillHash does, so it is only comparable within one hash format.
   contentSig?: string;
   // v5+: per-file manifest [relpath, contentSha] of the exact files feeding skillHash, so a staleness mismatch
   // names the EXACT changed/added/removed file instead of a bucket. Paths are ROOT-RELATIVE (no host path) and
@@ -2153,17 +2150,14 @@ export interface Fingerprint {
   // `.claude-plugin/plugin.json` (or root `plugin.json`) folds with `version` deleted. Hand-checking one of
   // those with `shasum` mismatches and looks exactly like corruption — it isn't.
   //
-  // The hand-check depends on `hashFormat`, so read that FIRST:
-  //   absent / legacy → JSON.parse, delete `version`, JSON.stringify, sha256
-  //   "jcs1"          → JSON.parse, delete `version`, jcsSerialize (run/jcs.ts), sha256
-  // Using the legacy recipe on a jcs1 cassette reproduces the original confusion exactly: for any manifest
-  // whose keys are not already sorted it will not match, and it will read as corruption.
+  // The hand-check (`hashFormat` "jcs1"): JSON.parse, delete `version`, jcsSerialize (run/jcs.ts), sha256.
+  // Re-serializing with JSON.stringify instead will not match for any manifest whose keys are not already
+  // sorted, and it reads as corruption.
   //
   // `COWORK_HARNESS_DEBUG_SKILLHASH=1` dumps the folded set with these shas, but only fires on a hash
   // MISMATCH — there is no on-demand dump for a cassette that verifies clean.
-  /** v12+: which manifest-transform algorithm produced the digests in this fingerprint. ABSENT means the
-   *  LEGACY (pre-epoch) transform — NOT "raw bytes": every cassette recorded before v12 already carries
-   *  version-stripped manifest digests, so defaulting absence to raw would mislabel all of them. */
+  /** v12+: which manifest-transform algorithm produced the digests in this fingerprint. Required on every
+   *  cassette this build reads. ABSENT only on a run kept before v12, whose digests are not comparable. */
   hashFormat?: "jcs1";
   fileSigs?: Array<[string, string]>;
   fileSigsOmitted?: boolean;
@@ -3506,9 +3500,9 @@ export interface RunResult {
    *  Live-only — MCP round-trips are harness-computed, not in the SDK stdout stream, so absent on
    *  replay (the assertion then fails evidence-unavailable, never vacuously passes). */
   mcpErrors?: Array<{ server: string; code?: number; message: string }>;
-  /** PreToolUse hook fire/block events. Reconstructed on replay only when the cassette carries
-   *  `controlOut` (a custom hook's decision lives there, not in the stream) — else the hook assertions
-   *  are excluded-loud, never vacuously passed. */
+  /** PreToolUse hook fire/block events. Reconstructed on replay from the recorded `controlOut` (a custom
+   *  hook's decision lives there, not in the stream); a callback with no recorded reply fails the replay as
+   *  a truncated cassette, never read as an allow. */
   hookEvents?: Array<{ callbackId: string; decision: "block" | "allow"; reason?: string; tool?: string }>;
   /** Attempt-level gated-file-tool telemetry (raw paths as sent). Undefined = evidence unavailable
    *  (a result recorded before this field existed); [] = captured, no gated attempts. Replay
@@ -3525,9 +3519,9 @@ export interface RunResult {
    *  on a path grounds — the PreToolUse path gate itself, a denied `can_use_tool` ask on a gated file
    *  tool with a path, and a pre-ask `permission_denied` correlated to a recorded gated attempt. Each
    *  producer independently filters to path-relevant denials (see RunRecord.pathDenials for the exact
-   *  filter each applies). Undefined = evidence unavailable (an older result, or a replay whose cassette
-   *  lacks `controlOut` — the can_use_tool source is reconstructible ONLY from controlOut); [] = captured,
-   *  no path denials. */
+   *  filter each applies). Undefined = evidence unavailable (an older result; the can_use_tool source is
+   *  reconstructible ONLY from controlOut, which every replayable cassette carries); [] = captured, no path
+   *  denials. */
   pathDenials?: Array<{
     source: "pretooluse" | "can_use_tool" | "permission_denied";
     tool: string;

@@ -461,7 +461,8 @@ Full rules: [docs/scenario.md → "Multi-leg scenarios"](https://github.com/yani
   `--allow-truncated-matrix` judges only the cells that ran.
 - `record`: `--max-artifact-bytes <n>` caps an inlined artifact body (default 65536); `--rerecord-stale
   --from-embedded` re-records from the cassette's embedded scenario when no source file resolves (refused for a
-  scenario with a command metric: the embedded copy has no script to run, so re-record from the scenario file).
+  scenario with a command metric: the embedded copy has no script to run, so re-record from the scenario file;
+  impossible for a cassette `replay` refuses, which has no readable snapshot).
 - `replay --mutate`: `--mutate-include` / `--mutate-exclude <glob>` scope which artifact paths are perturbed, and
   `--mutate-max-per-file` / `--mutate-max-total` raise the sample caps (default 10 / 50).
 - `probe-dispatch --expect-write <suffix>` counts only a sub-agent write whose path ends with the suffix as delivered.

@@ -152,10 +152,10 @@ function jsonEnvelopeObj(command: string, results: RunResult[], opts: JsonEnvelo
 }
 
 /** Machine envelope for commands whose payload is NOT a `RunResult[]` — `record --dry-run` (discovery),
- *  `verify-cassettes` (coverage), `rehash` (migration). Shares the `{tool, version, command, ok, error}`
+ *  `verify-cassettes` (coverage), `rehash` (currency check). Shares the `{tool, version, command, ok, error}`
  *  frame with `jsonEnvelope` but carries a command-specific `payload` and NEVER calls `computeVerdict`
  *  (there is no `RunResult` to judge — `ok` is the caller's own success criterion, e.g. rehash `ok` =
- *  zero migration errors). Keeps a single machine-readable envelope shape across every command. */
+ *  every cassette current). Keeps a single machine-readable envelope shape across every command. */
 export function jsonPayloadEnvelope(command: string, ok: boolean, payload: Record<string, unknown>): string {
   return JSON.stringify({ tool: "cowork-harness", version: pkgVersion(), command, ok, ...payload, ...budgetFrame(), error: null });
 }

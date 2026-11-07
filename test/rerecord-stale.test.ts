@@ -4,9 +4,12 @@ import { tmpdir } from "node:os";
 import { join, basename } from "node:path";
 import { resolve } from "node:path";
 import { selectStaleCassettes, _findScenarioOnDisk, _resolveRerecordSource, CASSETTE_VERSION } from "../src/run/cassette.js";
+import { DEFAULT_USER_VISIBLE_ROOTS, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 const cassette = (fingerprint?: unknown, name = "c") => ({
   cassetteVersion: CASSETTE_VERSION,
+  controlOut: recordedControlOut(),
+  userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
   scenario: {
     name,
     baseline: "latest",

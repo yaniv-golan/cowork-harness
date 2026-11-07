@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { replayCassette, buildEnvironmentProvenance, computeStaleness, imageProvenanceMismatch } from "../src/run/cassette.js";
 import { readFileSync } from "node:fs";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 /** A minimal cassette structure for testing. */
 function makeMinimalCassette(overrides: Record<string, any> = {}): any {
@@ -19,7 +20,7 @@ function makeMinimalCassette(overrides: Record<string, any> = {}): any {
       JSON.stringify({ type: "system", subtype: "init", tools: ["Bash"] }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
     ],
-    controlOut: [],
+    controlOut: recordedControlOut(),
     ...overrides,
   };
 }

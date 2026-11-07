@@ -343,9 +343,6 @@ const FP_MARKERS = /sessionFingerprint|session-SHAPE|session-shape|content-relev
  *  historical schema documents the format as it stood at that version; rewriting its description would
  *  make it describe a shape its own consumers never saw. */
 const FP_FROZEN: Record<string, string> = {
-  "schema/cassette.v9.json": "retained historical schema — describes the v9 shape as shipped",
-  "schema/cassette.v10.json": "retained historical schema — describes the v10 shape as shipped",
-  "schema/cassette.v11.json": "retained historical schema — describes the v11 shape as shipped",
   "schema/cassette.v12.json": "retained historical schema — describes the v12 shape as shipped",
   "schema/cassette.v13.json": "retained historical schema — describes the v13 shape as shipped",
   "schema/cassette.v14.json": "retained historical schema — describes the v14 shape as shipped",

@@ -66,7 +66,7 @@ lane: local                         # OPTIONAL — which Cowork lane's DELIVERY 
                                     # replay/verify-cassettes refuses the cassette as too new
                                     # (`--best-effort-future-cassette` overrides that on replay). Recorded
                                     # by 1.14.0/1.15.0 it is stamped v10 and a pre-`lane` CLI ignores the
-                                    # key (`rehash` re-stamps it). `lane: local` means what an older CLI
+                                    # key (5.0 reads v12+ only). `lane: local` means what an older CLI
                                     # already does, so it lifts nothing.
 # device_bridge: true                # OPTIONAL — lane: remote + fidelity: container only (refused otherwise).
                                     # Serves mcp__remote-devices__device_bash (and get_device_info and the
@@ -477,13 +477,12 @@ sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on
 modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_host_config_contamination` /
 `allow_stall` are also kept on replay, evaluated as no-op passes.
 
-**Gate keys — replay only with a `controlOut` cassette:** `question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`,
+**Gate keys — graded on replay against the recorded `controlOut`:** `question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`,
 `gate_answers_delivered`, `gate_answer_count_min`, `gates_all_scripted`, `hook_blocked`, `no_hook_blocked`, `vm_path_denied`,
 `path_denied`, `no_path_denied` (the latter three are also `fidelity: hostloop`-only — see
-[`assertion-catalog-gates-hooks-modifiers.md`](./assertion-catalog-gates-hooks-modifiers.md)). With `controlOut` present they evaluate; on an old
-cassette without it, a **loud warning** fires and they are **excluded** (not vacuously passed). Re-record to enable them.
+[`assertion-catalog-gates-hooks-modifiers.md`](./assertion-catalog-gates-hooks-modifiers.md)).
 `questions_count_max` counts sub-questions, not gates/tool-calls — see its row in [`assertion-catalog-gates-hooks-modifiers.md`](./assertion-catalog-gates-hooks-modifiers.md) and
-`trace --view questions`. `hook_blocked`/`no_hook_blocked` need `controlOut` for a different reason than
+`trace --view questions`. `hook_blocked`/`no_hook_blocked` read `controlOut` for a different reason than
 the question keys: a custom hook's block/allow decision is an opaque async reply recorded only in
 `control-out.jsonl`, not the `events` stream — reconstructing from the stream alone would show only the
 built-in Task hook's view and could vacuously pass `no_hook_blocked` even if a custom hook genuinely blocked.
@@ -585,10 +584,10 @@ debugging a run's behavior. The two are **numbered independently**: a bare "gotc
    `egress_denied` is dropped. Both now warn loudly. → put egress/live-only checks on a live gate; one
    concern per item; run the linter. (`LIVE_ONLY_KEYS`/`MANIFEST_KEYS` in `src/run/cassette.ts`.)
 
-2. **Gate keys need a `controlOut` cassette.** `question_asked`, `question_options`, `question_context`,
+2. **Gate keys grade against the recorded `controlOut`.** `question_asked`, `question_options`, `question_context`,
    `question_option_count`, `questions_count_max`,
-   `gate_answers_delivered`, `gate_answer_count_min`, `gates_all_scripted`, `hook_blocked`, `no_hook_blocked` only evaluate on
-   replay with `controlOut`; on an old cassette they warn and are excluded (not passed).
+   `gate_answers_delivered`, `gate_answer_count_min`, `gates_all_scripted`, `hook_blocked`, `no_hook_blocked`; an unanswered one
+   fails the replay as a truncated cassette.
    `gate_answers_delivered` **fails on
    unobserved delivery** (`delivered: null`) — absence of evidence is failure — but **passes
    vacuously when zero gates fired**; use `gate_answer_count_min: 1` to also require a gate to have

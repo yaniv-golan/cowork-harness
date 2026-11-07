@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { replayCassette, buildSessionFingerprint, sessionFingerprintDrift, CASSETTE_VERSION, type Cassette } from "../src/run/cassette.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 // Covers three validated findings in src/run/cassette.ts:
 //  - F46: the replay result assembler dropped `prompt`/`toolResults`/`fingerprint` as `undefined` even
@@ -52,7 +53,7 @@ describe("F46: replay populates prompt/toolResults/fingerprint from values alrea
     const cassette: any = {
       scenario: baseScenario("(inline)"),
       events,
-      controlOut: [],
+      controlOut: recordedControlOut(),
       cassetteVersion: CASSETTE_VERSION,
       // A record-time fingerprint the replay must surface FROZEN, not silently drop.
       fingerprint: { baseline: "1.0.0", skillHash: "deadbeef" },
@@ -78,7 +79,12 @@ describe("F46: replay populates prompt/toolResults/fingerprint from values alrea
       JSON.stringify({ type: "system", subtype: "init", tools: [] }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
     ];
-    const cassette: any = { scenario: baseScenario("(inline)"), events, controlOut: [], cassetteVersion: CASSETTE_VERSION };
+    const cassette: any = {
+      scenario: baseScenario("(inline)"),
+      events,
+      controlOut: recordedControlOut(),
+      cassetteVersion: CASSETTE_VERSION,
+    };
     const r = await replayCassette(cassette);
     expect(r.fingerprint).toBeUndefined();
   });

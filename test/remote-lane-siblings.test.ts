@@ -12,6 +12,7 @@ import { LANE_REMOTE_INCOMPATIBLE } from "../src/run/lane-notice.js";
 import { loadScenarioPure } from "../src/run/execute.js";
 import { preSpendVerdicts, replayCassette } from "../src/run/cassette.js";
 import type { Assertion } from "../src/types.js";
+import { withReplayContract } from "./helpers/minimal-cassette.js";
 
 // `lane: remote` still EXECUTES locally, so every key below reads a local tree that exists and can pass. The contract
 // it models is a remote container whose filesystem is not observable from outside it: a check that depends on files
@@ -348,7 +349,7 @@ describe("lane: remote — the paths that skip the load check still refuse", () 
       preRunPaths: [],
       artifacts: [{ path: "outputs/r.md", bytes: 2, sha256: createHash("sha256").update(body).digest("hex"), body }],
     } as any;
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     const failed = r.assertions.filter((x) => !x.pass);
     expect(failed.map((x) => Object.keys(x.assertion)[0]).sort()).toEqual(["computer_links_resolve", "no_unexpected_files"]);
     for (const f of failed) expect(f.message).toMatch(/lane: remote/);

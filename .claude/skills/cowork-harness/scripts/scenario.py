@@ -54,7 +54,6 @@ lint flags (see references/scenario-schema.md for the why of each):
   W  `contradictory-turn-cap`  `allow_max_turns: true` beside `result: success` (a capped run's result is error)
   I  `not-a-scenario`          a session file (only session keys) in the linted set: reported once, not checked
   W  double-quoted regex with a backslash             (YAML eats the backslash)
-  I  gate key present → needs a controlOut cassette on replay
 
 lint-skill flags (skill bodies + any sibling hooks.json):
   E  `hook-event-unknown`      hooks.json declares a name that is not a hook event (typo → never runs)
@@ -173,7 +172,7 @@ CONTENT_KEYS = {
     "no_scratchpad_leak",
     "present_files_called",
 }
-# content keys, but only evaluated on replay when the cassette carries controlOut
+# content keys graded on replay against the cassette's recorded control responses (controlOut)
 GATE_KEYS = {
     "question_asked",
     "question_options",
@@ -772,7 +771,7 @@ _MISSING = object()
 # Keep these values in sync with src/run/cassette.ts. The sync test below makes a format-range change
 # fail loudly instead of allowing lint to suppress an advisory from a cassette replay would refuse.
 CASSETTE_VERSION = 19
-MIN_SUPPORTED_CASSETTE_VERSION = 9
+MIN_SUPPORTED_CASSETTE_VERSION = 12
 
 
 def _valid_string_list(value):
@@ -809,6 +808,10 @@ def _valid_pre_run_hashes(value):
 def _cassette_checkability(raw):
     """Mirror replay's cassette evidence preconditions for the advisory keys.
 
+    Deliberately LENIENT: it reads only the evidence fields these advisories need and does not refuse a
+    cassette that lacks `controlOut`/`userVisibleRoots` the way replay's reader does. It can only ever
+    suppress an advisory for a key it positively proves, so leniency here cannot turn a refusal into a pass.
+
     The returned map is intentionally per-key. `no_unexpected_files` and `input_unmodified` need their
     own pre-run baselines; they cannot share the generic non-empty-artifacts test used by other manifest
     assertions. Invalid field shapes are never treated as present evidence.
@@ -820,14 +823,6 @@ def _cassette_checkability(raw):
         artifact_state = "empty" if not artifacts else "present"
     else:
         artifact_state = "invalid"
-
-    control_out = raw.get("controlOut", _MISSING)
-    if control_out is _MISSING:
-        control_state = "missing"
-    elif _valid_string_list(control_out):
-        control_state = "present" if control_out else "empty"
-    else:
-        control_state = "invalid"
 
     pre_run_paths = raw.get("preRunPaths", _MISSING)
     pre_paths_valid = pre_run_paths is not _MISSING and _valid_string_list(pre_run_paths)
@@ -843,7 +838,7 @@ def _cassette_checkability(raw):
             else (artifact_state in ("empty", "present") and pre_hashes_valid)
         )
         for key in MANIFEST_KEYS
-    } | {key: control_state == "present" for key in GATE_KEYS}
+    }
 
 
 def _cassette_records(location):
@@ -2432,7 +2427,7 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
     # ERROR because `run`/`skill`/`record` refuse the scenario outright (assertContradiction in
     # src/run/execute.ts) — the same reason `on_unanswered: agent` is an ERROR. Note the pairing is
     # unsatisfiable, not always-red: on a lane where the evidence is absent it is not evaluated at all
-    # (verify-run fails evidence-unavailable; a controlOut-less cassette SKIPS these keys on replay).
+    # (verify-run fails evidence-unavailable).
     # Either way it guards nothing.
     contradiction_groups = [
         (
@@ -2620,25 +2615,6 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 "different reason: unstable option order is also what the USER sees — a reordered gate "
                 "puts a different choice in the default slot. Pin what the user was shown with "
                 "`question_options: {when_question: ..., equals: [...]}` (order is compared by default).",
-                path,
-            )
-        )
-
-    # I: gate keys need a controlOut cassette on replay
-    gate_present = sorted(assert_keys & GATE_KEYS)
-    if cassette_records is not None:
-        gate_present = [key for key in gate_present if not _all_matching_cassettes_prove(cassette_records, path, key)]
-    if gate_present:
-        findings.append(
-            Finding(
-                "INFO",
-                "gate-needs-controlout",
-                f"gate assertion(s) {gate_present} only evaluate on replay when the cassette has "
-                "controlOut (full-fidelity). An old cassette excludes them (with a loud warning).",
-                "No action is needed when every matching cassette has non-empty `controlOut` evidence. "
-                "Pass `--cassette-dir <dir>` (or one cassette file) to let lint prove that; otherwise "
-                "re-record only if the cassette is old. `lint --min-severity WARN` silences the whole "
-                "INFO class in CI.",
                 path,
             )
         )
@@ -2882,7 +2858,6 @@ LINT_RULES = {
     "artifact-json-match": "ERROR",
     "fidelity-missing": "ERROR",
     "file-absent-contradiction": "ERROR",
-    "gate-needs-controlout": "INFO",
     "hook-output-control-char": "ERROR",
     "host-path-assert-cowork": "WARN",
     "host-path-assert-tier": "ERROR",
@@ -4793,7 +4768,7 @@ def build_scenario(args):
         content_lines.append(f"  - subagent_dispatched: {_sq(rx)}   # matches agentType OR dispatch description")
     if gates:
         for rx, _ in gates:
-            content_lines.append(f"  - question_asked: {_sq(rx)}   # gate key: replay only with a controlOut cassette")
+            content_lines.append(f"  - question_asked: {_sq(rx)}")
         # questions_count_max counts SUB-questions at runtime (assert.ts/trace-view.ts), but this
         # scaffold is STATIC — it only knows the number of --gate rules (per-tool-call), never how many
         # sub-questions each gate bundles. Any number emitted here would be a guess: too low false-reds

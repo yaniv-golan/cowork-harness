@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { CASSETTE_VERSION } from "../src/run/cassette.js";
+import { DEFAULT_USER_VISIBLE_ROOTS, emptyControlOut, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 // `verify-cassettes --margins` — for each count-bound assertion, fold the RECORDED count from a replay and
 // report recorded vs budget + a margin ratio, so a brittle single-sample budget is visible without a paid
@@ -18,6 +19,7 @@ function tmp(): string {
 function cassetteWithTwoToolCalls(assert: unknown[]): string {
   return JSON.stringify({
     cassetteVersion: CASSETTE_VERSION,
+    userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
     scenario: {
       name: "c",
       baseline: "latest",
@@ -111,13 +113,14 @@ describe.skipIf(!can)("verify-cassettes --margins", () => {
     expect(row.margin).toBeCloseTo(5, 5); // 5 / 1
   });
 
-  it("questions_count_max: a controlOut-less cassette reports recorded=null (not a false-infinite margin)", () => {
+  it("questions_count_max: a re-drive that could not answer its gate reports recorded=null (not a false-infinite margin)", () => {
     const cwd = tmp();
-    // Strip controlOut → the re-drive can't answer the gate; the sub-question count is unknowable, so it must
-    // report "not derivable" (null) rather than a spurious 0 that would read as an infinite headroom.
+    // An EMPTY controlOut loads, but the re-drive cannot answer the recorded gate (a cassette-format failure), so the
+    // sub-question count is unknowable: it must report "not derivable" (null) rather than a spurious 0 that would read
+    // as an infinite headroom.
     writeFileSync(
       join(cwd, "c.cassette.json"),
-      gateCassette((c) => (c.controlOut = [])),
+      gateCassette((c) => (c.controlOut = emptyControlOut())),
     );
     const r = verify(cwd, ["c.cassette.json", "--margins", ...CLEAN, "--output-format", "json"]);
     expect(r.code).toBe(0);

@@ -336,7 +336,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
       [--session <file>]           resolve skill sources from THIS session (a MOVED cassette); one cassette at a time
       [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-host-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]
       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow
-  rehash <dir/>|<file> --session  migrate cassette fingerprints (incl. across a hash-format epoch) when content is provably unchanged
+  rehash <dir/>                    check each cassette is current; name each that needs a re-record (rewrites nothing)
   init-redact [--force]        copy the packaged reference .cowork-redact.json into the cwd (redaction starter
                                for hostloop/protocol recordings; review + tailor the patterns before recording;
                                --force re-copies it to pick up rules added by a later release)
@@ -795,17 +795,14 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
   doctor:
     "usage: doctor [--tier protocol|container|microvm|hostloop|cowork] [--output-format text|json]   (read-only prerequisite check per tier: Docker or Lima, the images, staged agent, token, baseline; the device_bridge image row is informational, never blocking)",
   rehash:
-    "usage: rehash <dir/> [--dry-run] [--output-format text|json]\n" +
-    "       rehash <file.cassette.json> --session <session.yaml> [--dry-run]\n" +
-    "       Migrate cassettes across a hash-format bump with no re-record. Each cassette is proved unchanged by\n" +
-    "       recomputing its digest under the ORIGINAL algorithm and comparing it to what was recorded; only on a\n" +
-    "       match are the algorithm-derived values rewritten. Anything unprovable is refused, never migrated.\n" +
-    "       --session <file>: for a MOVED cassette, whose recorded session cannot be resolved from its own\n" +
-    "       directory. One cassette at a time — each may have been recorded against a different tree, so a\n" +
-    "       directory batch cannot share one override.\n" +
-    "       Exit: 0 = all migrated, or nothing needed migrating. 4 = PARTIAL, some migrated and some could not\n" +
-    "       (commit what migrated, budget a re-record for the rest). 1 = nothing migrated and at least one\n" +
-    "       could not. 2 = usage. The JSON envelope carries the same split as migrated/skipped/errors.",
+    "usage: rehash <dir/> [--output-format text|json]\n" +
+    "       rehash <file.cassette.json> --session <session.yaml>\n" +
+    "       Check that each cassette is current, and name each one this build cannot read or whose scenario needs a\n" +
+    "       newer stamp, with its remedy. It rewrites nothing: a cassette below v12 is migrated by\n" +
+    "       `npx cowork-harness@4 rehash <dir/>` (v10/v11) or re-recorded (`record <dir/> --rerecord-stale`).\n" +
+    "       --dry-run and --session are accepted for compatibility and change nothing.\n" +
+    "       Exit: 0 = every cassette is current. 1 = at least one needs a re-record. 2 = usage. The JSON envelope\n" +
+    "       carries skipped/errors per file (migrated is always 0).",
   prune:
     "usage: prune [--keep-last <n>] [--pinned-older-than <N>d|h|m] [--include-hillclimb] [--dry-run] [<runs-dir>]   (prune accumulated run dirs; default --keep-last 5)\n" +
     "  Pinned sess-* sessions and hillclimb-labelled runs (`hillclimb:…`) are kept outside --keep-last; a sess-* dir\n" +
@@ -5565,6 +5562,9 @@ function loadRunSide(arg: string, normalize: boolean): DiffSide {
   return { tools, transcript, artifacts, meta, scenarioName };
 }
 
+// Deliberately LENIENT: a structural diff reads the raw JSON, not `readCassette`, so it still compares a cassette
+// below the v12 read floor or one without `controlOut`/`userVisibleRoots` — diffing an old recording against its
+// re-record is how a user sees what the re-record changed.
 function loadCassetteSide(file: string, normalize: boolean): DiffSide {
   const cassette = JSON.parse(readFileSync(file, "utf8")) as Cassette;
   const events = eventsFromLines(cassette.events, file);

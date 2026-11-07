@@ -451,7 +451,7 @@
             "const": true
           },
           "vm_path_denied": {
-            "description": "hostloop-only: at least one recorded path denial targeted a /sessions VM path (any source). Only `true` is valid. Needs controlOut on replay (else skipped-and-surfaced).",
+            "description": "hostloop-only: at least one recorded path denial targeted a /sessions VM path (any source). Only `true` is valid.",
             "type": "boolean",
             "const": true
           },
@@ -516,7 +516,7 @@
             "additionalProperties": false
           },
           "subagent_dispatch_healthy": {
-            "description": "hostloop-only composite: ties ONE dispatch's resolved type to ITS OWN delivered write and path-cleanliness via parentToolUseId — the per-dispatch correlation `subagent_file_write` (which matches ANY sub-agent write) lacks. `type` matches the dispatch's resolvedAgentType OR dispatchAgentType OR description (a regex can narrow to one dispatch in a same-agent-type fleet). Content-class (fileToolAttempts + toolResults), replay-checkable without controlOut.",
+            "description": "hostloop-only composite: ties ONE dispatch's resolved type to ITS OWN delivered write and path-cleanliness via parentToolUseId — the per-dispatch correlation `subagent_file_write` (which matches ANY sub-agent write) lacks. `type` matches the dispatch's resolvedAgentType OR dispatchAgentType OR description (a regex can narrow to one dispatch in a same-agent-type fleet). Content-class (fileToolAttempts + toolResults), replay-checkable.",
             "type": "object",
             "properties": {
               "type": {
@@ -732,11 +732,11 @@
             "const": true
           },
           "hook_blocked": {
-            "description": "one of the harness's own PreToolUse hook callbacks (the built-in Task hook, a custom hook bundle) blocked a tool whose name matches this regex (RunResult.hookEvents) — replay needs controlOut. A plugin's command hook never reaches this list: use hook_event_blocked / hook_decision",
+            "description": "one of the harness's own PreToolUse hook callbacks (the built-in Task hook, a custom hook bundle) blocked a tool whose name matches this regex (RunResult.hookEvents). A plugin's command hook never reaches this list: use hook_event_blocked / hook_decision",
             "type": "string"
           },
           "no_hook_blocked": {
-            "description": "no tool was blocked by the harness's own hook callbacks (distinguishes a real tool crash from an intentional block) — replay needs controlOut; only `true` is valid. A plugin's command hook never reaches this list, so this passes over a plugin block: use no_hook_event_blocked",
+            "description": "no tool was blocked by the harness's own hook callbacks (distinguishes a real tool crash from an intentional block); only `true` is valid. A plugin's command hook never reaches this list, so this passes over a plugin block: use no_hook_event_blocked",
             "type": "boolean",
             "const": true
           },

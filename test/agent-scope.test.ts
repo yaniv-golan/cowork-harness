@@ -190,29 +190,3 @@ describe("directory agents/<name> is attributed without extension strip", () => 
     expect(hashA).not.toBe(hashB); // file agent still scoped to cap-table
   });
 });
-
-describe("v6 cassette with skillHash mismatch reports older-format message", () => {
-  it("a v6 cassette with a mismatched skillHash surfaces the older-hash-format message, not content-changed", () => {
-    const { root, session } = (() => {
-      const r = mkdtempSync(join(tmpdir(), "v6-mig-"));
-      const plugin = join(r, "plugin");
-      mkdirSync(join(plugin, "skills", "cap-table"), { recursive: true });
-      writeFileSync(join(plugin, "skills", "cap-table", "SKILL.md"), "# cap-table\n");
-      const s = join(r, "session.yaml");
-      writeFileSync(s, "skills:\n  local: [./plugin]\n");
-      return { root: r, session: s };
-    })();
-    // Build a live fingerprint (v7 algo), then wrap it in a v6 cassette to simulate a pre-upgrade cassette.
-    const liveFp = buildFingerprint(session, LIVE_BASELINE, root, ["cap-table"]);
-    const v6Cassette: Cassette = {
-      fingerprint: { ...liveFp, skillHash: "deadbeef00000000" }, // mismatched to trigger drift
-      cassetteVersion: 6, // one version behind
-      scenario: { session: "session.yaml", skills: ["cap-table"], name: "t" },
-    } as unknown as Cassette;
-    const msgs = checkStaleness(v6Cassette, root);
-    // Must say "older hash format" referencing v6 → current, NOT "content changed"
-    // "now vN" names the HASH-FORMAT EPOCH (the stamp floor), not CASSETTE_VERSION: a shape-only bump
-    // (v13) leaves the epoch at 12.
-    expect(msgs.join(" ")).toMatch(new RegExp("hash format v6.*v" + String(requiredVersionFor({}))));
-  });
-});
