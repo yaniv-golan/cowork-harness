@@ -112,20 +112,33 @@ describe.runIf(can)("a session's turn cap, end to end (stub agent, protocol)", (
   ])(
     "the agent's own sign-in failure at the cap (%s) is not the cap: exit 1, result_error, live and on replay",
     async (_, script) => {
-      const { code, r } = await run("  - allow_max_turns: true\n  - result: error\n", script);
+      // Every reader of the predicate: the verdict (result_error, not naming the cap) and the `result` key's message
+      // (a `result: success` row, which names allow_max_turns only for a run the cap stopped).
+      const ASSERT = "  - allow_max_turns: true\n  - result: success\n";
+      const notTheCap = (r: {
+        verdict: { signals: { code: string; message: string }[] };
+        assertions: { assertion: { result?: string }; message?: string }[];
+      }) => {
+        const sig = r.verdict.signals.find((s) => s.code === "result_error");
+        expect(sig?.message).toBeDefined();
+        expect(sig!.message).not.toContain("cap was reached");
+        const row = r.assertions.find((a) => a.assertion.result === "success");
+        expect(row?.message ?? "").not.toContain("allow_max_turns");
+      };
+      const { code, r } = await run(ASSERT, script);
       expect(code).toBe(1);
       expect(r.usage.turns).toBe(1);
-      expect(r.verdict.signals.map((s: { code: string }) => s.code)).toContain("result_error");
+      notTheCap(r);
       const f = makeStubFixture(script);
       try {
-        setUp(f, "  - allow_max_turns: true\n  - result: error\n");
+        setUp(f, ASSERT);
         const cass = join(f.cwd, "auth.cassette.json");
         // The live verdict fails, so record refuses unless told to freeze it anyway.
         const rec = await cli(f, ["record", f.scenario, "--out", cass, "--allow-failing"]);
         expect(rec.code, rec.stderr).toBe(0);
         const rep = await cli(f, ["replay", cass, "--output-format", "json"]);
         expect(rep.code, rep.stderr).toBe(1);
-        expect(JSON.parse(rep.stdout).results[0].verdict.signals.map((s: { code: string }) => s.code)).toContain("result_error");
+        notTheCap(JSON.parse(rep.stdout).results[0]);
       } finally {
         f.cleanup();
       }
