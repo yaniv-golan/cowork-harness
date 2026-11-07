@@ -442,6 +442,12 @@ export interface Cassette {
   // file is not readable at rehash or replay time, and both read it: `requiredVersionFor` stamps v15 from it, and
   // replay re-drives with the channel disabled so a recorded request replays as a violation, not an answer.
   answerChannel?: "none";
+  // The session's turn cap and the agent phase's budget (RunResult.turnCap / .timeout). FROZEN because replay has no
+  // session file or CLI flags to re-derive them from. `turnCap` is read only under `allow_max_turns`, which stamps
+  // the cassette itself (V19_ASSERT_FEATURES); `timeout` is informational. Neither needs a stamp of its own: an older
+  // reader that ignores the key grades the same.
+  turnCap?: { maxTurns: number; source: "session" };
+  timeout?: { ms: number; source: "flag" | "scenario" | "runner" };
   // v16: the run's `onFailure: "block"` inventory (RunResult.hookFailureBlocks) — the events it may have a hook on that
   // blocks when it fails, or unknown. FROZEN because replay reads failed hook frames by it and has no plugin tree to
   // re-read. Always written by a recording from this build (an empty `{events: []}` says "none", which an older
@@ -4069,6 +4075,8 @@ const CassetteShape = z.looseObject({
   sessionFingerprint: z.string().optional(),
   folderPrefixMap: z.array(z.object({ from: z.string(), mount: z.string() })).optional(),
   answerChannel: z.literal("none").optional(),
+  turnCap: z.object({ maxTurns: z.number().int().positive(), source: z.literal("session") }).optional(),
+  timeout: z.object({ ms: z.number().int().positive(), source: z.enum(["flag", "scenario", "runner"]) }).optional(),
 });
 
 /** the ONE place the default cassette path is computed from a scenario name. Both `record --dry-run`
@@ -6648,6 +6656,8 @@ export async function freezeRecordedRun(
     // "not checked" (never a false mismatch).
     sessionFingerprint: buildSessionFingerprint(scenario.session, undefined),
     ...(result.answerChannel ? { answerChannel: result.answerChannel } : {}),
+    ...(result.turnCap ? { turnCap: result.turnCap } : {}),
+    ...(result.timeout ? { timeout: result.timeout } : {}),
     ...(result.hookFailureBlocks ? { hookFailureBlocks: result.hookFailureBlocks } : {}),
     ...(result.deviceBridge ? { deviceBridge: result.deviceBridge } : {}),
     ...freezeCommandMetrics(scenario.metrics, result.metrics),
@@ -6893,6 +6903,8 @@ function replayErrorResult(file: string): RunResult {
     subagents: undefined,
     nonReproducibleAnswers: undefined,
     usage: undefined,
+    turnCap: undefined,
+    timeout: undefined,
     cost: undefined,
     deciderCostUsd: undefined, // no run happened
     deciderUsage: undefined,
@@ -10179,6 +10191,8 @@ export async function replayCassette(
       // so a cassette that recorded usage/cost silently dropped it on replay. re-drive (rec) recomputes
       // them deterministically from the same events, so this is a content key, not a live-only one.
       usage: rec.usage,
+      turnCap: cassette.turnCap,
+      timeout: cassette.timeout,
       cost: rec.cost,
       deciderCostUsd: undefined, // replay answers from the frozen recording; no model call is made
       deciderUsage: undefined,

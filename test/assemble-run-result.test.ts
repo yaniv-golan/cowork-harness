@@ -60,6 +60,8 @@ function fullyExplicitFixture(): CompleteRunResult {
     subagents: undefined,
     nonReproducibleAnswers: undefined,
     usage: undefined,
+    turnCap: undefined,
+    timeout: undefined,
     cost: undefined,
     deciderCostUsd: undefined,
     deciderUsage: undefined,
