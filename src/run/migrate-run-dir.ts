@@ -33,6 +33,7 @@ import { PER_TURN_ARTIFACTS, classifyRunDir, listTurns, turnArtifactPath, type P
 import { parseArgs } from "../cli-args.js";
 import { runsWriteRoot } from "./trace-view.js";
 
+import { exitWith, rethrowIfExit } from "./exit.js";
 /** One planned filesystem operation. A `split` is write+write+delete, which is why done-ness for it is
  *  defined as "source is gone" rather than "destination exists" — see the recovery contract. */
 export type MigrationOp =
@@ -86,7 +87,8 @@ function archivesIn(outDir: string): Archive[] {
 function sameBytes(a: string, b: string): boolean {
   try {
     return readFileSync(a).equals(readFileSync(b));
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return false;
   }
 }
@@ -101,7 +103,8 @@ function stampedTurn(path: string): number | undefined {
     // re-assessment then calls the dir "already current". Treat a malformed stamp as absent (the cross-
     // check is corroborating only, never the deciding test — see the header).
     return typeof v === "number" && Number.isInteger(v) && v >= 1 ? v : undefined;
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return undefined;
   }
 }
@@ -123,7 +126,8 @@ function completionMtimeOf(outDir: string, turn: number, rootResultIsTurn?: numb
   for (const p of candidates) {
     try {
       if (existsSync(p)) return statSync(p).mtimeMs;
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       /* try the next location */
     }
   }
@@ -248,7 +252,8 @@ function planResourcesFile(
   let lines: string[];
   try {
     lines = readFileSync(from, "utf8").split("\n").filter(Boolean);
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return { kind: "refuse", reason: `${rel} is unreadable — refusing rather than migrating telemetry it cannot inspect` };
   }
 
@@ -268,7 +273,8 @@ function planResourcesFile(
     try {
       const v = (JSON.parse(line) as { ts?: unknown }).ts;
       if (typeof v === "number") ts = v;
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       /* unparseable line carries no evidence */
     }
     if (ts === undefined) continue;
@@ -328,6 +334,7 @@ export function assessRunDir(outDir: string): Assessment {
   try {
     readdirSync(outDir);
   } catch (e) {
+    rethrowIfExit(e);
     return {
       kind: "refuse",
       reason: `cannot read ${outDir}: ${(e as Error).message} — refusing rather than reporting it as having nothing to migrate`,
@@ -606,7 +613,8 @@ function removeJournal(path: string): void {
   for (const dir of [dirname(path), dirname(dirname(path))]) {
     try {
       rmdirSync(dir); // throws ENOTEMPTY when anything is still in there — exactly the wanted guard
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       return; // stop climbing at the first non-empty level
     }
   }
@@ -644,7 +652,8 @@ function performOp(op: MigrationOp): void {
       try {
         const v = (JSON.parse(line) as { ts?: unknown }).ts;
         if (typeof v === "number") ts = v;
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         /* an unparseable sample sorts to the later turn rather than being dropped */
       }
       (ts <= op.boundaryMs ? low : high).push(line);
@@ -668,7 +677,8 @@ function restoreDirMtimes(plan: MigrationPlan): void {
   for (const [dir, ms] of Object.entries(plan.dirMtimes)) {
     try {
       if (existsSync(dir)) utimesSync(dir, ms / 1000, ms / 1000);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       /* best-effort: a failed mtime restore must not strand a migrated dir */
     }
   }
@@ -711,7 +721,8 @@ export function recoverIfNeeded(outDir: string, opts: ExecuteOpts): RecoveryResu
   try {
     plan = JSON.parse(readFileSync(journal, "utf8")) as MigrationPlan;
     assertWellFormed(plan);
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     // A torn OR structurally invalid journal blocks this dir; refusing loudly keeps the batch alive,
     // where an uncaught error would abort it and violate "one bad dir never aborts the batch".
     //
@@ -748,7 +759,8 @@ export function recoverIfNeeded(outDir: string, opts: ExecuteOpts): RecoveryResu
   let st: ReturnType<typeof statSync>;
   try {
     st = statSync(outDir);
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     removeJournal(journal);
     return { kind: "orphaned" };
   }
@@ -796,7 +808,8 @@ function sweepOrphanedJournals(runsRoot: string, write: boolean, onlyScenario?: 
   let scenarios: string[];
   try {
     scenarios = readdirSync(journalRoot);
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return 0; // no journal store — the ordinary case
   }
   for (const scenario of scenarios) {
@@ -809,7 +822,8 @@ function sweepOrphanedJournals(runsRoot: string, write: boolean, onlyScenario?: 
     try {
       if (!statSync(dir).isDirectory()) continue;
       files = readdirSync(dir).filter((f) => f.endsWith(".json"));
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       continue;
     }
     for (const f of files) {
@@ -819,7 +833,8 @@ function sweepOrphanedJournals(runsRoot: string, write: boolean, onlyScenario?: 
       if (write) {
         try {
           removeJournal(join(dir, f));
-        } catch {
+        } catch (caught) {
+          rethrowIfExit(caught);
           /* best-effort: a journal we cannot remove is reported, not fatal */
         }
       }
@@ -853,7 +868,8 @@ export function migrateRunsRoot(
     try {
       if (!statSync(scenarioDir).isDirectory()) continue;
       ids = readdirSync(scenarioDir).sort();
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       continue;
     }
 
@@ -891,6 +907,7 @@ export function migrateRunsRoot(
         // Report the OUTCOME, not the assessment kind: a dir that was migrated should not say "plan".
         opts.onDir?.(dir, a.kind === "plan" ? (opts.write ? "migrated" : "to-migrate") : a.kind);
       } catch (e) {
+        rethrowIfExit(e);
         report.refused.push({ dir, reason: (e as Error).message });
         opts.onDir?.(dir, "refuse");
       }
@@ -909,13 +926,14 @@ export function cmdMigrateRunDir(args: string[]): void {
   try {
     p = parseArgs(args, withCommandGlobals({ booleans: ["--write", "--verbose"], values: ["--scenario"] }));
   } catch (e) {
+    rethrowIfExit(e);
     out((e as Error).message);
-    return process.exit(2);
+    return exitWith(2);
   }
   applyParsedCommandGlobals("migrate-run-dir", p, false);
   if (p.positionals.length > 1) {
     out(`migrate-run-dir takes an optional <runs-dir> (got ${p.positionals.length}: ${p.positionals.join(", ")})`);
-    return process.exit(2);
+    return exitWith(2);
   }
 
   const write = p.flags["--write"] ?? false;
@@ -924,13 +942,13 @@ export function cmdMigrateRunDir(args: string[]): void {
   const runsRoot = p.positionals[0] ?? runsWriteRoot();
   if (!existsSync(runsRoot)) {
     out(`✓ migrate-run-dir: ${runsRoot} does not exist — nothing to migrate`);
-    return process.exit(0);
+    return exitWith(0);
   }
 
   // An unknown scenario must not look like a clean no-op: "0 to migrate" is what success also prints.
   if (scenario !== undefined && !existsSync(join(runsRoot, scenario))) {
     out(`migrate-run-dir: no scenario "${scenario}" under ${runsRoot}`);
-    return process.exit(2);
+    return exitWith(2);
   }
 
   const r = migrateRunsRoot(runsRoot, {
@@ -955,5 +973,5 @@ export function cmdMigrateRunDir(args: string[]): void {
   if (write && (r.migrated > 0 || r.recovered > 0)) out(`\nNow rebuild the index: cowork-harness stats --reindex`);
 
   // Non-zero when anything was refused: a refusal is unfinished work, and a CI caller must see it.
-  return process.exit(r.refused.length > 0 ? 1 : 0);
+  return exitWith(r.refused.length > 0 ? 1 : 0);
 }

@@ -26,6 +26,7 @@ import { runtimeAuthKey } from "../runtime/host-env.js";
 import { pinnedDigestFor, resolveAgentImage, resolveContainerRuntime, resolveProxyImage } from "../runtime/agent-image.js";
 import { deviceImageStatus, dockerImageId } from "../runtime/device-image.js";
 
+import { exitWith, rethrowIfExit } from "./exit.js";
 // Synchronous fd writes (match cli.ts): machine→stdout, human→stderr. A `process.stdout.write` +
 // `process.exit()` pair truncates on a PIPE (async tail dropped at exit past the ~64KB buffer);
 // writeAllSync retries EAGAIN and loops on short writes so the whole payload lands (see src/io.ts).
@@ -305,6 +306,7 @@ export const realProbe: DoctorProbe = {
     try {
       return vmStatus(instanceName(loadBaseline("latest")));
     } catch (e) {
+      rethrowIfExit(e);
       return `unknown (${(e as Error).message.split("\n")[0]})`;
     }
   },
@@ -312,6 +314,7 @@ export const realProbe: DoctorProbe = {
     try {
       return vmProvisioned(instanceName(loadBaseline("latest")));
     } catch (e) {
+      rethrowIfExit(e);
       return `unknown (${(e as Error).message.split("\n")[0]})`;
     }
   },
@@ -348,6 +351,7 @@ export const realProbe: DoctorProbe = {
         : undefined;
       return { ok: true as const, path, note };
     } catch (e) {
+      rethrowIfExit(e);
       return { ok: false as const, error: (e as Error).message, ...(e instanceof AgentBinaryError ? { kind: e.kind } : {}) };
     }
   },
@@ -361,6 +365,7 @@ export const realProbe: DoctorProbe = {
       const note = process.env.COWORK_HOST_AGENT_BINARY ? undefined : nativeDriftNote(classifyNativeStagingDrift(baseline));
       return { ok: true, path, note };
     } catch (e) {
+      rethrowIfExit(e);
       return { ok: false, error: (e as Error).message, ...(e instanceof AgentBinaryError ? { kind: e.kind as NativeAgentFailure } : {}) };
     }
   },
@@ -392,6 +397,7 @@ export const realProbe: DoctorProbe = {
     try {
       return { ok: true, version: loadBaseline("latest").appVersion };
     } catch (e) {
+      rethrowIfExit(e);
       return { ok: false, error: (e as Error).message };
     }
   },
@@ -401,7 +407,8 @@ export const realProbe: DoctorProbe = {
     let version: string | null = null;
     try {
       version = readFileSync(join(vmDir, ".sdk-version"), "utf8").trim() || null;
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       /* not staged */
     }
     return { version, elfExists: version !== null && existsSync(join(vmDir, version, "claude")) };
@@ -434,7 +441,8 @@ export const realProbe: DoctorProbe = {
           local,
         );
       }
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       /* fall through → treated as a local build */
     }
     // Compared against the digest this build PINS, read from disk. The previous implementation asked GHCR
@@ -455,6 +463,7 @@ export function graderCredentialCheck(tier: Tier, env: NodeJS.ProcessEnv = proce
   try {
     g = graderCredential(env);
   } catch (e) {
+    rethrowIfExit(e);
     return { id: "grader-credential", title: "Grader credential", status: "fail", detail: (e as Error).message, required: false };
   }
   // The agent: on protocol the operator's env (the token passed only when no API key is set), where the CLI picks the
@@ -641,7 +650,8 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
           const match = sha256File(agent.path) === ab.sha256;
           shaNote = `  [sha256 ${match ? "✓" : "✗"} vs baseline, ${ab.shaProvenance ?? "unknown"}]`;
         }
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         /* provenance is a hint; never let it fail the check */
       }
     }
@@ -656,7 +666,8 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
       let pin: string | undefined;
       try {
         pin = loadBaseline("latest").agentVersion;
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         /* no baseline: the baseline check reports it */
       }
       laneNote = `  [${laneSupplyClause(staged, pin)}]`;
@@ -781,7 +792,8 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
     if (tier === "cowork") {
       try {
         coworkLoop = decideLoopFromBaseline(loadBaseline("latest"));
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         coworkLoop = null; // best-effort; the agent check below falls back to the tolerant default
       }
     }
@@ -928,6 +940,7 @@ export function cmdDoctor(args: string[]): void {
       }),
     );
   } catch (e) {
+    rethrowIfExit(e);
     fail("doctor", "usage", (e as Error).message, undefined, isJsonOutput(args));
   }
   applyParsedCommandGlobals("doctor", p, isJsonOutput(args));
@@ -960,5 +973,5 @@ export function cmdDoctor(args: string[]): void {
         : `\n✗ not ready for \`${tier}\` — ${blocking.length} blocking issue(s): ${blocking.map((c) => c.id).join(", ")}`,
     );
   }
-  return process.exit(ok ? 0 : 1);
+  return exitWith(ok ? 0 : 1);
 }

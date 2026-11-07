@@ -184,6 +184,7 @@ describe.runIf(can)("eval through the real job wiring (stub agent)", () => {
     const f = makeStubFixture(AUTH_STUB, { STUB_ARGV_LOG: "" });
     try {
       f.env.STUB_ARGV_LOG = join(f.root, "argv.log");
+      f.env.CLAUDE_CODE_OAUTH_TOKEN = ""; // the fixture's fake token would satisfy the credential check
       setup(f);
       // hostloop: doctor fails a missing env token there whether or not a Keychain login exists.
       writeFileSync(join(f.cwd, "q.yaml"), readFileSync(join(f.cwd, "q.yaml"), "utf8").replace("fidelity: protocol", "fidelity: hostloop"));

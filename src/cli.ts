@@ -2,7 +2,7 @@
 import { ANSWER_CHANNEL_NONE_LABEL } from "./answer-channel.js";
 import type { SearchCorpusOption } from "./search-corpus/run.js";
 import { InterruptedError, interrupt } from "./termination.js";
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync, realpathSync } from "node:fs";
 import { join, basename, resolve, isAbsolute, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml, YAMLParseError } from "yaml";
@@ -199,6 +199,7 @@ import {
   jsonError,
   parseOutputFormat,
   fail,
+  printFailure,
   isJsonOutput,
   envOutputFormat,
 } from "./run/envelope.js";
@@ -241,9 +242,12 @@ import {
   answerGate,
   readGate,
   GateChannelError,
+  sweepHelperGroups,
   type DecisionChannel,
 } from "./decide/external-channel.js";
 
+import { exitWith, rethrowIfExit, runAsEntry } from "./run/exit.js";
+import { killOutstandingChildGroups } from "./bounded-spawn.js";
 // Synchronous writes (fd 1/2): `process.stdout.write` + `process.exit()` truncates on a PIPE, which
 // would lose the json envelope for any agent/CI that pipes us. writeAllSync retries EAGAIN and loops
 // on short writes so the whole payload lands before exit (see src/io.ts).
@@ -999,6 +1003,7 @@ async function main() {
     try {
       loadedEnv.push(...loadDotenv(explicitEnvFile, { strict: true }));
     } catch (err) {
+      rethrowIfExit(err);
       fail("cowork-harness", "usage", (err as Error).message, undefined, isJsonOutput(argv));
     }
   }
@@ -1051,6 +1056,7 @@ async function main() {
   try {
     graderAuthMode();
   } catch (err) {
+    rethrowIfExit(err);
     fail(cmd, "usage", (err as Error).message, undefined, isJsonOutput(rest));
   }
   // `--dotenv` / `--run-dir` AFTER the subcommand are each command's own flags: its parser knows which tokens
@@ -1160,6 +1166,7 @@ function ensureOutputFormat(command: string, args: string[]): void {
   try {
     parseOutputFormat(args);
   } catch (e) {
+    rethrowIfExit(e);
     fail(command, "usage", String((e as Error).message), undefined, isJsonOutput(args));
   }
 }
@@ -1457,6 +1464,7 @@ function resolveExternal(command: string, flags: CommonFlags): DecisionChannel |
     try {
       return fileChannel(flags.deciderDir);
     } catch (e) {
+      rethrowIfExit(e);
       return fail(command, "usage", String((e as Error).message), undefined, flags.output === "json");
     }
   }
@@ -1482,6 +1490,7 @@ function loadAnswerPolicy(command: string, path: string, json: boolean): AnswerR
   try {
     parsed = parseYaml(readFileSync(path, "utf8"));
   } catch (e) {
+    rethrowIfExit(e);
     return fail(command, "usage", `cannot parse --answer-policy ${path}: ${firstLine(e)}`, undefined, json);
   }
   const res = parseAnswerPolicyDoc(parsed);
@@ -1558,6 +1567,7 @@ async function runOneScenario(p: {
       translateRef,
     });
   } catch (e) {
+    rethrowIfExit(e);
     if (e instanceof UnansweredError && !rethrowUnanswered) {
       const chan = flags.deciderDir ? "decider-dir" : flags.deciderCmd ? "decider-cmd" : policy;
       const prefix = command === "run" ? `${scenario.name}: ` : ""; // run names the scenario; skill is single
@@ -1661,6 +1671,7 @@ async function runRepeatBatch(opts: {
     try {
       r = await opts.runOnce(opts.makeLabel(n));
     } catch (e) {
+      rethrowIfExit(e);
       // The operator's interrupt, learned from a child: the whole batch stops as interrupted, not as a run error.
       if (e instanceof InterruptedError) throw e;
       if (e instanceof UnansweredError) {
@@ -1743,6 +1754,7 @@ async function runMultiLegFile(
       ...(flags.searchCorpus ? { searchCorpus: searchCorpusOption(flags) } : {}),
     });
   } catch (e) {
+    rethrowIfExit(e);
     if (e instanceof UnansweredError)
       fail("run", "unanswered", `${ms.name}: unanswered question (on_unanswered=${policy})`, e.hint, o.json);
     throw e;
@@ -1758,7 +1770,7 @@ async function runMultiLegFile(
     }
     log(`${sr.verdict.pass ? "PASS" : "FAIL"} ${ms.name} (${sr.legs.length} legs) — ${outcome.outDir}`);
   }
-  process.exit(sr.verdict.pass ? 0 : 1);
+  exitWith(sr.verdict.pass ? 0 : 1);
 }
 
 async function cmdRun(rawArgs: string[]) {
@@ -1775,6 +1787,7 @@ async function cmdRun(rawArgs: string[]) {
   try {
     repeatFlags = parseRepeatFlags(rawArgs, "run");
   } catch (e) {
+    rethrowIfExit(e);
     if (e instanceof RepeatFlagError) return void fail("run", "usage", e.message, undefined, isJsonOutput(rawArgs));
     throw e;
   }
@@ -1992,6 +2005,7 @@ async function cmdRun(rawArgs: string[]) {
     try {
       matrixDoc = MatrixFile.parse(parseYaml(readFileSync(matrixFile, "utf8")));
     } catch (e) {
+      rethrowIfExit(e);
       // A YAML syntax error's message is the parser's multi-line source excerpt; its first line is the reason.
       const why = e instanceof YAMLParseError ? firstLine(e) : (e as Error).message;
       fail("run", "usage", `invalid matrix file: ${why}`, undefined, o.json);
@@ -2003,6 +2017,7 @@ async function cmdRun(rawArgs: string[]) {
     try {
       baseSession = loadSessionFromFile(scenario.session);
     } catch (e) {
+      rethrowIfExit(e);
       // A bad session ref must read as a clean usage error, matching the scenario-path check above — not a
       // raw ENOENT + stack trace. A file that cannot be read already says so, with the path: pass it through
       // rather than prefixing a second "failed to load session".
@@ -2070,6 +2085,7 @@ async function cmdRun(rawArgs: string[]) {
         });
         return { cellScenario, session };
       } catch (e) {
+        rethrowIfExit(e);
         return { error: (e as Error).message };
       }
     };
@@ -2120,7 +2136,7 @@ async function cmdRun(rawArgs: string[]) {
       );
       if (o.json) out(jsonEnvelope("run", results, { matrixRepeat }));
       else for (const line of formatMatrixRepeatRollup(matrixRepeat, minPassRate, allowBudgetStop)) log(line);
-      process.exit(matrixRepeat.anyFail ? 1 : 0);
+      exitWith(matrixRepeat.anyFail ? 1 : 0);
     }
 
     let cellResults: MatrixCellResult[];
@@ -2146,6 +2162,7 @@ async function cmdRun(rawArgs: string[]) {
           results.push(result);
           return matrixCellResultFromRun(cell, result);
         } catch (e) {
+          rethrowIfExit(e);
           // A cell-level failure — an infra problem (e.g. the pinned baseline's agent binary isn't
           // staged) OR an unanswered gate (rethrowUnanswered above) — must never crash the whole matrix;
           // render it as a distinct "cell error", never conflated with a real assertion failure.
@@ -2159,7 +2176,7 @@ async function cmdRun(rawArgs: string[]) {
     const matrix = buildMatrixRollup(cellResults, totalBeforeCap, truncated, allowTruncatedMatrix);
     if (o.json) out(jsonEnvelope("run", results, { matrix }));
     else for (const line of formatMatrixRollup(matrix)) log(line);
-    process.exit(matrix.anyFail ? 1 : 0);
+    exitWith(matrix.anyFail ? 1 : 0);
   }
 
   // LOAD every resolved scenario, then run the pre-flights over all of them, before any of them runs.
@@ -2292,7 +2309,7 @@ async function cmdRun(rawArgs: string[]) {
   const ok = usingRepeat
     ? rollups.every((r) => rollupPasses(r, minPassRate, allowBudgetStop))
     : results.every((r) => computeVerdict(r, "live").pass);
-  process.exit(ok ? 0 : 1);
+  exitWith(ok ? 0 : 1);
 }
 
 /** `eval` — the paired evaluation. The command logic lives in src/eval/command.ts and throws; this wrapper
@@ -2325,13 +2342,14 @@ async function cmdEval(rawArgs: string[]) {
     const code = report.summary.exitCode;
     if (json) out(jsonPayloadEnvelope("eval", code === 0, evalEnvelopePayload(evalDir, report)));
     else log(text + `\nreport: ${tildeify(join(evalDir, REPORT_MD))}`);
-    process.exit(code);
+    exitWith(code);
   };
   if (rawArgs[0] === "report") {
     let r: ReturnType<typeof parseEvalReportArgs>;
     try {
       r = parseEvalReportArgs(rawArgs.slice(1));
     } catch (e) {
+      rethrowIfExit(e);
       return failFor(e);
     }
     for (const g of r.globals) applyCommandGlobal("eval", g.flag, g.value, json);
@@ -2342,6 +2360,7 @@ async function cmdEval(rawArgs: string[]) {
   try {
     parsed = parseEvalArgs(rawArgs);
   } catch (e) {
+    rethrowIfExit(e);
     return failFor(e);
   }
   for (const g of parsed.globals) applyCommandGlobal("eval", g.flag, g.value, json);
@@ -2364,6 +2383,7 @@ async function cmdEval(rawArgs: string[]) {
         onPlan: (p) => (plan = p),
       }));
     } catch (e) {
+      rethrowIfExit(e);
       // A Ctrl-C also reaches a git the dry run was waiting on, which then fails the step it was running. Yield
       // once so a signal already queued is handled (exit 130) before that failure is reported as a refusal.
       await new Promise((r) => setImmediate(r));
@@ -2374,7 +2394,7 @@ async function cmdEval(rawArgs: string[]) {
     await new Promise((r) => setImmediate(r));
     if (json) out(jsonPayloadEnvelope("eval", true, { dryRun: true, plan }));
     else printPlan(plan!);
-    process.exit(0);
+    exitWith(0);
   }
   // Runs render nothing (json-shaped output plan): concurrent jobs would interleave a live renderer on
   // stderr, so the eval prints one line per finished job instead.
@@ -2400,6 +2420,7 @@ async function cmdEval(rawArgs: string[]) {
       onPlan: (p) => (plan = p),
     });
   } catch (e) {
+    rethrowIfExit(e);
     externalChannel?.close?.();
     return failFor(e);
   }
@@ -2435,6 +2456,7 @@ async function cmdSkill(rawArgs: string[]) {
   try {
     repeatFlags = parseRepeatFlags(rawArgs, "skill");
   } catch (e) {
+    rethrowIfExit(e);
     if (e instanceof RepeatFlagError) return void fail("skill", "usage", e.message, undefined, isJsonOutput(rawArgs));
     throw e;
   }
@@ -2605,6 +2627,7 @@ async function cmdSkill(rawArgs: string[]) {
     try {
       filePrompt = readFileSync(promptFile, "utf8");
     } catch (e) {
+      rethrowIfExit(e);
       fail("skill", "usage", `cannot read --prompt-file ${promptFile}: ${String((e as Error).message)}`, undefined, isJson);
     }
     if (!filePrompt.trim()) fail("skill", "usage", `--prompt-file is empty: ${promptFile}`, undefined, isJson);
@@ -2724,6 +2747,7 @@ async function cmdSkill(rawArgs: string[]) {
       quiet: !dryRun,
     });
   } catch (e) {
+    rethrowIfExit(e);
     if (e instanceof UsageError) return void fail("skill", "usage", e.message, e.hint, isJson);
     throw e;
   }
@@ -2845,7 +2869,7 @@ async function cmdSkill(rawArgs: string[]) {
   if (o.json) out(jsonEnvelope("skill", results, rollup ? { rollups: [rollup], minPassRate, allowBudgetStop } : {}));
   else if (rollup) log(formatRepeatRollup(rollup, minPassRate, allowBudgetStop));
   const ok = rollup ? rollupPasses(rollup, minPassRate, allowBudgetStop) : results.every((r) => computeVerdict(r, "live").pass);
-  process.exit(ok ? 0 : 1);
+  exitWith(ok ? 0 : 1);
 }
 
 const PROBE_DISPATCH_HELP = `usage: probe-dispatch <skill-dir> "<prompt>"
@@ -3030,7 +3054,7 @@ async function cmdProbeDispatch(rawArgs: string[]) {
       }),
     );
   else out(formatDispatchProbe(projection));
-  process.exit(projection.verdict.pass ? 0 : 1);
+  exitWith(projection.verdict.pass ? 0 : 1);
 }
 
 /** Resolve the on-disk file a named baseline loads from (mirrors loadBaseline's resolution) so the JSON
@@ -3122,7 +3146,7 @@ function cmdVm(args: string[]) {
   // per-subcommand --help (e.g. `vm init --help`).
   if (sub && VM_SUBS.includes(sub) && (args.includes("--help") || args.includes("-h"))) {
     log(VM_SUB_HELP[sub]);
-    process.exit(0);
+    exitWith(0);
   }
 
   // validate the subcommand BEFORE loadBaseline(args[1]) — a bad subcommand (e.g. `vm typo`)
@@ -3146,6 +3170,7 @@ function cmdVm(args: string[]) {
       }),
     );
   } catch (e) {
+    rethrowIfExit(e);
     return fail("vm", "usage", String((e as Error).message), undefined, isJsonOutput(args));
   }
   applyParsedCommandGlobals("vm", vmParsed, isJsonOutput(args));
@@ -3213,6 +3238,7 @@ function cmdBoundary(args: string[]) {
       }),
     );
   } catch (e) {
+    rethrowIfExit(e);
     return fail("boundary-check", "usage", (e as Error).message, undefined, json);
   }
   applyParsedCommandGlobals("boundary-check", p, json);
@@ -3238,6 +3264,7 @@ function cmdBoundary(args: string[]) {
     try {
       s = loadSession(parseYaml(readFileSync(sessionPath, "utf8")));
     } catch (e) {
+      rethrowIfExit(e);
       return fail("boundary-check", "usage", `cannot parse --session ${sessionPath}: ${String((e as Error).message)}`, undefined, json);
     }
     sessionEgress = { extraAllow: s.egress.extra_allow, unrestricted: s.egress.unrestricted };
@@ -3248,7 +3275,7 @@ function cmdBoundary(args: string[]) {
   } else {
     log(formatBoundary(results));
   }
-  process.exit(results.every((r) => r.pass) ? 0 : 1);
+  exitWith(results.every((r) => r.pass) ? 0 : 1);
 }
 
 /** Best-effort fetch of the official per-version linux-arm64 release checksum from Anthropic's release
@@ -3280,6 +3307,7 @@ async function fetchOfficialElfChecksum(version: string, baseUrl: string): Promi
     if (typeof checksum !== "string") return { kind: "unreachable", reason: "manifest has no platforms[linux-arm64].checksum", url };
     return { kind: "ok", checksum, url };
   } catch (e) {
+    rethrowIfExit(e);
     return { kind: "unreachable", reason: (e as Error).message, url };
   }
 }
@@ -3309,6 +3337,7 @@ async function cmdSync(args: string[]) {
       }),
     );
   } catch (e) {
+    rethrowIfExit(e);
     return fail("sync", "usage", (e as Error).message, undefined, isJsonOutput(normalizedArgs));
   }
   applyParsedCommandGlobals("sync", syncParsed, isJsonOutput(normalizedArgs));
@@ -3366,7 +3395,8 @@ async function cmdSync(args: string[]) {
   let base: Record<string, unknown>;
   try {
     base = JSON.parse(JSON.stringify(loadBaseline("latest")));
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     throw new Error("No base baseline in baselines/. Commit one (e.g. desktop-<ver>.json) before sync can merge onto it.");
   }
 
@@ -3832,6 +3862,7 @@ function cmdInitRedact(args: string[]) {
       withCommandGlobals({ booleans: ["--force"], values: ["--output-format"], enums: { "--output-format": ["text", "json"] } }),
     );
   } catch (e) {
+    rethrowIfExit(e);
     return fail("init-redact", "usage", (e as Error).message, SUBCOMMAND_USAGE["init-redact"], json);
   }
   applyParsedCommandGlobals("init-redact", p, json);
@@ -3872,6 +3903,7 @@ function cmdList(args: string[] = []) {
   try {
     listParsed = parseArgs(args, withCommandGlobals({ values: ["--output-format"], enums: { "--output-format": ["text", "json"] } }));
   } catch (e) {
+    rethrowIfExit(e);
     return fail("list", "usage", (e as Error).message, undefined, json);
   }
   applyParsedCommandGlobals("list", listParsed, json);
@@ -4321,18 +4353,19 @@ async function cmdDecide(args: string[]) {
       if (d === ABSTAIN) {
         if (json) out(JSON.stringify({ tool: "cowork-harness", command: "decide", ok: false, matched: false }));
         else log(`✗ no rule matched — this question would fall to --on-unanswered (add an --answer/--answer-policy rule)`);
-        process.exit(1); // cli-error-envelope-exempt: emits its own {matched:false} shape above, not jsonError
+        exitWith(1); // cli-error-envelope-exempt: emits its own {matched:false} shape above, not jsonError
       }
       const answer = (d as { response: { answers?: Record<string, string> } }).response.answers?.[question];
       if (json) out(JSON.stringify({ tool: "cowork-harness", command: "decide", ok: true, matched: true, answer }));
       else log(`✓ rule matched: "${question}" → "${answer}"`);
     }
   } catch (e) {
+    rethrowIfExit(e);
     if (json) out(jsonError("decide", "runtime", String((e as Error).message)));
     else log(`✗ decider error: ${String((e as Error).message)}`);
     // Runtime failure → exit 2, matching the global "usage/runtime → 2" contract (SPEC §11). The JSON
     // envelope already tags this category "runtime"; the exit code now agrees. No-match/ABSTAIN stays 1.
-    process.exit(2); // cli-error-envelope-exempt: emits its own custom envelope shape above, not jsonError
+    exitWith(2); // cli-error-envelope-exempt: emits its own custom envelope shape above, not jsonError
   }
 }
 
@@ -4351,6 +4384,7 @@ async function cmdStatus(args: string[]) {
       }),
     );
   } catch (e) {
+    rethrowIfExit(e);
     return fail("status", "usage", (e as Error).message, undefined, isJsonOutput(args));
   }
   applyParsedCommandGlobals("status", p, isJsonOutput(args));
@@ -4381,6 +4415,7 @@ async function cmdStatus(args: string[]) {
     // it so `status <run-dir>` works — not only the exact outDir printed at run start.
     dir = resolveStatusTarget(p.positionals[0]);
   } catch (e) {
+    rethrowIfExit(e);
     // A multi-leg candidate is a refused shape (`runtime`), not a bad argument.
     if (e instanceof RunDirShapeError) return fail("status", "runtime", e.message, undefined, isJsonOutput(args));
     return fail("status", "usage", (e as Error).message, undefined, isJsonOutput(args));
@@ -4393,13 +4428,14 @@ async function cmdStatus(args: string[]) {
         out(line);
       });
     } catch (e) {
+      rethrowIfExit(e);
       // followRunStatus rejects for two distinct reasons — distinguish them by exit code so a script
       // doesn't have to string-match: exit 3 for "found it, but it's gone stale" (probably a SIGKILL'd
       // process — see isStatusStale in run-status.ts), exit 1 for "never found status.json at all"
       // (wrong dir, or the run genuinely never started). Neither is a silent hang.
       const err = e as Error & { stale?: boolean };
       log(err.message);
-      return process.exit(err.stale ? 3 : 1);
+      return exitWith(err.stale ? 3 : 1);
     }
     // followRunStatus resolved — it only distinguishes "still running" from "reached a terminal state,"
     // not WHICH terminal state. The last line it wrote via the callback is always the JSON-serialized
@@ -4411,12 +4447,13 @@ async function cmdStatus(args: string[]) {
     if (lastLine) {
       try {
         terminalState = (JSON.parse(lastLine) as RunStatus).state;
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         /* malformed last line (shouldn't happen — followRunStatus only ever writes JSON.stringify(status))
          * — fall through to the healthy default rather than crash the CLI on exit. */
       }
     }
-    return process.exit(terminalState === "error" ? 1 : 0);
+    return exitWith(terminalState === "error" ? 1 : 0);
   }
   if (!hasRunStatus(dir)) {
     return fail(
@@ -4432,6 +4469,7 @@ async function cmdStatus(args: string[]) {
   try {
     status = readRunStatus(dir);
   } catch (e) {
+    rethrowIfExit(e);
     // readRunStatus's own contract (see run-status.ts) is "throws on missing/malformed — the CLI
     // translates that into a usage-style message" — this is that translation. writeJsonAtomic makes a
     // genuinely malformed file rare (a reader can never observe a half-write), but a hand-edited or
@@ -4476,7 +4514,7 @@ async function cmdStatus(args: string[]) {
   // Exit codes: 0 healthy (running/done, not stale) · 1 the run itself errored · 2 usage error (thrown
   // earlier) · 3 stale/probably-dead — distinct from 1 so a script can tell "it failed" from "can't
   // confirm it's alive" without parsing text.
-  return process.exit(stale ? 3 : status.state === "error" ? 1 : 0);
+  return exitWith(stale ? 3 : status.state === "error" ? 1 : 0);
 }
 
 /** `status --latest-for <scenario>` — resolve the newest run dir for a scenario by actual run time
@@ -4518,7 +4556,7 @@ async function cmdStatusLatestFor(scenarioArg: string, json: boolean): Promise<n
     );
     log(found.outDir);
   }
-  return process.exit(0);
+  return exitWith(0);
 }
 
 /** `gates <dir> [--follow]` — the gate stream for the in-band `--decider-dir` path. Emits one clean
@@ -4558,6 +4596,7 @@ async function cmdGates(args: string[]) {
   try {
     await streamGates(dir, (line) => out(line), { once: !follow });
   } catch (e) {
+    rethrowIfExit(e);
     // A gate request the channel cannot read is the channel failing (`runtime`), not a harness bug. Under
     // --follow the gate lines already streamed stay on stdout; this error envelope is the terminal line.
     if (e instanceof GateChannelError) return void fail("gates", "runtime", e.message, undefined, json);
@@ -4634,6 +4673,7 @@ function cmdAnswer(args: string[]) {
     try {
       g = readGate(dir, seq);
     } catch (e) {
+      rethrowIfExit(e);
       // A gate that is not there is the caller's input; one that exists but cannot be read or parsed is the
       // channel failing (runtime, as `gates` reports it).
       const category = (e as NodeJS.ErrnoException)?.code === "ENOENT" ? "usage" : "runtime";
@@ -4675,6 +4715,7 @@ function cmdAnswer(args: string[]) {
   try {
     answerGate(dir, seq, answers);
   } catch (e) {
+    rethrowIfExit(e);
     const category = e instanceof UsageError ? "usage" : "runtime";
     return void fail("answer", category, `cannot answer gate ${seq} in ${dir}: ${String((e as Error).message)}`, undefined, json);
   }
@@ -4740,6 +4781,7 @@ function cmdScaffold(args: string[]) {
   try {
     file = resolveEventsFile(target);
   } catch (e) {
+    rethrowIfExit(e);
     if (e instanceof RunDirShapeError) return void fail("scaffold", "runtime", e.message, undefined, json);
     return void fail("scaffold", "usage", String((e as Error).message), undefined, json);
   }
@@ -4747,6 +4789,7 @@ function cmdScaffold(args: string[]) {
   try {
     yaml = buildScaffold(file);
   } catch (e) {
+    rethrowIfExit(e);
     // LegacyRunDirError → a well-formed target that predates the layout: `runtime`, matching every other
     // refusing command's category. Anything else (e.g. an unparseable result.json) also degrades cleanly
     // here rather than falling through to main().catch's stack-trace branch.
@@ -4757,6 +4800,7 @@ function cmdScaffold(args: string[]) {
       mkdirSync(dirname(outPath), { recursive: true });
       writeFileSync(outPath, yaml);
     } catch (e) {
+      rethrowIfExit(e);
       return void fail("scaffold", "runtime", `failed to write ${outPath}: ${(e as Error).message}`, undefined, json);
     }
     log(`✓ scaffolded scenario → ${outPath}`);
@@ -4799,6 +4843,7 @@ async function cmdVerifyRun(args: string[]) {
       }),
     );
   } catch (e) {
+    rethrowIfExit(e);
     return fail("verify-run", "usage", (e as Error).message, undefined, isJsonOutput(args));
   }
   applyParsedCommandGlobals("verify-run", p, isJsonOutput(args));
@@ -4962,6 +5007,7 @@ async function cmdVerifyRun(args: string[]) {
           matched++;
         }
       } catch (e) {
+        rethrowIfExit(e);
         // ScriptedDecider throws (UnansweredError) when a `choose:` label matches no offered option, or the
         // single/multi shape is wrong — the answer is INVALID against what the run actually offered. A miss.
         assertions.push({
@@ -5033,7 +5079,7 @@ async function cmdVerifyRun(args: string[]) {
         : `✗ verify-run: ${failed.length}/${assertions.length} assertion(s) failed`,
     );
   }
-  return process.exit(verdict.exitCode);
+  return exitWith(verdict.exitCode);
 }
 
 /** `assertions --list` — enumerate the available assertion keys + one-line semantics, generated from the
@@ -5236,6 +5282,7 @@ function cmdTrace(args: string[]) {
       try {
         resolveEventsFile(rootDir);
       } catch (e) {
+        rethrowIfExit(e);
         if (e instanceof MultiLegRunDirError && e.runDir !== undefined) rootDir = e.runDir;
       }
     const legDir = join(rootDir, "legs", legArg);
@@ -5247,6 +5294,7 @@ function cmdTrace(args: string[]) {
   try {
     file = resolveEventsFile(traceTarget);
   } catch (e) {
+    rethrowIfExit(e);
     // A multi-leg root or an action leg is a refused shape (`runtime`), not a bad argument.
     if (e instanceof RunDirShapeError) return fail("trace", "runtime", e.message, undefined, json);
     return fail("trace", "usage", String((e as Error).message), undefined, json);
@@ -5340,6 +5388,7 @@ function cmdTrace(args: string[]) {
       try {
         modelUsage = (JSON.parse(readFileSync(resultPath, "utf8")) as RunResult).modelUsage;
       } catch (e) {
+        rethrowIfExit(e);
         log(`::warning:: trace: skipping unparseable ${resultPath}: ${String((e as Error).message)}`);
       }
     }
@@ -5377,7 +5426,8 @@ function detectDiffKind(arg: string): DiffKind {
     let whole: unknown;
     try {
       whole = JSON.parse(readFileSync(arg, "utf8"));
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       whole = undefined; // not a single JSON document — genuine multi-line NDJSON
     }
     if (whole && typeof whole === "object") {
@@ -5395,6 +5445,7 @@ function detectDiffKind(arg: string): DiffKind {
     resolveEventsFile(arg);
     return "run";
   } catch (e) {
+    rethrowIfExit(e);
     // A multi-leg run resolved fine and is a refused shape: never retried as a baseline name.
     if (e instanceof RunDirShapeError) throw e;
     /* not a resolvable run either — fall through */
@@ -5470,7 +5521,8 @@ function loadRunSide(arg: string, normalize: boolean): DiffSide {
         const abs = join(result.workDir!, path);
         try {
           return [path, sha256File(abs)] as [string, string];
-        } catch {
+        } catch (caught) {
+          rethrowIfExit(caught);
           return [path, `size:${bytes}`] as [string, string];
         }
       });
@@ -5618,6 +5670,7 @@ function cmdDiff(args: string[]) {
       a = loadBaseline(aName);
       b = loadBaseline(bName);
     } catch (e) {
+      rethrowIfExit(e);
       return void fail("diff", "usage", String((e as Error).message), e instanceof UsageError ? e.hint : undefined, json);
     }
     const entries = diffBaselines(a, b);
@@ -5626,7 +5679,7 @@ function cmdDiff(args: string[]) {
     else if (changelog) out(renderChangelog(entries, b));
     else if (identical) out("No differences.");
     else for (const line of formatDiffLines(entries, b)) out(line);
-    process.exit(identical ? 0 : 1);
+    exitWith(identical ? 0 : 1);
   }
 
   // run/cassette — cross-comparable
@@ -5637,6 +5690,7 @@ function cmdDiff(args: string[]) {
     a = loadDiffSide(aKind, aName, normalize);
     b = loadDiffSide(bKind, bName, normalize);
   } catch (e) {
+    rethrowIfExit(e);
     return void fail("diff", "usage", String((e as Error).message), undefined, json);
   }
   // Allow + warn on a cross-scenario comparison: comparing runs of two DIFFERENT scenarios is
@@ -5688,7 +5742,7 @@ function cmdDiff(args: string[]) {
         `(also: no artifact manifest on side ${result.artifactsAvailability === "a-unavailable" ? "a" : "b"} — this alone makes the comparison non-identical; see --view artifacts)`,
       );
   }
-  process.exit(result.identical ? 0 : 1);
+  exitWith(result.identical ? 0 : 1);
 }
 
 function cmdInspect(args: string[]) {
@@ -5710,6 +5764,7 @@ function cmdInspect(args: string[]) {
     if (existsSync(target) && ["legs", "action-leg"].includes(classifyRunDir(target).kind)) requireTurns(target, "inspect");
     runDir = hasTurnDirs(target) ? target : dirname(resolveEventsFile(target));
   } catch (e) {
+    rethrowIfExit(e);
     // A multi-leg root or an action leg resolved fine; it is a refused shape (`runtime`), not a bad argument.
     if (e instanceof RunDirShapeError) return void fail("inspect", "runtime", e.message, undefined, json);
     return void fail("inspect", "usage", String((e as Error).message), undefined, json);
@@ -5721,35 +5776,62 @@ function cmdInspect(args: string[]) {
   try {
     requireTurns(runDir, "inspect");
   } catch (e) {
+    rethrowIfExit(e);
     return void fail("inspect", "runtime", (e as Error).message, undefined, json);
   }
   try {
     out(buildInspectView(runDir, { json }));
   } catch (e) {
+    rethrowIfExit(e);
     return void fail("inspect", "usage", String((e as Error).message), undefined, json);
   }
 }
 
-main().catch((e) => {
+/** What the top level does with a rejection of `main()` that is not an exit request (runAsEntry settles those). Never
+ *  calls fail(): each known error class prints its envelope and returns its code; the process then drains by itself. */
+function onMainRejected(e: unknown): number | "handled" {
   const command = process.argv[2] ?? "";
   const json = isJsonOutput(process.argv.slice(2));
-  // A child died of the operator's interrupt before this process's own handler ran: handle it as that interrupt.
+  const err = e as Error | undefined;
   if (e instanceof InterruptedError) {
+    // A child died of the operator's interrupt before this process's own handler ran: handle it as that interrupt.
     // warn(), not log(): on a hang-up the terminal is gone and a raw fd write would throw before interrupt() runs.
     warn(`::warning:: [interrupt] ${e.message} — stopping\n`);
-    return interrupt(e.signal);
+    interrupt(e.signal);
+    return "handled";
   }
-  if (e instanceof UnansweredError) fail(command, "unanswered", e.message, e.hint, json);
-  if (e instanceof BoundaryError) fail(command, "boundary", e.message, undefined, json);
-  if (e instanceof UsageError) fail(command, "usage", e.message, (e as UsageError).hint, json);
+  if (e instanceof UnansweredError) return printFailure(command, "unanswered", e.message, e.hint, json);
+  if (e instanceof BoundaryError) return printFailure(command, "boundary", e.message, undefined, json);
+  if (e instanceof UsageError) return printFailure(command, "usage", e.message, e.hint, json);
   // A refused legacy/mixed/pre-completion run dir (e.g. `--resume` onto one, see execute.ts) is a legible,
   // well-formed-invocation refusal, not an internal harness bug — route it the same clean, no-stack way as
   // BoundaryError/UsageError rather than falling through to the `internal` branch below, which prints a
   // stack trace for what is actually the expected "this dir predates the layout" message.
   // RunDirShapeError covers LegacyRunDirError and MultiLegRunDirError (a multi-leg root or a host-action leg).
-  if (e instanceof RunDirShapeError) fail(command, "runtime", e.message, undefined, json);
+  if (e instanceof RunDirShapeError) return printFailure(command, "runtime", e.message, undefined, json);
   // runtime/unexpected: keep the stack on stderr for humans; a structured envelope on stdout for json.
-  if (json) out(jsonError(command, "internal", String(e?.message ?? e)));
-  else log(String(e?.stack ?? e));
-  process.exit(2); // cli-error-envelope-exempt: emits its own jsonError(...) call above (full stack on stderr for text mode), not a fail() plain-message shape
-});
+  if (json) out(jsonError(command, "internal", String(err?.message ?? e)));
+  else log(String(err?.stack ?? e));
+  return 2; // cli-error-envelope-exempt: emits its own jsonError(...) call above (full stack on stderr for text mode), not a fail() plain-message shape
+}
+
+/** Kill helper process groups that would hold the loop open, then arm the exit fallback. */
+function sweepHelpers(): void {
+  killOutstandingChildGroups();
+  sweepHelperGroups();
+}
+
+/** True when this module is the process's entry point (`node dist/cli.js`, the npm bin symlink, `npx`,
+ *  `tsx src/cli.ts`), false when a test or another module imports it. Both sides are realpathed; an unset
+ *  `argv[1]` (`node -e`, `--import`) or a path that cannot be resolved means "not the entry". */
+export function isCliEntry(argv1: string | undefined = process.argv[1], self: string = fileURLToPath(import.meta.url)): boolean {
+  if (!argv1) return false;
+  try {
+    return realpathSync(argv1) === realpathSync(self);
+  } catch (caught) {
+    rethrowIfExit(caught);
+    return false;
+  }
+}
+
+if (isCliEntry()) runAsEntry(main, { sweep: sweepHelpers, warn }, onMainRejected);

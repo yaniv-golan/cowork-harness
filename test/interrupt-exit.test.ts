@@ -51,7 +51,7 @@ describe("childInterruptSignal", () => {
 });
 
 // Once a signal has been handled, the handler's exit hook makes every exit report it (`process.exitCode` set in an
-// "exit" listener wins over the code passed to process.exit), so an error path needs no check of its own. What it
+// "exit" listener wins over the code an exit request settled, or one passed to process.exit), so an error path needs no check of its own. What it
 // cannot see is a signal not handled yet: the child-status mapping above covers that.
 describe.runIf(process.platform !== "win32")("an error exit after a handled interrupt reports the interrupt", () => {
   const run = (body: string) => {
@@ -62,6 +62,9 @@ describe.runIf(process.platform !== "win32")("an error exit after a handled inte
   };
   const TERMINATION = JSON.stringify(resolve("src/termination.ts"));
   const ENVELOPE = JSON.stringify(resolve("src/run/envelope.ts"));
+  // fail() asks to exit by throwing; the CLI's entry installs the handlers that turn that into the exit code, and
+  // these scripts stand in for it.
+  const EXIT = JSON.stringify(resolve("src/run/exit.ts"));
 
   it("a boundary error raised while SIGINT is held exits 130, not 3", () => {
     // The hold keeps the handler from exiting first, as a step finishing its result would: the error that step then
@@ -69,6 +72,8 @@ describe.runIf(process.platform !== "win32")("an error exit after a handled inte
     const r = run(`
       import { installTerminationHandler, holdExit, interrupt } from ${TERMINATION};
       import { fail } from ${ENVELOPE};
+      import { installExitHandlers } from ${EXIT};
+      installExitHandlers({ sweep() {}, warn: (l) => process.stderr.write(l) });
       installTerminationHandler();
       holdExit();
       interrupt("SIGINT");
@@ -80,6 +85,8 @@ describe.runIf(process.platform !== "win32")("an error exit after a handled inte
   it("with no interrupt, the same error keeps its own exit status", () => {
     const r = run(`
       import { fail } from ${ENVELOPE};
+      import { installExitHandlers } from ${EXIT};
+      installExitHandlers({ sweep() {}, warn: (l) => process.stderr.write(l) });
       fail("eval", "boundary", "a real boundary error", undefined, false);
     `);
     expect(r.status, r.stderr).toBe(3);

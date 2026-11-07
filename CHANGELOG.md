@@ -6,6 +6,28 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **A rare hang at exit on Node 24 and later.** Commands no longer end the process with `process.exit` from inside
+  their own code, which on some Node 24+ builds could deadlock inside the exit itself. A command now sets its exit
+  code and the process ends once its work is done. If something still holds the process 5 seconds after the command
+  finished, it exits anyway with the same code and names what was holding it on stderr
+  (`::warning:: [exit] the event loop was still busy …`). Exit codes and output are unchanged, for
+  `cowork-harness` and for critique's module run directly (`node dist/critique/command.js`).
+- **`prune` reports every usage error as a JSON envelope under `COWORK_HARNESS_OUTPUT_FORMAT=json`**, as other
+  commands do. Before, each printed only the plain message. prune has no `--output-format` flag. The text form is
+  unchanged.
+
+### Changed
+
+- **The test suite's stub agent runs on the sealed config directory.** It now carries a fixed fake token, the
+  credential that selects the protocol tier's managed config directory every real run uses, instead of forcing the
+  unsealed branch.
+- **The live test lane looks up its token once, for every live suite**: the exported variable, then
+  `COWORK_LIVE_DOTENV`, then `~/.cowork-harness-token`, then the repository's `.env`. Before, two suites read the
+  `.env` and only one read `COWORK_LIVE_DOTENV`, so the others could skip on a machine that had a token.
+- **CI's Node 22 floor job names what keeps the test runner alive after the run, and logs per-file test times.**
+
 ## [4.15.0] - 2026-11-06
 
 ### Upgrade notes

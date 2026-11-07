@@ -7,6 +7,7 @@ import type { SessionConfig } from "../session.js";
 import { runOutDir, type ExecuteOptions } from "../run/execute.js";
 import { latestTurn, turnArtifactPath } from "../run/turn-layout.js";
 import type { ScheduledJob } from "./schedule.js";
+import { rethrowIfExit } from "../run/exit.js";
 
 /** One job handed to the runner. */
 export interface EvalJobSpec {
@@ -79,7 +80,8 @@ export function salvagedResult(dir: string): RunResult | undefined {
   if (!existsSync(p)) return undefined;
   try {
     return JSON.parse(readFileSync(p, "utf8")) as RunResult;
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return undefined;
   }
 }

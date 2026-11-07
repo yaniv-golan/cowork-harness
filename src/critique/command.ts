@@ -324,7 +324,8 @@ export function childForcesHostLoop(dotenvPath: string | undefined): boolean {
   if (dotenvPath === undefined) return false;
   try {
     return parseDotenv(readFileSync(dotenvPath, "utf8")).get("CLAUDE_FORCE_HOST_LOOP") === "1";
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return false;
   }
 }
@@ -348,6 +349,7 @@ export function resolveCoworkTier(
   try {
     baseline = load();
   } catch (e) {
+    rethrowIfExit(e);
     throw new Error(
       `--fidelity cowork could not be resolved: no readable platform baseline (${e instanceof Error ? e.message : String(e)}). ` +
         `cowork means "whichever tier real Cowork would use here", which is read from the baseline's loop gate — ` +
@@ -774,7 +776,8 @@ export function resolveCritiquedSkillDir(skillFolder: string, skillSelector: str
   let stat;
   try {
     stat = statSync(skillFolder);
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     throw new Error(`skill folder not found: ${tildeify(skillFolder)}`);
   }
   if (!stat.isDirectory()) throw new Error(`not a directory: ${tildeify(skillFolder)}`);
@@ -793,7 +796,8 @@ export function resolveCritiquedSkillDir(skillFolder: string, skillSelector: str
         .filter((e) => e.isDirectory() && existsSync(join(skillFolder, "skills", e.name, "SKILL.md")))
         .map((e) => e.name)
         .sort();
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       return [];
     }
   };
@@ -905,7 +909,8 @@ function killAllOutstandingChildGroups(): void {
   for (const pid of outstandingChildPids) {
     try {
       process.kill(-pid, "SIGKILL");
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       /* already gone */
     }
   }
@@ -997,7 +1002,8 @@ function parseEnvelope(stdout: string): SkillEnvelope | null {
   if (!line) return null;
   try {
     return JSON.parse(line) as SkillEnvelope;
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return null;
   }
 }
@@ -1989,7 +1995,8 @@ export function writeGradedAliases(outDir: string): void {
       // `trace.graded.json` for the one active consumer, rather than failing loud.
       const src = turnArtifactPath(outDir, 1, artifact);
       if (existsSync(src)) copyFileSync(src, gradedAliasPath(outDir, artifact));
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       /* best-effort convenience copy — never fail the run for it */
     }
   }
@@ -2003,6 +2010,7 @@ function writeRunArtifact(outDir: string, name: string, content: CritiqueFileCon
   try {
     writeFileSync(join(outDir, name), critiqueFileText(content));
   } catch (e) {
+    rethrowIfExit(e);
     process.stderr.write(`critique: could not write ${name} under ${tildeify(outDir)}: ${String(e)}\n`);
   }
 }
@@ -2064,6 +2072,7 @@ export function writeOutFile(outPath: string, state: ReportState, outputFormat: 
   try {
     writeFileSync(outPath, content);
   } catch (e) {
+    rethrowIfExit(e);
     process.stderr.write(`critique: --out ${tildeify(outPath)} could not be written: ${String(e)}\n`);
   }
 }
@@ -2257,6 +2266,7 @@ function runCorpusPreview(
     try {
       writeFileSync(opts.out, fileContent);
     } catch (e) {
+      rethrowIfExit(e);
       process.stderr.write(`critique: --out ${tildeify(opts.out)} could not be written: ${String(e)}\n`);
     }
   }
@@ -2313,7 +2323,8 @@ export function skillIdSharedFor(gradedSkillName: string | undefined, pluginRoot
   const id = sanitizeSkillName(gradedSkillName);
   try {
     return registeredSkills(pluginRoot).filter((s) => s.id === id).length > 1;
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return false;
   }
 }
@@ -2334,7 +2345,8 @@ export function computeSkillInvocationVerdict(args: {
   const eventsText = (() => {
     try {
       return readTurn1Slice(outDir, "events.jsonl", boundary);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       return undefined; // unreadable = unobservable, never "no sub-agent ran a skill"
     }
   })();
@@ -2443,6 +2455,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         ...(cluster !== undefined ? { cluster: cluster as ClusterMode } : {}),
       });
     } catch (e) {
+      rethrowIfExit(e);
       if (e instanceof CompareRefusal) return refuse("usage", `critique --compare: ${e.message}`);
       throw e;
     }
@@ -2456,15 +2469,17 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       try {
         writeFileSync(out, content);
       } catch (e) {
+        rethrowIfExit(e);
         process.stderr.write(`critique: --out ${tildeify(out)} could not be written: ${String(e)}\n`);
       }
-    process.exit(0);
+    exitWith(0);
     return;
   }
   let opts: ParsedArgs;
   try {
     opts = prepareCritique(argv);
   } catch (e) {
+    rethrowIfExit(e);
     return refuse("usage", (e as Error).message);
   }
   json = opts.outputFormat === "json";
@@ -2493,6 +2508,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       removeSnapshot = staged.cleanup;
       onRefuse = staged.discard;
     } catch (e) {
+      rethrowIfExit(e);
       return refuse("usage", (e as Error).message);
     }
   }
@@ -2506,6 +2522,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     resolvedSkill = resolveCritiquedSkillDir(opts.skillFolder, opts.skillSelector);
     if (targetSource.kind === "git") resolvedSkill = { ...resolvedSkill, hashBasis: "git-commit" };
   } catch (e) {
+    rethrowIfExit(e);
     removeSnapshot();
     return refuse("usage", (e as Error).message);
   }
@@ -2543,7 +2560,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   if (opts.corpusOnly) {
     const code = runCorpusPreview(opts, resolvedSkill, preflight.pkg, targetSource, summaryIdentity);
     removeSnapshot();
-    process.exit(code);
+    exitWith(code);
     return;
   }
   // Both turns run the `skill` lane, which refuses a run that resolves no model. Check it HERE, before the
@@ -2562,7 +2579,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // The operator's interrupt, learned from the probe it killed: critique's interrupt exit (1), as its own handler
     // gives a signal that arrives after this point.
     if (!(e instanceof InterruptedError)) throw e;
-    process.exit(1);
+    exitWith(1);
   }
   if (iso) return refuse("usage", `critique: ${iso}`);
   // Past this point a turn WILL run. parseArgs guarantees a probe on every non-corpus-only line; the
@@ -2597,7 +2614,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         `critique: could not determine the task run's directory (no envelope outDir and no [status] line)${diag ? ` [${diag}]` : ""}.\n` +
           `--- task stdout ---\n${task.stdout}\n--- task stderr (tail) ---\n${task.stderr.slice(-4000)}\n`,
       );
-      process.exit(EXIT_INSTRUMENT_FAILURE);
+      exitWith(EXIT_INSTRUMENT_FAILURE);
       return;
     }
 
@@ -2643,7 +2660,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       // The INSTRUMENT failed at the TASK turn (killed by the timeout or the byte cap) — no critique was
       // produced. Findings never gate, but this is not a finding. The other instrument causes exit
       // elsewhere: a reflection-protocol break or an evaluator throw routes through the report path below.
-      process.exit(EXIT_INSTRUMENT_FAILURE);
+      exitWith(EXIT_INSTRUMENT_FAILURE);
       return;
     }
     // NOTE: `taskResult` ("success" | "error") is a GRADEABLE outcome of the task itself — a task that ended
@@ -2763,7 +2780,8 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       try {
         const r2 = JSON.parse(readFileSync(turnArtifactPath(outDir, 2, "result.json"), "utf8")) as Record<string, unknown>;
         reflectionTurnUsd = sumCostUsd(r2.modelUsage);
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         /* unpriced */
       }
       // F38: `selfReport` is `undefined` (never a placeholder string) when the reflection turn produced no
@@ -2862,6 +2880,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
           },
         });
       } catch (e) {
+        rethrowIfExit(e);
         evaluatorError = (e as Error).message;
       }
     }
@@ -2908,6 +2927,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         skillHash: gradedSkillHash,
       });
     } catch (err) {
+      rethrowIfExit(err);
       warn(
         `::warning:: [critique] could not append the cost roll-up row to the run index: ${err instanceof Error ? err.message : String(err)}\n`,
       );
@@ -2972,14 +2992,15 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // the report is still printed (it carries the diagnosis), but no critique was produced, so this is an
     // instrument failure, not a finding. Missing this path is what made the documented exit contract
     // false in practice even after the other three were routed.
-    if (state.infraFailure || state.evaluatorError) process.exit(EXIT_INSTRUMENT_FAILURE);
+    if (state.infraFailure || state.evaluatorError) exitWith(EXIT_INSTRUMENT_FAILURE);
   } catch (e) {
+    rethrowIfExit(e);
     process.stderr.write(`critique: unexpected failure: ${(e as Error).stack ?? String(e)}\n`);
-    process.exit(EXIT_INSTRUMENT_FAILURE); // an unexpected throw means no critique was produced
+    exitWith(EXIT_INSTRUMENT_FAILURE); // an unexpected throw means no critique was produced
   }
   // FINDINGS never gate: any classification — including a task run that ERRORED, which is itself a
   // legitimate discovery outcome about the skill — exits 0. Only instrument failures above exit non-zero.
-  process.exit(0);
+  exitWith(0);
 }
 
 /** CLI entry for `cowork-harness critique`. Exported so src/cli.ts can dispatch to it — the direct-exec
@@ -2990,9 +3011,19 @@ export async function cmdCritique(argv: string[]): Promise<void> {
 }
 
 import { pathToFileURL } from "node:url";
+import { exitWith, rethrowIfExit, runAsEntry } from "../run/exit.js";
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   installOrphanCleanupHandlers();
-  void main();
+  // The same top level as the cowork-harness entry (src/cli.ts): a requested exit settles its code. Anything else
+  // ends as it did before this entry had a top level, with its stack and exit 1.
+  runAsEntry(
+    () => main(),
+    { sweep: killAllOutstandingChildGroups, warn },
+    (e) => {
+      writeAllSync(2, `${e instanceof Error ? (e.stack ?? e.message) : String(e)}\n`);
+      return 1;
+    },
+  );
 }
 
 // Exported for the reflection-prompt version to be inspectable/testable without spawning anything.

@@ -334,6 +334,12 @@ function killAllHelperGroups(sig: NodeJS.Signals): void {
   }
 }
 
+/** Kill every live `--decider-cmd` helper group now. The CLI's top level calls it once the command is done: a
+ *  helper still running would otherwise hold the event loop open until the exit fallback. */
+export function sweepHelperGroups(): void {
+  killAllHelperGroups("SIGKILL");
+}
+
 let helperExitHooksInstalled = false;
 function installHelperExitHooks(): void {
   if (helperExitHooksInstalled) return;

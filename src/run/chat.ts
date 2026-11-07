@@ -41,6 +41,7 @@ import { makeHostLoopCanUseToolGate } from "../hostloop/canusetool-gate.js";
 import { maybePrintChatLaneNotice } from "./lane-notice.js";
 import { resolveAgentImage, resolveContainerRuntime } from "../runtime/agent-image.js";
 
+import { exitWith } from "./exit.js";
 const log = (s: string) => process.stderr.write(s);
 
 /** The chat lane's drive() options. Chat previously passed NO subagentAppend on any branch — a
@@ -115,7 +116,7 @@ function chatUsage(): string {
 export async function cmdChat(args: string[]) {
   if (args.some((a) => /^--search-corpus(-miss|-min-score)?(=|$)/.test(a))) {
     log("chat --search-corpus is not available: a frozen search corpus runs with run or skill\n");
-    process.exit(2);
+    exitWith(2);
   }
   const positional: string[] = [];
   let raw = false;
@@ -138,16 +139,16 @@ export async function cmdChat(args: string[]) {
   const nextValue = (i: number, flag: string, what: string): string => {
     if (i + 1 >= args.length) {
       log(`chat ${flag} requires ${what}\n`);
-      process.exit(2);
+      exitWith(2);
     }
     const v = args[i + 1];
     if (!v.trim()) {
       log(`chat ${flag} requires a non-empty ${what}\n`);
-      process.exit(2);
+      exitWith(2);
     }
     if (v.startsWith("-") && !/^-\d/.test(v)) {
       log(`chat ${flag} requires ${what} but got a flag-looking token "${v}" — did you forget the value?\n`);
-      process.exit(2);
+      exitWith(2);
     }
     return v;
   };
@@ -171,7 +172,7 @@ export async function cmdChat(args: string[]) {
       const v = ++i < args.length ? args[i] : undefined; // bounds check
       if (v === undefined || !(CHAT_FIDELITY_TIERS as readonly string[]).includes(v)) {
         log(`chat --fidelity must be ${CHAT_FIDELITY_TIERS.map((t) => `"${t}"`).join(", ")} (got "${v ?? ""}")\n`);
-        process.exit(2);
+        exitWith(2);
       }
       fidelityFlag = v as ChatFidelity;
       seenFlags.add("--fidelity");
@@ -191,7 +192,7 @@ export async function cmdChat(args: string[]) {
       seenFlags.add("--plugin");
     } else if (a.startsWith("-")) {
       log(`chat: unknown flag: ${a}\n`);
-      process.exit(2);
+      exitWith(2);
     } else positional.push(a);
   }
   // parse COWORK_HARNESS_FIDELITY through the same tier set the --fidelity flag validates. An
@@ -204,7 +205,7 @@ export async function cmdChat(args: string[]) {
         (["microvm", "cowork"].includes(envFid) ? ` — ${envFid} is not supported in chat` : "") +
         "\n",
     );
-    process.exit(2);
+    exitWith(2);
   }
   const fidelity: ChatFidelity = fidelityFlag ?? (envFid as ChatFidelity | undefined) ?? "container";
   // COWORK_HARNESS_MODEL env var default (CLI --model takes precedence). An empty value counts as unset.
@@ -218,17 +219,17 @@ export async function cmdChat(args: string[]) {
       `chat takes at most <skill-folder> [prompt] (got ${positional.length} positionals: ${positional.join(", ")}) — ` +
         `quote a prompt that contains spaces\n`,
     );
-    process.exit(2);
+    exitWith(2);
   }
   if (!folder) {
     log(chatUsage());
-    process.exit(2);
+    exitWith(2);
   }
   // A session must state its model, like every other lane: the model selects part of the agent's system
   // prompt. Refused before the --raw branch so both chat lanes refuse, and before any run dir or docker work.
   if (model === undefined) {
     log(`chat: ${unresolvedModelRefusal("this `chat` session")}\n`);
-    process.exit(2);
+    exitWith(2);
   }
 
   if (raw) {
@@ -242,9 +243,9 @@ export async function cmdChat(args: string[]) {
         `chat --raw does not support ${rawRejected.join(", ")} — --raw mounts ONE skill folder in native cowork ` +
           `mode with no egress sandbox or fidelity selection. Drop these flags or omit --raw.\n`,
       );
-      process.exit(2);
+      exitWith(2);
     }
-    return chatRaw(folder, model);
+    exitWith(await chatRaw(folder, model));
   }
 
   // DECISION (mount-path fidelity work): chat's positional `folder` is the skill/plugin under test, so it
@@ -741,7 +742,7 @@ export async function* ttyTurns(rl: readline.Interface, turnPrompt: { open: bool
 /** `chat --raw` — native interactive cowork mode (no -p / stream-json), stdio inherited.
  *  Egress sandbox NOT applied. `--fidelity` is ignored. Not a fidelity tier: it builds its own minimal env and
  *  skips `spawn.env`, so it also does not set the auto-memory switch (`autoMemoryEnv`) — memory stays on here. */
-function chatRaw(folder: string, model?: string) {
+function chatRaw(folder: string, model?: string): Promise<number> {
   assertSpawnAllowed("`chat --raw` (docker run of the agent)");
   const baseline = loadBaseline("latest");
   const agent = resolveAgentBinary(baseline);
@@ -775,11 +776,21 @@ function chatRaw(folder: string, model?: string) {
     ...(model ? ["--model", model] : []),
   ];
   const child = spawn(runner, dockerArgs, { stdio: "inherit" });
-  // On signal termination (OOM, daemon restart, external kill) `code` is null; map the signal to the
-  // standard 128+signo so a signal-killed container doesn't report success to a wrapping --raw caller.
-  child.on("exit", (code, signal) => process.exit(code != null ? code : signal ? 128 + (os.constants.signals[signal] ?? 1) : 1));
-  child.on("error", (e) => {
-    log(`--raw failed (native interactive mode may be unavailable): ${e}\n`);
-    process.exit(2);
+  // Settles once, with the session's exit code: whichever of "error" and "exit" comes first decides (a spawn failure
+  // can fire "error" and then "exit"). On signal termination (OOM, daemon restart, external kill) `code` is null;
+  // map the signal to the standard 128+signo so a signal-killed container doesn't report success to a wrapping
+  // --raw caller.
+  return new Promise<number>((resolveCode) => {
+    let settled = false;
+    const settle = (code: number) => {
+      if (settled) return;
+      settled = true;
+      resolveCode(code);
+    };
+    child.on("exit", (code, signal) => settle(code != null ? code : signal ? 128 + (os.constants.signals[signal] ?? 1) : 1));
+    child.on("error", (e) => {
+      log(`--raw failed (native interactive mode may be unavailable): ${e}\n`);
+      settle(2);
+    });
   });
 }

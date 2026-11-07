@@ -10,10 +10,16 @@ import { spawn, type ChildProcess } from "node:child_process";
  * Credential safety is part of the fixture, not left to each test:
  *  - The CLI is spawned with a CONSTRUCTED environment, never `...process.env`, so nothing ambient (a
  *    token exported in the developer's shell) can ride into the child.
- *  - The three credential variables are set to "" rather than deleted. The CLI auto-loads `./.env` and
- *    `<install>/.env`, and the loader only fills a key that is `undefined` — so a deleted key is exactly
- *    the state a repo `.env` would fill, while "" is left alone and reads as "not provided".
- *  - `COWORK_MANAGED_CONFIG=0` keeps the protocol tier off the managed-config branch, which injects a token.
+ *  - `CLAUDE_CODE_OAUTH_TOKEN` is the fixed fake {@link STUB_TOKEN}: a credential is what selects the protocol
+ *    tier's managed-config branch (the sealed config dir every real run uses), so the fixture drives that
+ *    branch by default. The stub never calls a network, and {@link credentialLeaks} exempts exactly this value.
+ *  - `COWORK_MANAGED_CONFIG` is NOT set: `=0` overrides a token and would push the run back onto the
+ *    unsealed branch, so it must stay unset for the fake token to take effect.
+ *  - `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are set to "" rather than deleted. The CLI auto-loads
+ *    `./.env` and `<install>/.env`, and the loader only fills a key that is `undefined`, so a deleted key is
+ *    exactly the state a repo `.env` would fill, while "" is left alone and reads as "not provided".
+ *  - A test that asserts the NO-credential path (a refusal before any run) must blank the token itself:
+ *    `CLAUDE_CODE_OAUTH_TOKEN: ""` in its env.
  *  - `CLAUDE_CONFIG_DIR` and `HOME` point into the fixture's own temp dir, so the operator's real config dir
  *    is never read.
  *  - The stub dumps the environment it actually received, and {@link credentialLeaks} reads that dump, so
@@ -22,7 +28,10 @@ import { spawn, type ChildProcess } from "node:child_process";
 export const CLI = resolve("dist/cli.js");
 export const POSIX = process.platform !== "win32";
 
-const CREDENTIAL_VARS = ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"] as const;
+/** The fixture's fake agent credential. Not a real token: the stub ignores it and nothing it drives calls a network. */
+export const STUB_TOKEN = "stub-not-a-real-token";
+
+const BLANKED_CREDENTIAL_VARS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"] as const;
 
 /** One AskUserQuestion gate, as the agent sends it on the control channel. */
 export const QUESTION_FRAME = JSON.stringify({
@@ -65,7 +74,10 @@ export function makeStubFixture(body: string, extraEnv: Record<string, string> =
   const probe =
     `if [ "$1" = "--version" ]; then echo "9.9.9 (Claude Code)"; exit 0; fi\n` +
     `if [ "$1" = "--help" ]; then for f in --tools --safe-mode --strict-mcp-config --no-session-persistence --setting-sources --json-schema --effort --settings; do echo "  $f"; done; exit 0; fi\n`;
-  writeFileSync(join(bin, "claude"), `#!/bin/sh\n${probe}env > "$STUB_ENV_DUMP"\necho $$ > "$STUB_PID"\n${body}\n`);
+  writeFileSync(
+    join(bin, "claude"),
+    `#!/bin/sh\n${probe}env > "$STUB_ENV_DUMP"\necho $$ > "$STUB_PID"\necho $$ > "$STUB_PID.$$"\n${body}\n`,
+  );
   chmodSync(join(bin, "claude"), 0o755);
   const scenario = join(cwd, "stub.yaml");
   writeFileSync(scenario, "baseline: latest\nfidelity: protocol\nprompt: say hi\nassert:\n  - result: success\n");
@@ -75,13 +87,13 @@ export function makeStubFixture(body: string, extraEnv: Record<string, string> =
     TMPDIR: tmpdir(),
     CLAUDE_CONFIG_DIR: join(root, "config"),
     COWORK_HARNESS_RUNS_DIR: runsDir,
-    COWORK_MANAGED_CONFIG: "0",
     STUB_PID: stubPidFile,
     STUB_ENV_DUMP: envDump,
     // A run must resolve a model (4.0.0); the scenario's inline session has none, so the env channel pins
     // one. The stub ignores its argv, so the id is never used.
     COWORK_HARNESS_MODEL: "claude-sonnet-5",
-    ...Object.fromEntries(CREDENTIAL_VARS.map((k) => [k, ""])),
+    CLAUDE_CODE_OAUTH_TOKEN: STUB_TOKEN,
+    ...Object.fromEntries(BLANKED_CREDENTIAL_VARS.map((k) => [k, ""])),
     ...extraEnv,
   };
   return {
@@ -93,21 +105,25 @@ export function makeStubFixture(body: string, extraEnv: Record<string, string> =
     envDump,
     env,
     cleanup() {
-      const pid = readPid(stubPidFile);
-      if (pid && alive(pid)) process.kill(pid, "SIGKILL");
+      // Every invocation's pid, not only the last: a concurrent run starts several stubs.
+      for (const pid of new Set([readPid(stubPidFile), ...stubInvocationPids(stubPidFile)]))
+        if (pid && alive(pid)) process.kill(pid, "SIGKILL");
       rmSync(root, { recursive: true, force: true });
     },
   };
 }
 
-/** Names of credential-shaped variables that reached the stub with a NON-EMPTY value (names only). */
+/** Names of credential-shaped variables that reached the stub with a NON-EMPTY value (names only). The fixture's own
+ *  fake token is exempt by EXACT value only: any other value under that name, including another fake, is a leak. */
 export function credentialLeaks(envDump: string): string[] {
   const leaks: string[] = [];
   for (const line of readFileSync(envDump, "utf8").split("\n")) {
     const eq = line.indexOf("=");
     if (eq <= 0) continue;
     const name = line.slice(0, eq);
-    if (/(API_KEY|AUTH_TOKEN|OAUTH_TOKEN|_TOKEN|_SECRET|PASSWORD)$/.test(name) && line.length > eq + 1) leaks.push(name);
+    const value = line.slice(eq + 1);
+    if (name === "CLAUDE_CODE_OAUTH_TOKEN" && value === STUB_TOKEN) continue;
+    if (/(API_KEY|AUTH_TOKEN|OAUTH_TOKEN|_TOKEN|_SECRET|PASSWORD)$/.test(name) && value.length > 0) leaks.push(name);
   }
   return leaks;
 }
@@ -143,6 +159,23 @@ export function alive(pid: number): boolean {
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === "EPERM";
   }
+}
+
+/** The pid of every stub invocation so far (`<stubPidFile>.<pid>`, one file each), in no particular order. `stubPidFile`
+ *  itself holds only the LAST invocation's pid. */
+export function stubInvocationPids(stubPidFile: string): number[] {
+  const dir = dirname(stubPidFile);
+  const prefix = `${stubPidFile.slice(dir.length + 1)}.`;
+  let names: string[];
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  return names
+    .filter((n) => n.startsWith(prefix))
+    .map((n) => readPid(join(dir, n)))
+    .filter((n): n is number => n !== undefined);
 }
 
 export function readPid(file: string): number | undefined {

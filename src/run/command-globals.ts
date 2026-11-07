@@ -22,6 +22,7 @@ import { fail, envOutputFormat } from "./envelope.js";
 import { writeAllSync, tildeify } from "../io.js";
 import { resolve } from "node:path";
 
+import { rethrowIfExit } from "./exit.js";
 const log = (s: string) => writeAllSync(2, s + "\n");
 
 export const COMMAND_GLOBAL_FLAGS = ["--dotenv", "--run-dir"] as const;
@@ -82,6 +83,7 @@ export function applyCommandGlobal(command: string, flag: CommandGlobalFlag, val
   try {
     entries = parseDotenv(readFileSync(value, "utf8"));
   } catch (e) {
+    rethrowIfExit(e);
     fail(command, "usage", new DotenvReadError(value, e).message, undefined, json);
   }
   const protectedKeys = state?.protectedKeys ?? new Set(Object.keys(process.env));

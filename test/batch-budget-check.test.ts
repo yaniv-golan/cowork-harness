@@ -6,6 +6,7 @@ import { appendIndexRow, type RunIndexRow } from "../src/run/run-index.js";
 import { batchCostEstimateLine, checkBatchBudget, estimateBatchCost, noHistoryCauseText } from "../src/run/budget.js";
 import { budgetStatus, resetBudgetStatus } from "../src/run/budget-status.js";
 
+import { latchedExitCode } from "../src/run/exit.js";
 // The batch budget estimate gained a per-scenario multiplicity (an eval schedules 2 x reps runs of every
 // scenario) and a non-exiting check beside the exiting `record` pre-flight. Both must leave `record`'s
 // existing behaviour byte-identical: the string-only calls below were pinned against the code BEFORE the
@@ -87,6 +88,7 @@ describe("checkBatchBudget — the non-exiting gate", () => {
     // a: worst $1.5 x 10 jobs = $15 > $9.
     const c = checkBatchBudget([{ scenario: "a", jobs: 10 }], 9);
     expect(exit).not.toHaveBeenCalled();
+    expect(latchedExitCode(), "the check asked the process to exit").toBeUndefined();
     expect(c.refuse).toBe(true);
     expect(c.status).toMatchObject({ capUsd: 9, basis: "batch", enforced: true, estimateUsd: 15, unpriced: [] });
     expect(c.status.runsDir).toBe(root);

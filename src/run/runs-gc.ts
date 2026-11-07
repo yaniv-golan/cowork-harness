@@ -9,13 +9,16 @@ import { MIGRATION_JOURNAL_DIR } from "./migrate-run-dir.js";
 import { evalIdOfLabel, isHillclimbLabel, isSymlink, readSmallJson, runLabelOf } from "./run-labels.js";
 import { isStatusStale, isValidRunStatus } from "./run-status.js";
 
+import { exitWith, rethrowIfExit } from "./exit.js";
+import { fail, isJsonOutput } from "./envelope.js";
 const log = (s: string) => process.stderr.write(s + "\n");
 
 /** How many interrupted migrations are recorded for this scenario. */
 function liveJournalsFor(runsRoot: string, scenarioSlug: string): number {
   try {
     return readdirSync(join(runsRoot, MIGRATION_JOURNAL_DIR, scenarioSlug)).filter((f) => f.endsWith(".json")).length;
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return 0; // no journal dir for this scenario — the ordinary case
   }
 }
@@ -34,6 +37,7 @@ function pidAlive(pid: unknown): boolean {
     process.kill(pid, 0);
     return true;
   } catch (e) {
+    rethrowIfExit(e);
     return (e as NodeJS.ErrnoException).code === "EPERM";
   }
 }
@@ -88,14 +92,16 @@ export const PINNED_RUN_ID_RE = /^sess-[A-Za-z0-9_-]+$/;
 function isFile(p: string): boolean {
   try {
     return statSync(p).isFile();
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return false;
   }
 }
 function isDir(p: string): boolean {
   try {
     return statSync(p).isDirectory();
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return false;
   }
 }
@@ -120,7 +126,8 @@ export interface RunDirEvidence {
 function anyLegEvents(dir: string): boolean {
   try {
     return readdirSync(join(dir, "legs")).some((id) => isFile(join(dir, "legs", id, "events.jsonl")));
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return false;
   }
 }
@@ -208,7 +215,8 @@ function dirChildren(dir: string): string[] {
   let entries: Dirent[];
   try {
     entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return [];
   }
   const out = entries
@@ -227,7 +235,8 @@ function runIdNamed(dir: string): boolean {
   let names: string[];
   try {
     names = readdirSync(dir).filter((n) => !n.startsWith("."));
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return false;
   }
   return names.length > 0 && names.every((n) => LOCAL_RUN_ID_RE.test(n) || PINNED_RUN_ID_RE.test(n));
@@ -415,6 +424,9 @@ function levelRefusal(root: string, source: string): string | undefined {
  *  scenario dir is left alone and counted.
  *  Safe by default (dry-run-able). */
 export function cmdRunsGc(args: string[]): void {
+  // prune has no `--output-format` flag and no JSON output of its own. Under COWORK_HARNESS_OUTPUT_FORMAT=json a usage
+  // error still gets the envelope every other command prints; the text form is the same message as before.
+  const json = isJsonOutput(args);
   let p;
   try {
     p = parseArgs(
@@ -425,20 +437,24 @@ export function cmdRunsGc(args: string[]): void {
       }),
     );
   } catch (e) {
-    log((e as Error).message);
-    return process.exit(2);
+    rethrowIfExit(e);
+    return fail("prune", "usage", (e as Error).message, undefined, json);
   }
-  applyParsedCommandGlobals("prune", p, false);
+  applyParsedCommandGlobals("prune", p, json);
   if (p.positionals.length > 1) {
-    log(`prune takes an optional <runs-dir> (got ${p.positionals.length}: ${p.positionals.join(", ")})`);
-    return process.exit(2);
+    return fail(
+      "prune",
+      "usage",
+      `prune takes an optional <runs-dir> (got ${p.positionals.length}: ${p.positionals.join(", ")})`,
+      undefined,
+      json,
+    );
   }
 
   const rawKeep = p.options["--keep-last"];
   const keepLast = rawKeep !== undefined ? Number(rawKeep) : DEFAULT_KEEP_LAST;
   if (!Number.isInteger(keepLast) || keepLast < 1) {
-    log(`prune: --keep-last must be a positive integer (got ${rawKeep})`);
-    return process.exit(2);
+    return fail("prune", "usage", `prune: --keep-last must be a positive integer (got ${rawKeep})`, undefined, json);
   }
 
   const rawPinnedAge = p.options["--pinned-older-than"];
@@ -446,8 +462,13 @@ export function cmdRunsGc(args: string[]): void {
   if (rawPinnedAge !== undefined) {
     pinnedOlderThanMs = parseRetentionMs(rawPinnedAge);
     if (pinnedOlderThanMs === undefined) {
-      log(`prune: --pinned-older-than must be <N>d|h|m (e.g. 7d, 24h, 30m) — got "${rawPinnedAge}"`);
-      return process.exit(2);
+      return fail(
+        "prune",
+        "usage",
+        `prune: --pinned-older-than must be <N>d|h|m (e.g. 7d, 24h, 30m) — got "${rawPinnedAge}"`,
+        undefined,
+        json,
+      );
     }
   }
 
@@ -458,15 +479,14 @@ export function cmdRunsGc(args: string[]): void {
 
   if (!existsSync(runsRoot)) {
     log(`✓ prune: ${runsRoot} does not exist — nothing to prune`);
-    return process.exit(0);
+    return exitWith(0);
   }
   // ONE check, before anything is deleted and before every flag: a per-scenario check inside the loop would
   // delete earlier-sorted children before refusing.
   const fromEnv = p.positionals[0] === undefined && !runDirFlagGiven() && process.env.COWORK_HARNESS_RUNS_DIR !== undefined;
   const refusal = pruneLevelRefusal(runsRoot, fromEnv ? " (from COWORK_HARNESS_RUNS_DIR)" : "");
   if (refusal !== undefined) {
-    log(refusal);
-    return process.exit(2);
+    return fail("prune", "usage", refusal, undefined, json);
   }
 
   let deleted = 0;
@@ -482,7 +502,8 @@ export function cmdRunsGc(args: string[]): void {
   const readNames = (dir: string): string[] | undefined => {
     try {
       return readdirSync(dir);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       unreadable.push(dir);
       return undefined;
     }
@@ -523,7 +544,8 @@ export function cmdRunsGc(args: string[]): void {
     let st: ReturnType<typeof statSync>;
     try {
       st = statSync(scenarioDir);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       continue;
     }
     if (!st.isDirectory()) continue;
@@ -553,7 +575,8 @@ export function cmdRunsGc(args: string[]): void {
     let entries: Dirent[];
     try {
       entries = readdirSync(scenarioDir, { withFileTypes: true });
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       unreadable.push(scenarioDir);
       continue;
     }
@@ -587,12 +610,14 @@ export function cmdRunsGc(args: string[]): void {
           bMtime = 0;
         try {
           aMtime = statSync(a.path).mtimeMs;
-        } catch {
+        } catch (caught) {
+          rethrowIfExit(caught);
           /* deleted between filter and sort — treat as oldest */
         }
         try {
           bMtime = statSync(b.path).mtimeMs;
-        } catch {
+        } catch (caught) {
+          rethrowIfExit(caught);
           /* deleted between filter and sort — treat as oldest */
         }
         const mtimeDiff = bMtime - aMtime;
@@ -623,7 +648,8 @@ export function cmdRunsGc(args: string[]): void {
       let mtime = now;
       try {
         mtime = statSync(d.path).mtimeMs;
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         /* deleted between filter and loop — treat as fresh (kept) */
       }
       if (pinnedOlderThanMs !== undefined && now - mtime > pinnedOlderThanMs) {
@@ -693,5 +719,5 @@ export function cmdRunsGc(args: string[]): void {
       ? `✓ prune: pruned ${deleted} run dir(s), kept ${kept}${extras.map((x) => `, ${x}`).join("")}${dryRun ? " (dry-run — nothing deleted)" : ""}`
       : `✓ prune: nothing to prune (${kept} run dir(s) within --keep-last ${keepLast}${extras.map((x) => `; ${x}`).join("")})`,
   );
-  return process.exit(0);
+  return exitWith(0);
 }

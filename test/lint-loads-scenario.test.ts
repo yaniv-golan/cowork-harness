@@ -241,7 +241,9 @@ describe.skipIf(!can || !havePython)("a pre-pass machinery failure reaches pytho
     const src =
       `const { cmdLint } = await import(${JSON.stringify(tool)});` +
       `const { lintPrepass } = await import(${JSON.stringify(loader)});` +
-      `cmdLint([${JSON.stringify(f)}], (a) => lintPrepass(a, { expand: () => { throw new Error("expansion exploded"); } }));`;
+      // cmdLint asks to exit by throwing ExitRequested; outside the CLI this snippet is the top level that settles it.
+      `try { await cmdLint([${JSON.stringify(f)}], (a) => lintPrepass(a, { expand: () => { throw new Error("expansion exploded"); } })); }` +
+      ` catch (e) { if (e?.name !== "ExitRequested") throw e; process.exitCode = e.code; }`;
     const r = spawnSync("node", ["--input-type=module", "-e", src], { encoding: "utf8" });
     expect(r.status).toBe(1);
     expect(r.stdout).toMatch(/ERROR \[lint-loader-internal\]/);

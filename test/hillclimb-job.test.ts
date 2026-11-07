@@ -4,6 +4,7 @@
 // test/fixtures/hillclimb-runs/README.md). The real runner through the stub agent is the CLI wiring test.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { InterruptedError } from "../src/termination.js";
+import { ExitRequested } from "../src/run/exit.js";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -263,5 +264,20 @@ describe("an interrupt learned from a probe inside the scenario run", () => {
     await expect(run({ c: kase(), rep: 0, variant: "baseline", runLabel: "l", timeoutS: 0, ablate: false })).rejects.toThrow(
       InterruptedError,
     );
+  });
+});
+
+describe("a requested exit raised inside the scenario run", () => {
+  it("propagates out of the job with its code instead of becoming this attempt's thrown row", async () => {
+    const run = makeHillclimbJobRunner(
+      deps({
+        runScenario: async () => {
+          throw new ExitRequested(2);
+        },
+      }),
+    );
+    await expect(run({ c: kase(), rep: 0, variant: "baseline", runLabel: "l", timeoutS: 0, ablate: false })).rejects.toMatchObject({
+      code: 2,
+    });
   });
 });

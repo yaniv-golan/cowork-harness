@@ -45,7 +45,7 @@ describe("critique exit contract is stated consistently everywhere", () => {
   });
 
   it("the code really does exit non-zero on an evaluator throw (the claim above is not just prose)", () => {
-    expect(SRC).toMatch(/state\.infraFailure \|\| state\.evaluatorError\) process\.exit\(EXIT_INSTRUMENT_FAILURE\)/);
+    expect(SRC).toMatch(/state\.infraFailure \|\| state\.evaluatorError\) exitWith\(EXIT_INSTRUMENT_FAILURE\)/);
   });
 });
 
@@ -71,7 +71,11 @@ describe("every exit code reachable in src/critique is documented", () => {
       } catch {
         continue;
       }
-      for (const m of text.matchAll(/process\.exit\(\s*(\d+)\s*\)/g)) out.add(Number(m[1]));
+      // A command asks to exit through `exitWith(N)`; `process.exit(N)` is left only in the signal handler.
+      for (const m of text.matchAll(/\b(?:process\.exit|exitWith)\(\s*(\d+)\s*\)/g)) out.add(Number(m[1]));
+      // The named instrument-failure code, resolved to its value, wherever it is the exit argument.
+      const named = text.match(/\bEXIT_INSTRUMENT_FAILURE\s*=\s*(\d+)/);
+      if (named && /\b(?:process\.exit|exitWith)\(\s*EXIT_INSTRUMENT_FAILURE\s*\)/.test(text)) out.add(Number(named[1]));
       // The pre-report refusals go through the shared `fail()` (via critique's local `refuse`), whose exit
       // code is fixed by its category: `boundary` → 3, every other category → 2. Counted here so moving a
       // literal `process.exit(2)` onto that helper does not silently drop 2 from this floor.
@@ -83,6 +87,8 @@ describe("every exit code reachable in src/critique is documented", () => {
 
   it("the scan finds exit sites at all (never go green over an empty scan)", () => {
     expect(literalExitCodes().size).toBeGreaterThan(1);
+    // The success exit and the instrument-failure exit are always reachable; a scan that loses either has thinned.
+    expect(literalExitCodes().has(0), "the scan no longer sees the success exit (0)").toBe(true);
   });
 
   for (const code of [...literalExitCodes()].sort()) {

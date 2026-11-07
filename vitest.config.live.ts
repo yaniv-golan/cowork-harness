@@ -20,7 +20,8 @@ export default defineConfig({
     include: ["test/live-*.test.ts"],
     testTimeout: 180000,
     globalSetup: ["test/setup/live-lane-notice.ts"],
-    // A run must resolve a model; this sets COWORK_HARNESS_MODEL in every worker when it is unset.
-    setupFiles: ["test/setup/live-model.ts"],
+    // A run must resolve a model; live-model sets COWORK_HARNESS_MODEL in every worker when it is unset.
+    // live-token resolves CLAUDE_CODE_OAUTH_TOKEN once, by one chain, for every live suite.
+    setupFiles: ["test/setup/live-model.ts", "test/setup/live-token.ts"],
   },
 });

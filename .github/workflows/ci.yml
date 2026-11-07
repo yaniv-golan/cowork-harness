@@ -64,17 +64,18 @@ jobs:
             echo "::error::resolveAgentBinary must be defined only in src/baseline.ts (import it; don't re-duplicate)."
             exit 1
           fi
-      - name: CLI error-envelope guard (usage/runtime errors must use fail(), not a bare process.exit)
-        # A bare `process.exit(1|2)` in src/cli.ts / src/run/doctor.ts outside fail()'s own definition means
-        # a new command bypassed the shared JSON envelope (the 2026-07 agent-friendliness audit finding).
-        # New catch blocks must call fail(command, category, message, hint, json[, exitCode]) instead.
-        # Sites that legitimately keep a raw process.exit (a custom, non-jsonError wire shape) must carry
-        # the `cli-error-envelope-exempt` marker comment on the same line — the guard excludes those.
+      - name: CLI error-envelope guard (usage/runtime errors must use fail(), not a bare exit)
+        # A bare `exitWith(1|2)` (or `process.exit(1|2)`) in src/cli.ts / src/run/doctor.ts / src/run/cassette.ts
+        # outside fail()'s own definition means a new command bypassed the shared JSON envelope (the 2026-07
+        # agent-friendliness audit finding). New catch blocks must call fail(command, category, message, hint,
+        # json[, exitCode]) instead. Sites that legitimately keep a raw exit (a custom, non-jsonError wire shape)
+        # must carry the `cli-error-envelope-exempt` marker comment on the same line — the guard excludes those.
         # (fail() itself lives in src/run/envelope.ts, outside this grep's scope, so no self-match to exclude.)
+        # The pattern must keep matching what the code calls: test/exit-guard.test.ts checks it finds a site.
         run: |
-          if grep -n "process\.exit([12])" src/cli.ts src/run/doctor.ts src/run/cassette.ts \
+          if grep -nE "(process\.exit|exitWith)\([12]\)" src/cli.ts src/run/doctor.ts src/run/cassette.ts \
              | grep -v "cli-error-envelope-exempt"; then
-            echo "::error::Found a bare process.exit(1|2) outside fail() with no cli-error-envelope-exempt marker — route it through fail(...) instead, or add the marker if it's a deliberate custom-shape exception."
+            echo "::error::Found a bare exit(1|2) outside fail() with no cli-error-envelope-exempt marker — route it through fail(...) instead, or add the marker if it's a deliberate custom-shape exception."
             exit 1
           fi
       - name: Typecheck
@@ -638,9 +639,19 @@ jobs:
         env:
           COWORK_HARNESS_CONTRACT_FETCH: required
           COWORK_TEST_HANG_DIR: ${{ runner.temp }}/hangs
+        # `npm run ci`'s three steps, inlined so the test run can carry reporters: `hanging-process` names what keeps
+        # vitest alive after the run, and the JSON report gives per-file wall time (the next step). `npm run ci` itself
+        # stays as it is: it is also prepublishOnly and runs locally, where $RUNNER_TEMP is unset.
         run: |
           set -o pipefail
-          npm run ci 2>&1 | tee "$RUNNER_TEMP/hangs/vitest.log"
+          { npm run typecheck && npm run build && npx vitest run --reporter=default --reporter=hanging-process \
+              --reporter=json --outputFile.json="$RUNNER_TEMP/hangs/vitest-files.json"; } 2>&1 | tee "$RUNNER_TEMP/hangs/vitest.log"
+      - name: Per-file wall time
+        if: always()
+        continue-on-error: true
+        run: |
+          [ -s "$RUNNER_TEMP/hangs/vitest-files.json" ] || { echo "no JSON report (the test run did not finish)"; exit 0; }
+          npx tsx scripts/ci/vitest-file-timing.ts "$RUNNER_TEMP/hangs/vitest-files.json" 40 | tee -a "$RUNNER_TEMP/hangs/vitest.log"
       - name: Disarm the job-level hang dump (let a dump already under way finish)
         if: always()
         run: |
@@ -654,6 +665,16 @@ jobs:
           path: ${{ runner.temp }}/hangs
           if-no-files-found: ignore
           retention-days: 14
+      - name: Upload the test log and per-file timing (passing run)
+        if: ${{ success() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: timing-floor
+          path: |
+            ${{ runner.temp }}/hangs/vitest.log
+            ${{ runner.temp }}/hangs/vitest-files.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   # ── Command-metric runtimes at their floors ─────────────────────────────────────────────
   # A command metric runs Python scripts through python/metric-runner.py and Node scripts under the permission

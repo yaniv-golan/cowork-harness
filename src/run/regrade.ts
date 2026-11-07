@@ -46,6 +46,7 @@ import { assertContextFromRunDir } from "./verify-context.js";
 import { isConcreteModelId } from "./model-provenance.js";
 import { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
 
+import { exitWith, rethrowIfExit } from "./exit.js";
 export { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
 
 const CMD = "regrade";
@@ -716,6 +717,7 @@ function writeNew(dir: string, stem: string, body: string): string {
       writeFileSync(f, body, { flag: "wx" });
       return f;
     } catch (e) {
+      rethrowIfExit(e);
       if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
     }
   }
@@ -945,7 +947,8 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
     let identity = runDir;
     try {
       identity = realpathSync(runDir);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       /* not there — refused below */
     }
     if (seen.has(identity)) continue;
@@ -1363,6 +1366,7 @@ export async function regradeRuns(opts: RegradeOptions & { checkOnly?: boolean }
       mkdirSync(dir, { recursive: true });
       regradeFile = writeNew(dir, stem, scrub(JSON.stringify(body, null, 2), secrets) + "\n");
     } catch (e) {
+      rethrowIfExit(e);
       // This dir's judge calls were spent; the earlier dirs' files are written, and their reports are returned.
       return {
         ok: false,
@@ -1525,6 +1529,7 @@ export async function cmdRegrade(args: string[]): Promise<never> {
       }),
     );
   } catch (e) {
+    rethrowIfExit(e);
     // An argument error echoes what was typed, so it is scrubbed like every other message this command prints.
     return fail(CMD, "usage", scrub((e as Error).message, collectSecrets()), undefined, json);
   }
@@ -1581,7 +1586,7 @@ export async function cmdRegrade(args: string[]): Promise<never> {
   if (!outcome.ok) {
     if (json) {
       writeAllSync(1, regradeErrorEnvelope(outcome, secrets) + "\n");
-      return process.exit(2);
+      return exitWith(2);
     }
     // After a failed write, what was graded is still reported before the error.
     if (outcome.completed?.length)
@@ -1590,5 +1595,5 @@ export async function cmdRegrade(args: string[]): Promise<never> {
   }
   if (json) writeAllSync(1, regradeEnvelope(outcome, secrets) + "\n");
   else for (const line of regradeTextReport(outcome, secrets)) writeAllSync(2, line + "\n");
-  return process.exit(outcome.exitCode);
+  return exitWith(outcome.exitCode);
 }
