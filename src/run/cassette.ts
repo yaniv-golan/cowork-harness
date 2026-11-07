@@ -4441,6 +4441,8 @@ export interface RecordOpts {
    *  freezes whatever model recorded it, so pinning at record time is what makes the recording's model a
    *  stated fact rather than a property of the recording machine. */
   modelOverride?: string;
+  /** `--timeout <ms>`: the agent phase's budget, as an execute option (the frozen scenario keeps its own timeout_ms). */
+  timeoutOverride?: { ms: number; source: "flag" };
   noRedact: boolean;
   allowFailing: boolean;
   force?: boolean; // --force: overwrite a default-path cassette even if it belongs to a different scenario (slug collision)
@@ -4868,6 +4870,7 @@ export const RECORD_VALUE_FLAGS = [
   "--intent",
   "--decider-model",
   "--model",
+  "--timeout",
   "--on-unanswered",
   "--concurrency",
   "--max-budget-usd",
@@ -4960,7 +4963,8 @@ export const RECORD_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 // copies each one had (cli.ts's was already a superset for `replay`; `verify-cassettes`' two copies had
 // textually diverged --margins prose — the cli.ts wording is kept as the single source).
 export const RECORD_USAGE =
-  "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--model <id>] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--case <stem>]… [--concurrency <N>] [--max-budget-usd <x>] [--allow-host-inventory-fixture] [--allow-host-inventory-findings]\n" +
+  "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--model <id>] [--timeout <ms>] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--case <stem>]… [--concurrency <N>] [--max-budget-usd <x>] [--allow-host-inventory-fixture] [--allow-host-inventory-findings]\n" +
+  "       --timeout <ms>: the agent's wall-clock budget for this recording, in place of the scenario's timeout_ms. The frozen scenario keeps its own value; the cassette and result.json record the budget that applied (timeout: {ms, source: flag}).\n" +
   "       --model <id>: pin the model for this recording, overriding the session's `model:` (env COWORK_HARNESS_MODEL sets a default). A cassette freezes whatever model recorded it, so pinning here is what makes the recording's model a stated fact rather than a property of this machine. A scenario that resolves no model (this flag, the session's `model:`, or the env var) is refused before spending, exit 1 — on --dry-run and on every batch item before the first spawn.\n" +
   "       --allow-host-inventory-fixture: proceed PAST THE PRE-FLIGHT when recording at protocol/hostloop into a repo-visible path. Those tiers inherit the host env, so the cassette could freeze THIS machine's MCP servers/agents/account into a committed fixture; the record is refused by default. This bypasses that pre-flight only — the finished recording is still scanned, and a real finding still refuses the write and quarantines it.\n" +
   "       --dry-run: resolve and CHECK without recording. A single scenario file runs every pre-spend refusal the real record runs (prompt policy, assert contradictions, host-inventory, slug collision) and refuses identically — same --out, same flags, so the verdict is binding. A DIRECTORY reports the path-dependent ones as advisory 'would-refuse'/'would-warn' notes instead, labelled by verdict kind (a dir target takes no --out, so the destination is a guess), and gates only on the path-independent ones.\n" +
@@ -5080,6 +5084,15 @@ export async function cmdRecord(args: string[]) {
   // `--model <id>` — the EXPLICIT flag only. `COWORK_HARNESS_MODEL` is applied in `executeScenario`, and
   // only when the session declares no `model:` of its own: an env var must not outrank a session file.
   const modelOverride = p.options["--model"];
+  // `--timeout <ms>`: the agent phase's budget, in place of the scenario's timeout_ms (the frozen scenario keeps it).
+  const rawTimeout = p.options["--timeout"];
+  let timeoutOverride: { ms: number; source: "flag" } | undefined;
+  if (rawTimeout !== undefined) {
+    const n = Number(rawTimeout);
+    if (!Number.isInteger(n) || n <= 0)
+      return fail("record", "usage", `--timeout requires a positive integer (ms); got "${rawTimeout}"`, undefined, asJson);
+    timeoutOverride = { ms: n, source: "flag" };
+  }
   const allowHostInventoryFixture = p.flags["--allow-host-inventory-fixture"] ?? false;
   const allowHostInventoryFindings = p.flags["--allow-host-inventory-findings"] ?? false;
   if (noRedact) log("record: --no-redact — content redaction is OFF; the cassette is written verbatim, so ensure inputs are synthetic.");
@@ -5204,6 +5217,7 @@ export async function cmdRecord(args: string[]) {
         allowHostInventoryFindings,
         ...(maxArtifactBytes !== undefined ? { maxArtifactBytes } : {}),
         ...(modelOverride !== undefined ? { modelOverride } : {}),
+        ...(timeoutOverride !== undefined ? { timeoutOverride } : {}),
         ...(onUnansweredOpt !== undefined ? { onUnanswered: onUnansweredOpt } : {}),
       });
       const sr = outcome.scenarioResult;
@@ -5865,6 +5879,7 @@ export async function cmdRecord(args: string[]) {
             allowHostInventoryFixture,
             allowHostInventoryFindings,
             ...(modelOverride !== undefined ? { modelOverride } : {}),
+            ...(timeoutOverride !== undefined ? { timeoutOverride } : {}),
           });
           staleItems[i] = { cassette: cp, status: "recorded" };
           return true;
@@ -5898,6 +5913,7 @@ export async function cmdRecord(args: string[]) {
           r = await recordScenarioFile(diskScenario, {
             noRedact,
             modelOverride,
+            timeoutOverride,
             allowFailing,
             cassettePath: cp,
             maxArtifactBytes,
@@ -5922,6 +5938,7 @@ export async function cmdRecord(args: string[]) {
           r = await recordScenarioObject(embeddedPairwiseRefs(embeddedScenario(cassette.scenario, cp), cp), {
             noRedact,
             modelOverride,
+            timeoutOverride,
             allowFailing,
             cassettePath: cp,
             maxArtifactBytes,
@@ -6069,6 +6086,7 @@ export async function cmdRecord(args: string[]) {
         const r = await recordScenarioFile(f, {
           noRedact,
           modelOverride,
+          timeoutOverride,
           allowFailing,
           maxArtifactBytes,
           skipRedactionPreflight: true,
@@ -6136,6 +6154,7 @@ export async function cmdRecord(args: string[]) {
       {
         noRedact,
         modelOverride,
+        timeoutOverride,
         allowFailing,
         force,
         cassettePath,
@@ -6408,6 +6427,7 @@ async function recordScenarioObject(
   const result = await executeScenario(scenario, {
     command: "record",
     modelOverride: opts.modelOverride,
+    timeoutOverride: opts.timeoutOverride,
     onUnanswered: opts.onUnanswered,
     // record's `onUnanswered` is already explicit-only (`p.options["--on-unanswered"]`, undefined when
     // the flag is absent), unlike run's resolved `policy` — so the same value serves both roles here.

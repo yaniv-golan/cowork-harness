@@ -82,12 +82,23 @@ describe("makeHillclimbJobRunner", () => {
     expect(calls[0].extra.runId).not.toBe(calls[1].extra.runId);
   });
 
-  it("the runner's ceiling lowers the scenario's timeout_ms; a shorter scenario timeout is kept", async () => {
+  it("the budget is the smaller of the two: the runner's ceiling is passed as a `runner` budget, never written into the scenario", async () => {
     const run = makeHillclimbJobRunner(deps());
-    await run({ c: kase(), rep: 0, variant: "baseline", runLabel: "l", timeoutS: 60, ablate: false });
-    await run({ c: kase(30_000), rep: 0, variant: "baseline", runLabel: "l", timeoutS: 60, ablate: false });
-    await run({ c: kase(30_000), rep: 0, variant: "baseline", runLabel: "l", timeoutS: 0, ablate: false });
-    expect(calls.map((c) => c.scenario.timeout_ms)).toEqual([60_000, 30_000, 30_000]);
+    const own = [undefined, 30_000, 30_000, 60_000, 90_000];
+    const ceil = [60, 60, 0, 60, 60];
+    for (let i = 0; i < own.length; i++) {
+      await run({ c: kase(own[i]), rep: 0, variant: "baseline", runLabel: "l", timeoutS: ceil[i], ablate: false });
+    }
+    // The scenario reaches the runner as authored: what the frozen scenario and every digest of it read is unchanged.
+    expect(calls.map((c) => c.scenario.timeout_ms)).toEqual(own);
+    // Runner-bound (no own value, a longer one, or a tie) ⇒ the runner's budget; otherwise the scenario's own applies.
+    expect(calls.map((c) => (c.extra as { timeoutOverride?: unknown }).timeoutOverride)).toEqual([
+      { ms: 60_000, source: "runner" },
+      undefined,
+      undefined,
+      { ms: 60_000, source: "runner" },
+      { ms: 60_000, source: "runner" },
+    ]);
   });
 
   it("a timeout at the RUNNER's value is a runner timeout; at the scenario's own (shorter) value it is the skill's", async () => {

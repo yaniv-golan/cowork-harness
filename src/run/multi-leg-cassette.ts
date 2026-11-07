@@ -220,6 +220,7 @@ export async function recordMultiLeg(
     {
       command: "record",
       ...(opts.modelOverride !== undefined ? { modelOverride: opts.modelOverride } : {}),
+      ...(opts.timeoutOverride !== undefined ? { timeoutOverride: opts.timeoutOverride } : {}),
       ...(opts.onUnanswered !== undefined ? { onUnanswered: opts.onUnanswered, onUnansweredFlag: opts.onUnanswered } : {}),
       ...(opts.externalChannel ? { externalChannel: opts.externalChannel } : {}),
       ...(opts.llmIntent !== undefined ? { llmIntent: opts.llmIntent } : {}),
