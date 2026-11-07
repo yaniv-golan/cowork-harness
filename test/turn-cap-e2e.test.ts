@@ -2,7 +2,7 @@
 // classifies it, executeScenario records the session's cap from the launch plan, and the verdict and the result file
 // are what a user sees. No hand-built RunResult.
 import { describe, it, expect } from "vitest";
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { makeStubFixture, spawnCli, exited, POSIX } from "./helpers/stub-agent.js";
 
@@ -14,12 +14,22 @@ const CAPPED = [
   "cat >/dev/null",
 ].join("\n");
 
+function setUp(f: ReturnType<typeof makeStubFixture>, assertBlock: string): void {
+  const session = join(f.cwd, "capped.session.yaml");
+  writeFileSync(session, "model: claude-sonnet-5\npermission_parity: cowork\nagent_max_turns: 1\n");
+  writeFileSync(f.scenario, `baseline: latest\nfidelity: protocol\nsession: ${session}\nprompt: say hi\nassert:\n${assertBlock}`);
+}
+
+async function cli(f: ReturnType<typeof makeStubFixture>, args: string[]) {
+  const c = spawnCli(f, args);
+  const { code } = await exited(c, 60_000);
+  return { code, stdout: c.stdoutText(), stderr: c.stderrText() };
+}
+
 async function run(assertBlock: string) {
   const f = makeStubFixture(CAPPED);
   try {
-    const session = join(f.cwd, "capped.session.yaml");
-    writeFileSync(session, "model: claude-sonnet-5\npermission_parity: cowork\nagent_max_turns: 1\n");
-    writeFileSync(f.scenario, `baseline: latest\nfidelity: protocol\nsession: ${session}\nprompt: say hi\nassert:\n${assertBlock}`);
+    setUp(f, assertBlock);
     const c = spawnCli(f, ["run", f.scenario, "--output-format", "json"]);
     const { code } = await exited(c, 60_000);
     const env = JSON.parse(c.stdoutText());
@@ -39,6 +49,33 @@ describe.runIf(can)("a session's turn cap, end to end (stub agent, protocol)", (
     expect(r.verdict.pass).toBe(true);
     expect(r.verdict.signals.map((s: { code: string }) => s.code)).not.toContain("result_error");
   }, 90_000);
+
+  it("a recording freezes the cap, stamps v19, and replays to the same verdict", async () => {
+    const f = makeStubFixture(CAPPED);
+    try {
+      setUp(f, "  - allow_max_turns: true\n  - result: error\n");
+      const cass = join(f.cwd, "capped.cassette.json");
+      const rec = await cli(f, ["record", f.scenario, "--out", cass]);
+      expect(rec.code, rec.stderr).toBe(0);
+      const c = JSON.parse(readFileSync(cass, "utf8"));
+      expect(c.cassetteVersion).toBe(19);
+      expect(c.turnCap).toEqual({ maxTurns: 1, source: "session" });
+      const rep = await cli(f, ["replay", cass, "--output-format", "json"]);
+      expect(rep.code, rep.stderr).toBe(0);
+      const r = JSON.parse(rep.stdout).results[0];
+      expect(r.turnCap).toEqual({ maxTurns: 1, source: "session" });
+      expect(r.verdict.pass).toBe(true);
+      // Without the frozen cap (a cassette from before it was recorded) the modifier has nothing to read: the replayed
+      // run fails as the live one would have without a cap.
+      delete c.turnCap;
+      writeFileSync(cass, JSON.stringify(c));
+      const old = await cli(f, ["replay", cass, "--output-format", "json"]);
+      expect(old.code).toBe(1);
+      expect(JSON.parse(old.stdout).results[0].verdict.signals.map((s: { code: string }) => s.code)).toContain("result_error");
+    } finally {
+      f.cleanup();
+    }
+  }, 120_000);
 
   it("without it: exit 1, result_error naming the cap and `assert allow_max_turns: true`", async () => {
     const { code, r } = await run("  - result: error\n");
