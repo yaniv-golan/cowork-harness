@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, chmodSync, readFileSync, existsS
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parse } from "yaml";
+import { MIN_SUPPORTED_CASSETTE_VERSION } from "../src/run/cassette.js";
 
 // The pre-commit cassette gate, and the CI sweep it pre-empts.
 //
@@ -336,8 +337,16 @@ describe("CI scans every tracked cassette", () => {
     // the exclusion becomes an unexplained hole. Pin the reason, not just the path.
     const p = join("test", "evals", "files", "report-check.cassette.json");
     expect(existsSync(p)).toBe(true);
-    const c = JSON.parse(readFileSync(p, "utf8")) as { scenario?: { session?: string }; fingerprint?: { skillHash?: string } };
+    const c = JSON.parse(readFileSync(p, "utf8")) as {
+      cassetteVersion?: number;
+      scenario?: { session?: string };
+      fingerprint?: { skillHash?: string };
+    };
+    // Both reasons the ci.yml comment gives: no `scenario.session`, and a stamp below the v12 read floor.
     expect(c.scenario?.session, "report-check.cassette.json became a valid cassette — drop the ci.yml exclusion").toBeUndefined();
+    expect(c.cassetteVersion, "report-check.cassette.json is no longer below the read floor — update the ci.yml comment").toBeLessThan(
+      MIN_SUPPORTED_CASSETTE_VERSION,
+    );
     expect(c.fingerprint?.skillHash).toBe("sha256:synthetic-eval-fixture");
   });
 });

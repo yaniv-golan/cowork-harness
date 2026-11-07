@@ -2140,9 +2140,8 @@ export interface Fingerprint {
   skillSources?: string[]; // the local dirs that fed skillHash (for the replay recompute + diagnostics)
   skillScope?: string[]; // the skills the hash was scoped to (empty/absent = whole-tree); diagnostics
   sharedHash?: string; // shared-root hash for scoped cassettes; absent on whole-tree or non-plugin-root mounts
-  // Content fingerprint over the same file set as skillHash, used by `rehash` to prove content unchanged
-  // across a format bump. NOT algorithm-independent: it follows the same manifest transform skillHash does,
-  // so it cannot be compared across a hash-format epoch — the proof recomputes the LEGACY skillHash instead.
+  // Content fingerprint over the same file set as skillHash (eval/hillclimb compare arms by it). It follows
+  // the same manifest transform skillHash does, so it is only comparable within one hash format.
   contentSig?: string;
   // v5+: per-file manifest [relpath, contentSha] of the exact files feeding skillHash, so a staleness mismatch
   // names the EXACT changed/added/removed file instead of a bucket. Paths are ROOT-RELATIVE (no host path) and

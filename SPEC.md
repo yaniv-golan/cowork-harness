@@ -434,8 +434,8 @@ Every envelope, like the CLI's own output, is secret-scrubbed with the same set 
 
 - **`cassette.events`** (child→driver): the full assistant turn stream (text, tool_use, tool_result,
   decision requests, result).
-- **`cassette.controlOut`** (driver→child): the serialized decision responses. When present, a
-  `ReplayDecider` serves these back into the decision pipeline, populating `rec.questions`,
+- **`cassette.controlOut`** (driver→child): the serialized decision responses, required
+  (a cassette without it is refused at load, as re-recordable). A `ReplayDecider` serves these back into the decision pipeline, populating `rec.questions`,
   `rec.gateAnswers`, and `rec.gateDeliveries` exactly as in a live run.
 
 **Assertion evaluation on replay:**
@@ -447,7 +447,7 @@ Every envelope, like the CLI's own output, is secret-scrubbed with the same set 
   `result`, the verdict modifiers (`allow_permissive_auto_allow`, `allow_missing_capability`,
   `allow_l0_host_config_contamination`, `allow_stall`, `allow_max_turns`, `allow_undelivered_deliverables`,
   `allow_outputs_delete`, `allow_delete_in`),
-  and (when `controlOut` is present) `question_asked`, `question_option_count`,
+  and `question_asked`, `question_option_count`,
   `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
   `no_hook_blocked` (illustrative — see `ALWAYS_CONTENT_KEYS`/`QUESTION_GATE_KEYS` in `src/run/cassette.ts` for the authoritative
   set; this list is not re-verified exhaustive on every addition). `max_cost_usd`/`max_tokens` are evaluated against the *frozen recording's*
@@ -480,8 +480,8 @@ drift classes (`skill` / `shared-root`). All realize the gate as failing `assert
 `ok`/exit stay consistent). A cassette carrying no `fingerprint.skillHash` is unaffected — there was
 nothing to verify — and keeps replaying green.
 - **`question_asked` / `question_option_count` / `questions_count_max` / `gate_answers_delivered` / `gate_answer_count_min` /
-  `hook_blocked` / `no_hook_blocked`** additionally require `controlOut`. Without it, a loud
-  `::warning::` fires and these keys are excluded (not vacuously passed). The hook keys need
+  `hook_blocked` / `no_hook_blocked`** grade against the recorded `controlOut`; a decision in the events with no
+  recorded answer fails the replay as a truncated cassette (`replay_protocol_fidelity`). The hook keys need
   `controlOut` for a different reason than the question keys: a custom hook's block/allow decision is
   an opaque async reply recorded only in `control-out.jsonl`, not in the `events` stream, so it cannot
   be reconstructed without it. The authoritative list is `QUESTION_GATE_KEYS` in `src/run/cassette.ts`;
@@ -970,8 +970,7 @@ is never truncated by `process.exit` on a pipe.)
 question" outcome (the deferred `on_unanswered: surface` / `needs_input` Track 2). It is currently
 unused — reserving it now keeps a later addition additive rather than a renumbering of the burned
 `0`/`1`/`2`/`3` space. Exit-code space is **per-command**, not global (`status` uses `0`/`1`/`2`/`3`
-with its own meanings); this reservation applies only to the `run`/`skill` family. `rehash` does use `4`,
-for partial migration success (above) — a different command, so it does not consume this reservation.
+with its own meanings); this reservation applies only to the `run`/`skill` family.
 
 **`gates <dir>`:** one pass over a directory that does not exist, or any path that is not a directory,
 is a usage error (exit `2`); `--follow` waits for a directory that does not exist yet (the run creates it)
@@ -1063,14 +1062,9 @@ the loader rejects so the prompt-drift check cannot run, a cassette written by a
 one understands, or a per-file read error/crash — including a
 malformed/unreadable cassette, which is tallied there rather than as a `1` finding). A real finding
 always outranks a could-not-verify signal within the same run, so exit `1` wins if both occur.
-**`rehash` uses its own four-way split:** `0` all migrated (or nothing needed migrating) · **`4` PARTIAL —
-some migrated, some could not** · `1` nothing migrated and at least one could not · `2` usage. The partial
-code is distinct because the two failing shapes demand opposite responses — commit what migrated and budget
-a re-record for the rest, versus nothing here is salvageable — and while both were `1` a shell consumer
-reading only the exit code could not tell them apart (the JSON envelope always carried the split as
-`migrated`/`skipped`/`errors`). `4` rather than `3`: the code space is per-command, and `3`'s "could not
-verify" meaning is load-bearing on `verify-cassettes` — a migration that partly succeeded is not a failed
-verification.
+**`rehash` is a check:** `0` every cassette is current · `1` at least one needs a re-record (one this build
+refuses to read, or one whose scenario needs a newer stamp) · `2` usage. It rewrites nothing (`4`, partial
+migration, is no longer produced).
 **Collision warning:** the `run`/`skill` family's exit `3` means *boundary/integrity* (§11 above);
 `verify-cassettes`' exit `3` means *could not verify*. These are unrelated per-command meanings that
 happen to share a number — a CI script that branches on exit code across commands must not conflate
@@ -1265,8 +1259,8 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   recomputes `skillHash`/`contentSig` under a different algorithm and reports drift that is not there. The
   stamp therefore floors at the **hash-format epoch** (v12); the scenario-aware differential applies above
   that floor. A backwards-incompatible change to `fingerprint.skillHash` is a MAJOR bump — every stored
-  value changes, and digests from different formats are not comparable (`replay` reports
-  `unverifiable-skill`; `rehash` migrates without a re-record where it can prove the content unchanged).
+  value changes, and digests from different formats are not comparable (the read floor moves to the new
+  epoch, and a cassette below it is refused at load as re-recordable).
 
   It is not which recorder wrote it: `record` stamps `requiredVersionFor`, the value-aware minimum for that
   scenario, floored at the hash-format epoch. The value-aware part means the stamp reads a field's actual
@@ -1297,15 +1291,15 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   leg nests a complete single-prompt cassette, each host action its record) and no top-level `prompt`, so a v17
   reader fails its shape check rather than grading the first leg as the whole run. An `assert:` entry carrying `allow_max_turns`
   stamps **v19**: it acts on the replayed verdict with the frozen top-level `turnCap`, and a v18 reader rejects the key.
-  The minimum supported read version is **v9**
-  (`MIN_SUPPORTED_CASSETTE_VERSION`): a cassette below the floor is refused at load time with a
-  re-record error (a pre-1.0 decision — no compatibility is maintained for formats below v9, and
-  their schema files are no longer shipped; the retained schema files are `schema/cassette.v9.json`
-  through `schema/cassette.v19.json`). A cassette whose stamped version exceeds what a given build understands is
+  The minimum supported read version is **v12**
+  (`MIN_SUPPORTED_CASSETTE_VERSION`, the jcs1 hash epoch): a cassette below the floor, or one without
+  `controlOut` or `userVisibleRoots`, is refused at load time as re-recordable, naming its remedy
+  (`npx cowork-harness@4 rehash` for v10/v11, a re-record otherwise); schema files below v12 are no longer
+  shipped, and the retained schema files are `schema/cassette.v12.json` through `schema/cassette.v19.json`. A cassette whose stamped version exceeds what a given build understands is
   refused loudly by both `replay` and `verify-cassettes`; `replay` alone offers an opt-in override
   (`--best-effort-future-cassette`), which `verify-cassettes` does not accept — a verification gate has no
-  "read it anyway" path. `record --rerecord-stale`'s selection and `rehash`'s own version check accept a
-  future-stamped cassette without refusing, since neither produces a pass/fail verdict. Post-1.0, raising
+  "read it anyway" path. `record --rerecord-stale`'s selection accepts a future-stamped cassette without
+  refusing, since it produces no pass/fail verdict. Post-1.0, raising
   the read floor past a still-readable version is breaking.
 - **Control protocol** — `schema/protocol.v1.json` + the golden control-response vectors (§5).
   Removing or narrowing a described frame is breaking; **DESCRIBING A FRAME THE HARNESS ALREADY

@@ -124,15 +124,12 @@ jobs:
           # EXCLUSION, one entry, with its reason. test/evals/files/report-check.cassette.json is not a
           # recording: it is an eval ATTACHMENT, uploaded to the model under test by eval 7 to ask which
           # tier a cassette recorded at. It carries a hand-written `skillHash: sha256:synthetic-eval-fixture`
-          # and a pinned old baseline ON PURPOSE, and it has no `scenario.session`, so `readCassette`
-          # rejects its shape before the privacy scan can run. Measured, not assumed: adding a `session`
-          # field does NOT make it verifiable — it converts the exit 3 into an exit 1 on `[stale] baseline
-          # moved desktop-1.18286.0 -> current`, i.e. it would red this job on a fixture that is never
-          # re-recorded. `--skip-staleness` does not help either; the shape gate runs first.
-          # RESIDUAL, stated rather than papered over: this file is therefore NOT privacy-scanned by
-          # anything. It is 1.2KB and hand-authored, but that is a property of today's content, not a
-          # guarantee — if it is ever regenerated from a real recording it must be re-scanned by hand or
-          # given a `scenario.session` and a re-record.
+          # and a pinned old baseline ON PURPOSE, it has no `scenario.session`, and it is stamped v10, below
+          # the v12 read floor — so `readCassette` refuses it and `verify-cassettes` exits 3 (could not
+          # verify) whatever else is true. Adding a `session` field would not help: the floor refusal
+          # remains, and past it the old baseline is staleness. It IS privacy-scanned: `verify-cassettes`
+          # falls back to its scan-only reader on a refused file, and test/scan-read-boundary.test.ts pins
+          # that the scan runs on this file and finds nothing.
           EXCLUDE='^test/evals/files/report-check\.cassette\.json$'
 
           by_suffix=$(git ls-files '*.cassette.json' | sort)

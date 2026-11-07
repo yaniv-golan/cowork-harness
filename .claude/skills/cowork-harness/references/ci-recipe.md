@@ -188,7 +188,7 @@ The split is not just about tokens — it decides **where each lane can run**:
   `max_cost_usd`, `max_tokens`, `tool_calls_max`, `result`, and the verdict modifiers
   `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_host_config_contamination` /
   `allow_stall` (no-op passes); plus the gate keys `question_asked` / `question_options` /
-  `question_context` / `question_option_count` / `questions_count_max` / `gate_answers_delivered` **if** the cassette has `controlOut`, and the manifest keys
+  `question_context` / `question_option_count` / `questions_count_max` / `gate_answers_delivered`, and the manifest keys
   (`file_exists` / `user_visible_artifact` / `artifact_json` / `artifact_text`) **if** it carries an artifact
   manifest. `file_absent` is in neither class — it is live/verify-run only.
   **That list is illustrative, not the authoritative set** — more keys are replay-checkable than fit a
@@ -199,7 +199,7 @@ The split is not just about tokens — it decides **where each lane can run**:
   ```
 
   It emits `{key, description}` — there is no structured replay-class field to filter on; the
-  live-only / manifest / `controlOut` preconditions are stated in each key's `description` prose and,
+  live-only / manifest preconditions are stated in each key's `description` prose and,
   in full, in the catalog's replay-class tables in
   [`references/scenario-schema.md`](./scenario-schema.md).
 
@@ -252,8 +252,7 @@ cowork-harness replay cassettes/my-test.cassette.json  # token-free re-evaluatio
 cowork-harness replay cassettes/                   # replay every *.cassette.json in the committed dir
 ```
 
-Re-record whenever the protocol or your scenario's expected content changes. An old cassette without
-`controlOut` excludes the gate keys (with a loud warning) — re-record to enable them. `record` **refuses
+Re-record whenever the protocol or your scenario's expected content changes. `record` **refuses
 to freeze a failing live run** into a cassette (pass `--allow-failing` to override) — a committed red
 cassette is a latent false-signal. An `--allow-failing` recording of a red run exits 0 with `ok: true`:
 `record`'s `ok` means a cassette was written, and the run's own verdict is `results[0].verdict.pass`
@@ -560,7 +559,7 @@ moved — and `unverifiable-fixture`, a `workspace_fixture` whose signature cann
 | `skill` / `shared-root` | the skill source the assertions validate drifted | **high** (assertions may validate dead code) |
 | `format` | the git/raw file-set mode or agent-scope differs from the recording | re-record under the same setting (waivable) |
 | `unverifiable-baseline` | the latest baseline couldn't be loaded | couldn't verify (env, not skill) |
-| `unverifiable-skill` | skill dirs unresolvable, **or** the cassette predates the hash-format epoch (v12) so its digest is not comparable | couldn't verify the skill. **Fails a bare `replay`.** For the epoch case try `rehash` first — it migrates without a re-record where it can prove the content unchanged (`rehash <file> --session <s.yaml>` if the cassette moved) |
+| `unverifiable-skill` | skill dirs unresolvable | couldn't verify the skill. **Fails a bare `replay`.** Point at a moved cassette's session with `--session <s.yaml>` |
 | `resolved-tier` | a `fidelity: cowork` cassette's recorded `effectiveFidelity` no longer matches what the baseline resolves to today (the host-loop gate flipped) | **high** (the recording exercises the wrong tier) |
 | `unverifiable-tier` | tier check couldn't run for a `fidelity: cowork` cassette (no recorded `effectiveFidelity`, or its pinned baseline failed to load) | couldn't verify the tier — re-record |
 | `prompt-assets` | the baseline's committed prompt assets changed since record under the same appVersion | re-record (warns; `--strict` fails) |

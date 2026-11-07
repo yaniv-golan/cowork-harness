@@ -29,8 +29,7 @@ authorable). Reach for this list when debugging a run's behavior, that one while
    reply, and `--decider-cmd` via a JSON-array reply — all deliver the same `", "`-joined wire shape.
    Free-text "Other" via `answer:`. Do NOT hand-write a multiSelect reply as a bare comma-joined
    string — send an array; a scalar is treated as one selection.) `question_asked` / `question_options` / `question_context` / `question_option_count` /
-   `questions_count_max` / `gate_answers_delivered` only evaluate on replay **with a `controlOut` cassette** — re-record an
-   old cassette or they're excluded (loudly), not vacuously passed. `gate_answers_delivered` *fails*
+   `questions_count_max` / `gate_answers_delivered` grade on replay against the recorded `controlOut`. `gate_answers_delivered` *fails*
    on unobserved delivery (absence of evidence is failure, not neutral).
 
 3. **A multi-key `assert:` item is an AND.** A single list item with more than one key passes iff
@@ -238,15 +237,14 @@ authorable). Reach for this list when debugging a run's behavior, that one while
     (couldn't check — also re-record). Both are `fidelity: cowork`-only; an explicit-tier scenario never
     produces them. (Details: [`docs/cassette.md`](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cassette.md) § tier staleness — repo-only.)
 
-22. **`lint` floods CI with INFO advisories that don't apply to you.** *Why:* two rules —
-    `manifest-needs-snapshot` and `gate-needs-controlout` — fire on the mere presence of manifest/gate
-    assertion keys. The linter is **static** until you opt in to cassette evidence. With committed
+22. **`lint` floods CI with INFO advisories that don't apply to you.** *Why:* `manifest-needs-snapshot`
+    fires on the mere presence of manifest assertion keys. The linter is **static** until you opt in to cassette evidence. With committed
     recordings, pass `lint --cassette-dir <dir>` (or one cassette file): it scans the same `*.cassette.json`
     shape as replay and verify-cassettes, resolves each exact `scenarioSource` relative to its cassette,
     and suppresses an advisory only when **all** matching cassettes carry the evidence the replay lane
     needs. A malformed, wrong-shaped, unsupported-version, or provenance-less cassette is reported as INFO
     and keeps the advisory visible — even beside a healthy sibling. The two dedicated diff assertions also
-    require their respective `preRunPaths` / `preRunHashes` baselines, and a non-empty `controlOut` /
+    require their respective `preRunPaths` / `preRunHashes` baselines, and an
     artifact manifest is required where replay needs it. For a strict CI gate that keeps actionable INFO
     rules visible while suppressing only proven replay noise, use `lint --strict --min-severity INFO
     --cassette-dir <dir>`. Without the opt-in path, use `lint --min-severity WARN` in CI (≥1.11.0) to hide

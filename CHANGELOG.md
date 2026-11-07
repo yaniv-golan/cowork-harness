@@ -59,6 +59,28 @@ All notable changes to this project are documented here. The format is based on
   `COWORK_LIVE_DOTENV`, then `~/.cowork-harness-token`, then the repository's `.env`. Before, two suites read the
   `.env` and only one read `COWORK_LIVE_DOTENV`, so the others could skip on a machine that had a token.
 - **CI's Node 22 floor job names what keeps the test runner alive after the run, and logs per-file test times.**
+- **Breaking: `replay` grades every gate key against the recorded `controlOut`.** `question_*`, `gate_*`,
+  `hook_blocked`/`no_hook_blocked` and the path-denial keys are always content assertions now; before, a cassette
+  without `controlOut` dropped them with a warning. A decision in the events with no recorded answer (an unpaired
+  `hook_callback`, or a question or permission with no response) fails the replay as a truncated cassette.
+- **Breaking: `rehash` no longer migrates; it checks each cassette is current.** It reports each one as current or
+  as needing a re-record, with the read refusal and its remedy, and rewrites nothing. It exits `0` (all current) or
+  `1`; the partial-migration `4` is gone. `--dry-run` and `--session` are still accepted and change nothing; the JSON
+  payload keeps `migrated` (always `0`).
+- **`lint` no longer reports `gate-needs-controlout`**: every cassette this build reads carries `controlOut`.
+
+### Removed
+
+- **Breaking: cassettes below v12, or without `controlOut` or `userVisibleRoots`, are no longer read.** `replay`
+  refuses one (exit 2) and `verify-cassettes` reports it as could-not-verify (exit 3), naming the remedy:
+  for v10/v11, run `npx cowork-harness@4 rehash <dir/>` on it, or re-record it; for v9 and below, or a missing
+  field, re-record it. `record <dir/> --rerecord-stale` picks up every such cassette and re-records it from the
+  scenario file it names; with no scenario file on disk it fails naming the `record <scenario.yaml> --out <path>`
+  to run, since there is no readable embedded snapshot to fall back on.
+- **The pre-v12 skill-hash algorithm.** Digests are computed only the jcs1 way; nothing this build reads carries
+  the older ones.
+- **`schema/cassette.v9.json`, `cassette.v10.json` and `cassette.v11.json`.** A cassette whose `$schema` names one
+  of them is below the read floor; its `$schema` URL now returns 404.
 
 ## [4.15.0] - 2026-11-06
 

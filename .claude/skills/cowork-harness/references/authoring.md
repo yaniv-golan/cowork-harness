@@ -294,7 +294,6 @@ cowork-harness lint scenarios/*.yaml
 | `artifact-json-match` | ERROR | an `artifact_json` glob `artifact` (with `*` or `?`) with no `match` or ending in `/`, or a literal one that sets `match` |
 | `fidelity-missing` | ERROR | no `fidelity:` (required since 4.0.0) |
 | `file-absent-contradiction` | ERROR | one path under both `file_exists` and `file_absent` |
-| `gate-needs-controlout` | INFO | gate assertions, which evaluate on replay only when the cassette has `controlOut` |
 | `hook-output-control-char` | ERROR | a `hook_output_contains` / `hook_output_not_contains` `text` or `matches` holding a control character (a double-quoted YAML `\b` is a backspace) — the harness refuses it at load |
 | `host-path-assert-cowork` | WARN | `transcript_no_host_path` on `cowork` — it fails by design if the tier resolves to hostloop |
 | `host-path-assert-tier` | ERROR | `transcript_no_host_path` on `hostloop` / `protocol`, where it fails by design |
@@ -386,6 +385,6 @@ decided when the cassette is recorded. A key that changes what a verdict means (
 the cassette's version stamp, so the older `replay` / `verify-cassettes` refuses it as too new instead of
 evaluating it (`replay --best-effort-future-cassette` overrides that and names the key). For `lane: remote`
 that holds for a cassette recorded on ≥ 1.16.0 (stamped v11); one recorded by 1.14.0 or 1.15.0 is stamped
-v10, a pre-`lane` CLI ignores the key there, and `rehash` re-stamps it. A meaning-neutral key leaves the
+v10, and a pre-`lane` CLI ignores the key there. A meaning-neutral key leaves the
 stamp alone and is ignored by design. Full split:
 [docs/scenario.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/scenario.md#unknown-keys-the-loader-is-strict-lint-is-lenient).

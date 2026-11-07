@@ -43,8 +43,8 @@ The fastest path to CI: a composite action wrapping the token-free lane, with a 
 > **To hold a major, pin the input** — `version: "^4"` for the current major, `"^3"`/`"^2"`/`"^1"` to stay on an
 > older one — not the `uses:` ref.
 >
-> Upgrading across the 1.x → 2.x boundary this way means the hash-format epoch: cassettes recorded before
-> format v12 need `cowork-harness rehash <dir/>` (no re-record). See the 2.0.0 entry in
+> Upgrading to 5.x this way means the v12 read floor: a cassette recorded before format v12 is refused until
+> `npx cowork-harness@4 rehash <dir/>` migrates it (v10/v11) or it is re-recorded. See the 5.0.0 entry in
 > [CHANGELOG.md](../CHANGELOG.md).
 
 ```yaml

@@ -18,10 +18,9 @@ a paid live re-record? Walk this tree — the answer is usually no:
    `cowork-harness replay <cassette> --assert-from <scenario.yaml>`. Token-free, no re-record.
    If the recording genuinely lacks the telemetry a key needs (very old cassettes), the key fails
    **loud** as `evidence-unavailable` — that is correct behavior, not a bug; only then re-record.
-2. **Gate keys** (`question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `gates_all_scripted`) on a cassette
-   **with `controlOut`** (any modern recording) → same token-free `--assert-from` path.
-3. **Gate keys** on a **pre-`controlOut`** cassette → one re-record unlocks gate asserts for that
-   cassette permanently.
+2. **Gate keys** (`question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `gates_all_scripted`)
+   → same token-free `--assert-from` path.
+3. A cassette `replay` refuses (below v12, or no `controlOut`) → re-record it once (`record <dir/> --rerecord-stale`).
 4. **Filesystem / egress keys** (`file_exists` without an artifact manifest, `file_absent` — live-only
    whatever the cassette carries — `egress_allowed`,
    `egress_denied`, `no_delete_in_outputs`) → live lane **by design**; replay skips them with a
@@ -66,7 +65,7 @@ Top-level fields of a `*.cassette.json` (schema [`schema/cassette.v19.json`](htt
 | `scenario` | The embedded scenario snapshot at record time |
 | `events` | The recorded agent event stream (the replay source) |
 | `legs`, `verdict` | Multi-leg form only (a `legs:` scenario, v18), in place of `events`: `legs[]` holds one entry per leg in order — a prompt leg nests its own complete single-prompt cassette under `cassette`, a host action its record under `action`, a leg after a failing one `status: "skipped"` — and `verdict.pass` is the scenario verdict at record time. `replay` and `verify-cassettes` read this form; other cassette readers refuse it by name |
-| `controlOut` | Driver→agent control responses — presence unlocks gate asserts on replay |
+| `controlOut` | Driver→agent control responses — gate asserts grade against them on replay |
 | `effectiveFidelity` | The tier the live record actually resolved to (the drift-audit key above) |
 | `artifacts` | Output-file manifest (paths + hashes + small inlined bodies) — unlocks `file_exists`/`artifact_json` on replay. Each entry carries `truncationReason` (`"size"`\|`"readonly"`\|`"unreadable"`\|`"input"`\|`"fixture"`, v8+; `"fixture"` v14 — an untouched binary `workspace_fixture` file, or an untouched one staging wrote session paths into, recorded hash-only) naming WHY a body is absent, and — v10+ — `linkKind` (`"symlink"`\|`"hardlink"`) for a body-less link entry, never dereferenced. |
 | `fingerprint` | Skill/baseline staleness tripwire |
@@ -142,7 +141,7 @@ have:
    before spending, and `lint` reports `assert-contradiction`. Drop `gate_answers_delivered`
    alongside it too — it asserts nothing when no gate fires.
 5. **Replay-class note:** `max_turns` / `tool_calls_max` / `dispatch_count_max` re-evaluate
-   token-free on replay; `questions_count_max` needs `controlOut` (Recipe 1's tree applies).
+   token-free on replay, and so does `questions_count_max`.
    `max_cost_usd` / `max_tokens` on replay assert the FROZEN recording's spend — near-zero signal
    as a regression gate; if you need a cost gate, put it on the live lane via `stats` (history) or
    `--max-budget-usd` (a pre-flight refusal before the run spends).

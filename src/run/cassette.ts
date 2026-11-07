@@ -3923,6 +3923,10 @@ export function defaultCassettePath(scenarioName: string): string {
  * it was deliberately tightened for the hash-format epoch. This function does NOT relax it; it is a
  * separate, narrower door for the one job that never needed document validity in the first place.
  *
+ * Deliberately LENIENT about the read floor and the replay contract too: a cassette below v12, or one without
+ * `controlOut`/`userVisibleRoots`, is refused by `readCassette` but still scanned here — an old file is as
+ * likely to carry a leak as a new one.
+ *
  * The only hard requirement is `events: string[]`. Everything else is best-effort and dropped when it is
  * not the expected shape, because a partially-corrupt document must still be scannable — that is the
  * entire point. Two consequences worth being explicit about:

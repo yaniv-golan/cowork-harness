@@ -748,9 +748,8 @@ above has a `description` there, including `subagents` and the top-level `fileTo
 The matching assert keys (see [scenario.md](./scenario.md)) turn this telemetry into
 pass/fail: `subagent_dispatched` (matches `dispatchAgentType`/`resolvedAgentType`/description),
 `subagent_dispatch_healthy` (per-dispatch delivered output + no VM-path attempts, host-loop only),
-`no_vm_path_file_op` (content-class, re-derived from the frozen `tool_use` stream — replay-checkable
-without `controlOut`), and `path_denied` / `vm_path_denied` (decision-level — need `controlOut` on
-replay).
+`no_vm_path_file_op` (content-class, re-derived from the frozen `tool_use` stream — replay-checkable), and
+`path_denied` / `vm_path_denied` (decision-level, graded against the recorded `controlOut`).
 
 ### `subagents[].webSearches` — grounding a "researched" claim, including a nested one
 
