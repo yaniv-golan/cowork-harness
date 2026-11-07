@@ -64,7 +64,7 @@ import { parseScenarioFile, loadRunnableScenario } from "../run/execute.js";
 import type { Scenario } from "../types.js";
 import type { FlowSnapshot } from "./schema-check.js";
 
-import { rethrowIfExit } from "../run/exit.js";
+import { exitWith, rethrowIfExit } from "../run/exit.js";
 const CMD = "hillclimb";
 
 type JobFlags = { label?: string; ablateSkill?: boolean };
@@ -368,7 +368,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
   const usage = (m: string, hint?: string): never => fail(CMD, "usage", scrub(m, secrets), hint, json);
   if (sub === undefined || sub === "--help" || sub === "-h") {
     writeAllSync(2, HILLCLIMB_USAGE + "\n");
-    return process.exit(sub === undefined ? 2 : 0);
+    return exitWith(sub === undefined ? 2 : 0);
   }
 
   if (sub === "run") {
@@ -381,7 +381,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
     }
     if (a.help) {
       writeAllSync(2, HILLCLIMB_USAGE + "\n");
-      return process.exit(0);
+      return exitWith(0);
     }
     for (const g of a.globals) applyCommandGlobal(CMD, g.flag, g.value, json);
     const r = deps.runnerFor({
@@ -432,7 +432,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         },
       );
     if (json) writeAllSync(1, scrub(jsonPayloadEnvelope(`${CMD} run`, outcome.exitCode === 0, payload), secrets) + "\n");
-    return process.exit(outcome.exitCode);
+    return exitWith(outcome.exitCode);
   }
 
   if (sub === "check" || sub === "state-template") {
@@ -452,7 +452,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
     }
     if (p.flags["--help"] === true) {
       writeAllSync(2, (sub === "check" ? HILLCLIMB_CHECK_USAGE : HILLCLIMB_STATE_TEMPLATE_USAGE) + "\n");
-      return process.exit(0);
+      return exitWith(0);
     }
     applyParsedCommandGlobals(CMD, p, json);
     const flowGiven = p.options["--flow"];
@@ -472,7 +472,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
           for (const w of c.warnings) err(w, secrets);
           err(`${c.report.errors} error(s), ${c.report.notes} note(s) — ${c.report.reading}. ${c.report.disclaimer}`, secrets);
         }
-        return process.exit(c.exitCode);
+        return exitWith(c.exitCode);
       }
       if (p.positionals.length !== 1)
         return usage(`hillclimb state-template takes exactly one scenario file or directory`, HILLCLIMB_STATE_TEMPLATE_USAGE);
@@ -515,7 +515,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
           secrets,
         );
       }
-      return process.exit(0);
+      return exitWith(0);
     } catch (e) {
       rethrowIfExit(e);
       if (e instanceof UsageError) return usage(e.message, e.hint);
@@ -543,7 +543,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
     }
     if (p.flags["--help"] === true) {
       writeAllSync(2, HILLCLIMB_REGRADE_USAGE + "\n");
-      return process.exit(0);
+      return exitWith(0);
     }
     applyParsedCommandGlobals(CMD, p, json);
     if (p.positionals.length !== 1) return usage(`hillclimb regrade takes exactly one scenario file or directory`, HILLCLIMB_REGRADE_USAGE);
@@ -590,7 +590,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         },
       );
     if (json) writeAllSync(1, scrub(jsonPayloadEnvelope(`${CMD} regrade`, out.exitCode === 0, payload), secrets) + "\n");
-    return process.exit(out.exitCode);
+    return exitWith(out.exitCode);
   }
 
   if (sub === "freeze-ref") {
@@ -612,7 +612,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
     }
     if (p.flags["--help"] === true) {
       writeAllSync(2, HILLCLIMB_FREEZE_REF_USAGE + "\n");
-      return process.exit(0);
+      return exitWith(0);
     }
     applyParsedCommandGlobals(CMD, p, json);
     const variant = p.options["--variant"];
@@ -634,7 +634,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         for (const c of r.exists) err(`${c}: already frozen`, secrets);
         for (const f of r.refused) err(`refused ${f.case}: ${f.why}`, secrets);
       }
-      return process.exit(r.exitCode);
+      return exitWith(r.exitCode);
     } catch (e) {
       rethrowIfExit(e);
       if (e instanceof UsageError) return usage(e.message, e.hint);

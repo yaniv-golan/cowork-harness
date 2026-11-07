@@ -51,6 +51,8 @@
  * external CDN/framework bundle jsdom never loaded, or it has no interactive controls to click).
  */
 
+import { ExitRequested } from "./exit.js";
+
 // ------------------------------------------------------------------------------------------------- //
 // Minimal ambient typing for the optional `jsdom` devDependency.
 // ------------------------------------------------------------------------------------------------- //
@@ -615,10 +617,12 @@ async function runOnce(jsdomModule: JsdomModule, html: string, mode: "ok" | "fai
   // the test runner) is RE-THROWN so it stays fail-loud instead of being swallowed and mislabeled.
   const crashes: string[] = [];
   const onUncaught = (e: unknown) => {
+    if (e instanceof ExitRequested) return; // a requested exit: the CLI's process-level handler owns it
     if (isClearlyHarnessException(e)) throw e; // not the page under test — do not mask
     crashes.push(errMessage(e).slice(0, 200));
   };
   const onRejection = (reason: unknown) => {
+    if (reason instanceof ExitRequested) return; // a requested exit: the CLI's process-level handler owns it
     if (isClearlyHarnessException(reason)) throw reason;
     crashes.push(`unhandled rejection: ${errMessage(reason).slice(0, 200)}`);
   };

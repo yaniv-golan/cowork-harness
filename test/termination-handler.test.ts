@@ -15,6 +15,7 @@ import type { Readable } from "node:stream";
 
 const POSIX = process.platform !== "win32";
 const TERMINATION = JSON.stringify(resolve("src/termination.ts"));
+const EXIT = JSON.stringify(resolve("src/run/exit.ts"));
 const SIDECAR = JSON.stringify(resolve("src/egress/sidecar.ts"));
 
 async function runScript(
@@ -235,6 +236,22 @@ describe.runIf(POSIX)("termination handler", () => {
       registerAgent(() => childProcessAgent(child));
       setTimeout(() => process.kill(process.pid, "SIGINT"), 300);
       setTimeout(() => { child.kill("SIGKILL"); process.exit(1); }, 600);
+      setTimeout(() => {}, 30_000);
+    `);
+    expect(r.status, r.stderr).toBe(130);
+  });
+
+  it("the exit status stays 128+signo when normal flow asks to exit (exitWith) during the grace period", async () => {
+    const r = await runScript(`
+      import { installTerminationHandler, registerAgent, childProcessAgent } from ${TERMINATION};
+      import { exitWith, installExitHandlers } from ${EXIT};
+      import { spawn } from "node:child_process";
+      installTerminationHandler();
+      installExitHandlers({ sweep() {}, warn: (l) => process.stderr.write(l) });
+      const child = spawn("sh", ["-c", "trap '' TERM; while :; do sleep 1; done"], { stdio: ["ignore", "ignore", "ignore", 3] });
+      registerAgent(() => childProcessAgent(child));
+      setTimeout(() => process.kill(process.pid, "SIGINT"), 300);
+      setTimeout(() => { child.kill("SIGKILL"); exitWith(1); }, 600);
       setTimeout(() => {}, 30_000);
     `);
     expect(r.status, r.stderr).toBe(130);

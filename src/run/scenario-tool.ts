@@ -8,7 +8,7 @@ import { writeAllSync } from "../io.js";
 import { LINT_VALUE_FLAGS, lintPrepass, type LintFinding } from "./lint-load.js";
 import { stripCommandGlobals } from "./command-globals.js";
 
-import { rethrowIfExit } from "./exit.js";
+import { exitWith, rethrowIfExit } from "./exit.js";
 // Synchronous fd write (match envelope.ts/cli.ts/doctor.ts): writeAllSync retries EAGAIN and loops on
 // short writes so the whole payload lands before process.exit on a pipe (see src/io.ts).
 const out = (s: string) => writeAllSync(1, s + "\n");
@@ -163,7 +163,7 @@ function runLintLike(subcommand: "lint" | "lint-skill", args: string[], prepass:
   // process.exit() skips `finally`, so every exit below is sequenced as: status → cleanup → exit.
   const exit = (status: number): never => {
     cleanup(handoffDir);
-    return process.exit(status);
+    return exitWith(status);
   };
 
   // `--help` is not the command's output: python's help goes to stderr in BOTH modes (like every other
@@ -331,6 +331,6 @@ export function cmdScaffoldFlagBuilt(args: string[]): never {
     );
   }
   const r = spawnScenarioScript("scaffold", pyArgs, scenarioScriptEnv(), false);
-  if (!r) return process.exit(127);
-  return process.exit(r.status ?? 1);
+  if (!r) return exitWith(127);
+  return exitWith(r.status ?? 1);
 }

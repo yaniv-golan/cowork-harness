@@ -17,7 +17,7 @@ import {
 } from "./pool.js";
 import { DEFAULT_RETRIEVAL } from "./retrieval.js";
 
-import { rethrowIfExit } from "../run/exit.js";
+import { exitWith, rethrowIfExit } from "../run/exit.js";
 const CMD = "search-pool";
 
 export const SEARCH_POOL_USAGE =
@@ -123,7 +123,7 @@ export async function cmdSearchPool(args: string[]): Promise<never> {
       if (json)
         writeAllSync(1, scrub(jsonPayloadEnvelope(CMD, true, { dir, manifest: built.manifest, summary: built.summary }), secrets) + "\n");
       else for (const line of textSummary(built, dir)) writeAllSync(2, scrub(line, secrets) + "\n");
-      return process.exit(0);
+      return exitWith(0);
     }
     if (sub === "export") {
       const out = p.options["--out"];
@@ -139,7 +139,7 @@ export async function cmdSearchPool(args: string[]): Promise<never> {
       exportPool(resolvePoolDir(a1), out);
       if (json) writeAllSync(1, scrub(jsonPayloadEnvelope(CMD, true, { out }), secrets) + "\n");
       else writeAllSync(2, scrub(`wrote ${out}`, secrets) + "\n");
-      return process.exit(0);
+      return exitWith(0);
     }
     if (sub === "import") {
       if (!a1 || !a2 || extra.length) return usage("search-pool import takes <file> <pool>");
@@ -155,7 +155,7 @@ export async function cmdSearchPool(args: string[]): Promise<never> {
       const m = importPool(a1, dir, secrets);
       if (json) writeAllSync(1, scrub(jsonPayloadEnvelope(CMD, true, { dir, manifest: m }), secrets) + "\n");
       else writeAllSync(2, scrub(`wrote ${dir}: pool ${m.poolId}@${m.sha256.slice(0, 8)}, ${m.counts.records} record(s)`, secrets) + "\n");
-      return process.exit(0);
+      return exitWith(0);
     }
     return usage(sub ? `unknown search-pool subcommand: ${sub}` : "search-pool needs a subcommand");
   } catch (e) {

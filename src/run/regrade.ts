@@ -46,7 +46,7 @@ import { assertContextFromRunDir } from "./verify-context.js";
 import { isConcreteModelId } from "./model-provenance.js";
 import { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
 
-import { rethrowIfExit } from "./exit.js";
+import { exitWith, rethrowIfExit } from "./exit.js";
 export { REGRADE_BOOLEAN_FLAGS, REGRADE_USAGE, REGRADE_VALUE_FLAGS } from "./regrade-usage.js";
 
 const CMD = "regrade";
@@ -1586,7 +1586,7 @@ export async function cmdRegrade(args: string[]): Promise<never> {
   if (!outcome.ok) {
     if (json) {
       writeAllSync(1, regradeErrorEnvelope(outcome, secrets) + "\n");
-      return process.exit(2);
+      return exitWith(2);
     }
     // After a failed write, what was graded is still reported before the error.
     if (outcome.completed?.length)
@@ -1595,5 +1595,5 @@ export async function cmdRegrade(args: string[]): Promise<never> {
   }
   if (json) writeAllSync(1, regradeEnvelope(outcome, secrets) + "\n");
   else for (const line of regradeTextReport(outcome, secrets)) writeAllSync(2, line + "\n");
-  return process.exit(outcome.exitCode);
+  return exitWith(outcome.exitCode);
 }

@@ -33,7 +33,7 @@ import { PER_TURN_ARTIFACTS, classifyRunDir, listTurns, turnArtifactPath, type P
 import { parseArgs } from "../cli-args.js";
 import { runsWriteRoot } from "./trace-view.js";
 
-import { rethrowIfExit } from "./exit.js";
+import { exitWith, rethrowIfExit } from "./exit.js";
 /** One planned filesystem operation. A `split` is write+write+delete, which is why done-ness for it is
  *  defined as "source is gone" rather than "destination exists" — see the recovery contract. */
 export type MigrationOp =
@@ -928,12 +928,12 @@ export function cmdMigrateRunDir(args: string[]): void {
   } catch (e) {
     rethrowIfExit(e);
     out((e as Error).message);
-    return process.exit(2);
+    return exitWith(2);
   }
   applyParsedCommandGlobals("migrate-run-dir", p, false);
   if (p.positionals.length > 1) {
     out(`migrate-run-dir takes an optional <runs-dir> (got ${p.positionals.length}: ${p.positionals.join(", ")})`);
-    return process.exit(2);
+    return exitWith(2);
   }
 
   const write = p.flags["--write"] ?? false;
@@ -942,13 +942,13 @@ export function cmdMigrateRunDir(args: string[]): void {
   const runsRoot = p.positionals[0] ?? runsWriteRoot();
   if (!existsSync(runsRoot)) {
     out(`✓ migrate-run-dir: ${runsRoot} does not exist — nothing to migrate`);
-    return process.exit(0);
+    return exitWith(0);
   }
 
   // An unknown scenario must not look like a clean no-op: "0 to migrate" is what success also prints.
   if (scenario !== undefined && !existsSync(join(runsRoot, scenario))) {
     out(`migrate-run-dir: no scenario "${scenario}" under ${runsRoot}`);
-    return process.exit(2);
+    return exitWith(2);
   }
 
   const r = migrateRunsRoot(runsRoot, {
@@ -973,5 +973,5 @@ export function cmdMigrateRunDir(args: string[]): void {
   if (write && (r.migrated > 0 || r.recovered > 0)) out(`\nNow rebuild the index: cowork-harness stats --reindex`);
 
   // Non-zero when anything was refused: a refusal is unfinished work, and a CI caller must see it.
-  return process.exit(r.refused.length > 0 ? 1 : 0);
+  return exitWith(r.refused.length > 0 ? 1 : 0);
 }

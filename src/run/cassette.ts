@@ -198,7 +198,7 @@ import {
 } from "../scan.js";
 import { parse as parseYaml, YAMLParseError } from "yaml";
 
-import { rethrowIfExit } from "./exit.js";
+import { exitWith, rethrowIfExit } from "./exit.js";
 // Synchronous fd writes (match cli.ts): a `process.stdout.write` + `process.exit()` pair truncates the
 // machine envelope on a PIPE (fd 1 goes non-blocking once the stream is touched; the async tail is dropped
 // at exit past the ~64KB buffer). writeAllSync retries EAGAIN and loops on short writes (see src/io.ts) —
@@ -5168,7 +5168,7 @@ export async function cmdRecord(args: string[]) {
         log(
           `record --dry-run: ${target} is a valid multi-leg scenario; it would be recorded to ${p.options["--out"] ?? defaultCassettePath(loadMultiLegScenario(target).name)}`,
         );
-      return process.exit(0);
+      return exitWith(0);
     }
     try {
       const { outcome, cassettePath } = await recordMultiLeg(target, {
@@ -5194,7 +5194,7 @@ export async function cmdRecord(args: string[]) {
           }),
         );
       else log(`${sr.verdict.pass ? "✓" : "✗"} recorded ${sr.legs.length}-leg scenario → ${cassettePath}`);
-      return process.exit(0);
+      return exitWith(0);
     } catch (e) {
       rethrowIfExit(e);
       if (e instanceof RecordPostRunRefusalError || e instanceof UsageError)
@@ -5514,7 +5514,7 @@ export async function cmdRecord(args: string[]) {
           else log(`record --dry-run: no scenarios discovered under ${target}`);
           // Exit 2 for "nothing discovered at all" — matches the non-dry-run batch path. The JSON payload
           // envelope is the one document on stdout; this is a status-only exit, so no error envelope here.
-          return process.exit(2); // cli-error-envelope-exempt: dry-run payload envelope emitted just above
+          return exitWith(2); // cli-error-envelope-exempt: dry-run payload envelope emitted just above
         }
         // Broken files found but no valid scenarios — exit 1 (broken, not nothing).
         // The SUMMARY belongs here too, not only on the real arm. This is the arm CI runs (the directory
@@ -5525,7 +5525,7 @@ export async function cmdRecord(args: string[]) {
         // preview.
         if (asJson) emitPayload();
         else log(`✗ record --dry-run: no loadable scenarios under ${target} — all ${disc.broken.length} file(s) failed to load`);
-        return process.exit(1); // cli-error-envelope-exempt: dry-run payload envelope emitted just above
+        return exitWith(1); // cli-error-envelope-exempt: dry-run payload envelope emitted just above
       }
       if (!asJson && !quiet) {
         log(`record --dry-run: ${disc.scenarios.length} scenario(s) in ${target}`);
@@ -5560,7 +5560,7 @@ export async function cmdRecord(args: string[]) {
       if (asJson) emitPayload();
       // Exit 1 when there are broken files (they won't run but the user should know) or refused ones
       // (they parse, but no run could satisfy them — the real `record` would reject each in turn).
-      return process.exit(disc.broken.length > 0 || refusals.length > 0 ? 1 : 0);
+      return exitWith(disc.broken.length > 0 || refusals.length > 0 ? 1 : 0);
     }
 
     // Single scenario dry-run.
@@ -5666,7 +5666,7 @@ export async function cmdRecord(args: string[]) {
       log(tokenLine);
       log(agentLine);
     }
-    return process.exit(0);
+    return exitWith(0);
   }
 
   // "Does this file load?" is answered BEFORE credentials, budget, or the decider channel — the same
@@ -5749,7 +5749,7 @@ export async function cmdRecord(args: string[]) {
     if (stale.length === 0) {
       log(`✓ record --rerecord-stale: all cassettes under ${target} are fresh — nothing to re-record`);
       if (asJson) out(recordBatchEnvelope(true, { target, rerecordStale: true, items: [] }));
-      return process.exit(0);
+      return exitWith(0);
     }
     const staleTotal = stale.length;
     // Budget pre-flight for the whole re-record batch, BEFORE the first spawn — a refusal that fires
@@ -5927,7 +5927,7 @@ export async function cmdRecord(args: string[]) {
     if (staleSummary) warn(staleSummary + "\n");
     // The one JSON document, written last — after every gate that can still refuse — right before the exit.
     if (asJson) out(recordBatchEnvelope(failures === 0, { target, rerecordStale: true, items: staleItems }));
-    return process.exit(failures > 0 ? 1 : 0);
+    return exitWith(failures > 0 ? 1 : 0);
   }
 
   // batch a directory of scenarios.
@@ -6088,7 +6088,7 @@ export async function cmdRecord(args: string[]) {
           skipped: disc.skipped,
         }),
       );
-    return process.exit(failures > 0 ? 1 : 0);
+    return exitWith(failures > 0 ? 1 : 0);
   }
 
   // Single scenario file. Budget pre-flight BEFORE the spawn — identical semantics to `run`'s single-run
@@ -7985,7 +7985,7 @@ export async function cmdReplay(args: string[]) {
     warn(`::notice:: [replay] ${file} — ${note.replace(new RegExp(`^${kind}:\\s*`), "")} [${kind}]\n`);
 
   if (json) out(jsonEnvelope("replay", results, multiLegs.length ? { multiLegs } : {}));
-  return process.exit(worst);
+  return exitWith(worst);
 }
 
 type MarginKind = "max" | "min";
@@ -8670,7 +8670,7 @@ export async function cmdVerifyCassettes(args: string[]) {
       }
     }
   }
-  return process.exit(exitCode);
+  return exitWith(exitCode);
 }
 
 /** `cowork-harness rehash <dir/> [--dry-run] [--output-format text|json]`
@@ -8754,7 +8754,7 @@ export async function cmdRehash(args: string[]): Promise<void> {
   if (files.length === 0) {
     if (asJson) out(jsonPayloadEnvelope("rehash", true, { dryRun, migrated: 0, skipped: 0, errors: 0, results: [] }));
     else log("✓ rehash: nothing to migrate — no cassettes in directory");
-    return process.exit(0);
+    return exitWith(0);
   }
 
   type Action = "migrated" | "skipped" | "error";
@@ -9020,7 +9020,7 @@ export async function cmdRehash(args: string[]): Promise<void> {
       log(`${glyph} ${r.file}: ${r.reason}`);
     }
   }
-  return process.exit(code);
+  return exitWith(code);
 }
 
 /** `rehash`'s exit code, documented in SPEC §11 and in its `--help`.

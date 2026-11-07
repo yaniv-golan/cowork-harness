@@ -8,7 +8,7 @@ import { collectSecrets, scrub } from "../secrets.js";
 import { exportFixture, type ExportOutcome } from "./export.js";
 import { FIXTURE_BOOLEAN_FLAGS, FIXTURE_REPEATED_FLAGS, FIXTURE_USAGE, FIXTURE_VALUE_FLAGS } from "./usage.js";
 
-import { rethrowIfExit } from "../run/exit.js";
+import { exitWith, rethrowIfExit } from "../run/exit.js";
 const CMD = "fixture";
 
 function textReport(o: ExportOutcome): string[] {
@@ -69,5 +69,5 @@ export async function cmdFixture(args: string[]): Promise<never> {
   }
   if (json) writeAllSync(1, scrub(jsonPayloadEnvelope(CMD, true, { message, ...payload }), secrets) + "\n");
   else for (const line of textReport(o)) writeAllSync(2, scrub(line, secrets) + "\n");
-  return process.exit(0);
+  return exitWith(0);
 }

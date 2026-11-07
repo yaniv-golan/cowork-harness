@@ -2472,7 +2472,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         rethrowIfExit(e);
         process.stderr.write(`critique: --out ${tildeify(out)} could not be written: ${String(e)}\n`);
       }
-    process.exit(0);
+    exitWith(0);
     return;
   }
   let opts: ParsedArgs;
@@ -2560,7 +2560,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   if (opts.corpusOnly) {
     const code = runCorpusPreview(opts, resolvedSkill, preflight.pkg, targetSource, summaryIdentity);
     removeSnapshot();
-    process.exit(code);
+    exitWith(code);
     return;
   }
   // Both turns run the `skill` lane, which refuses a run that resolves no model. Check it HERE, before the
@@ -2579,7 +2579,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // The operator's interrupt, learned from the probe it killed: critique's interrupt exit (1), as its own handler
     // gives a signal that arrives after this point.
     if (!(e instanceof InterruptedError)) throw e;
-    process.exit(1);
+    exitWith(1);
   }
   if (iso) return refuse("usage", `critique: ${iso}`);
   // Past this point a turn WILL run. parseArgs guarantees a probe on every non-corpus-only line; the
@@ -2614,7 +2614,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         `critique: could not determine the task run's directory (no envelope outDir and no [status] line)${diag ? ` [${diag}]` : ""}.\n` +
           `--- task stdout ---\n${task.stdout}\n--- task stderr (tail) ---\n${task.stderr.slice(-4000)}\n`,
       );
-      process.exit(EXIT_INSTRUMENT_FAILURE);
+      exitWith(EXIT_INSTRUMENT_FAILURE);
       return;
     }
 
@@ -2660,7 +2660,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       // The INSTRUMENT failed at the TASK turn (killed by the timeout or the byte cap) — no critique was
       // produced. Findings never gate, but this is not a finding. The other instrument causes exit
       // elsewhere: a reflection-protocol break or an evaluator throw routes through the report path below.
-      process.exit(EXIT_INSTRUMENT_FAILURE);
+      exitWith(EXIT_INSTRUMENT_FAILURE);
       return;
     }
     // NOTE: `taskResult` ("success" | "error") is a GRADEABLE outcome of the task itself — a task that ended
@@ -2992,15 +2992,15 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // the report is still printed (it carries the diagnosis), but no critique was produced, so this is an
     // instrument failure, not a finding. Missing this path is what made the documented exit contract
     // false in practice even after the other three were routed.
-    if (state.infraFailure || state.evaluatorError) process.exit(EXIT_INSTRUMENT_FAILURE);
+    if (state.infraFailure || state.evaluatorError) exitWith(EXIT_INSTRUMENT_FAILURE);
   } catch (e) {
     rethrowIfExit(e);
     process.stderr.write(`critique: unexpected failure: ${(e as Error).stack ?? String(e)}\n`);
-    process.exit(EXIT_INSTRUMENT_FAILURE); // an unexpected throw means no critique was produced
+    exitWith(EXIT_INSTRUMENT_FAILURE); // an unexpected throw means no critique was produced
   }
   // FINDINGS never gate: any classification — including a task run that ERRORED, which is itself a
   // legitimate discovery outcome about the skill — exits 0. Only instrument failures above exit non-zero.
-  process.exit(0);
+  exitWith(0);
 }
 
 /** CLI entry for `cowork-harness critique`. Exported so src/cli.ts can dispatch to it — the direct-exec
@@ -3011,7 +3011,7 @@ export async function cmdCritique(argv: string[]): Promise<void> {
 }
 
 import { pathToFileURL } from "node:url";
-import { rethrowIfExit } from "../run/exit.js";
+import { exitWith, rethrowIfExit } from "../run/exit.js";
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   installOrphanCleanupHandlers();
   void main();

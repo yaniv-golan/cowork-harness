@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { FsRefusal, lexists } from "../hillclimb/fs.js";
 import { REF_EXTS, addRefDocs, freezeRef, verifyStore, type RefSource } from "./store.js";
 
-import { rethrowIfExit } from "../run/exit.js";
+import { exitWith, rethrowIfExit } from "../run/exit.js";
 /** One kept run, composed for freezing. `live` compares the recomposed document with the fingerprint the live
  *  judge recorded: `match`, `differs`, or `unknown` (no fingerprint: a run recorded before the assert existed). */
 export interface ComposedForFreeze {
@@ -233,7 +233,7 @@ export async function cmdRef(args: string[]): Promise<never> {
         for (const pr of s.problems) writeAllSync(2, scrub(`  ✗ ${pr.caseId || "(store)"}: ${pr.why}`, secrets) + "\n");
         for (const n of s.notes) writeAllSync(2, scrub(`  note: ${n}`, secrets) + "\n");
       }
-    return process.exit(v.exitCode);
+    return exitWith(v.exitCode);
   }
   const scenarioFile = p.options["--scenario"];
   const out = p.options["--out"];
@@ -252,5 +252,5 @@ export async function cmdRef(args: string[]): Promise<never> {
   if (o.exitCode !== 0) return fail(CMD, "runtime", scrub(o.message, secrets), undefined, json, 2);
   if (json) writeAllSync(1, scrub(jsonPayloadEnvelope(CMD, true, { ...o }), secrets) + "\n");
   else writeAllSync(2, scrub(o.message, secrets) + "\n");
-  return process.exit(0);
+  return exitWith(0);
 }

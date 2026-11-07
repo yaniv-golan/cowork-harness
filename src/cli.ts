@@ -2,7 +2,7 @@
 import { ANSWER_CHANNEL_NONE_LABEL } from "./answer-channel.js";
 import type { SearchCorpusOption } from "./search-corpus/run.js";
 import { InterruptedError, interrupt } from "./termination.js";
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync, copyFileSync, realpathSync } from "node:fs";
 import { join, basename, resolve, isAbsolute, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml, YAMLParseError } from "yaml";
@@ -199,6 +199,7 @@ import {
   jsonError,
   parseOutputFormat,
   fail,
+  printFailure,
   isJsonOutput,
   envOutputFormat,
 } from "./run/envelope.js";
@@ -241,10 +242,12 @@ import {
   answerGate,
   readGate,
   GateChannelError,
+  sweepHelperGroups,
   type DecisionChannel,
 } from "./decide/external-channel.js";
 
-import { rethrowIfExit } from "./run/exit.js";
+import { armExitFallback, ExitRequested, exitWith, installExitHandlers, rethrowIfExit, settleExitCode } from "./run/exit.js";
+import { killOutstandingChildGroups } from "./bounded-spawn.js";
 // Synchronous writes (fd 1/2): `process.stdout.write` + `process.exit()` truncates on a PIPE, which
 // would lose the json envelope for any agent/CI that pipes us. writeAllSync retries EAGAIN and loops
 // on short writes so the whole payload lands before exit (see src/io.ts).
@@ -1767,7 +1770,7 @@ async function runMultiLegFile(
     }
     log(`${sr.verdict.pass ? "PASS" : "FAIL"} ${ms.name} (${sr.legs.length} legs) — ${outcome.outDir}`);
   }
-  process.exit(sr.verdict.pass ? 0 : 1);
+  exitWith(sr.verdict.pass ? 0 : 1);
 }
 
 async function cmdRun(rawArgs: string[]) {
@@ -2133,7 +2136,7 @@ async function cmdRun(rawArgs: string[]) {
       );
       if (o.json) out(jsonEnvelope("run", results, { matrixRepeat }));
       else for (const line of formatMatrixRepeatRollup(matrixRepeat, minPassRate, allowBudgetStop)) log(line);
-      process.exit(matrixRepeat.anyFail ? 1 : 0);
+      exitWith(matrixRepeat.anyFail ? 1 : 0);
     }
 
     let cellResults: MatrixCellResult[];
@@ -2173,7 +2176,7 @@ async function cmdRun(rawArgs: string[]) {
     const matrix = buildMatrixRollup(cellResults, totalBeforeCap, truncated, allowTruncatedMatrix);
     if (o.json) out(jsonEnvelope("run", results, { matrix }));
     else for (const line of formatMatrixRollup(matrix)) log(line);
-    process.exit(matrix.anyFail ? 1 : 0);
+    exitWith(matrix.anyFail ? 1 : 0);
   }
 
   // LOAD every resolved scenario, then run the pre-flights over all of them, before any of them runs.
@@ -2306,7 +2309,7 @@ async function cmdRun(rawArgs: string[]) {
   const ok = usingRepeat
     ? rollups.every((r) => rollupPasses(r, minPassRate, allowBudgetStop))
     : results.every((r) => computeVerdict(r, "live").pass);
-  process.exit(ok ? 0 : 1);
+  exitWith(ok ? 0 : 1);
 }
 
 /** `eval` — the paired evaluation. The command logic lives in src/eval/command.ts and throws; this wrapper
@@ -2339,7 +2342,7 @@ async function cmdEval(rawArgs: string[]) {
     const code = report.summary.exitCode;
     if (json) out(jsonPayloadEnvelope("eval", code === 0, evalEnvelopePayload(evalDir, report)));
     else log(text + `\nreport: ${tildeify(join(evalDir, REPORT_MD))}`);
-    process.exit(code);
+    exitWith(code);
   };
   if (rawArgs[0] === "report") {
     let r: ReturnType<typeof parseEvalReportArgs>;
@@ -2391,7 +2394,7 @@ async function cmdEval(rawArgs: string[]) {
     await new Promise((r) => setImmediate(r));
     if (json) out(jsonPayloadEnvelope("eval", true, { dryRun: true, plan }));
     else printPlan(plan!);
-    process.exit(0);
+    exitWith(0);
   }
   // Runs render nothing (json-shaped output plan): concurrent jobs would interleave a live renderer on
   // stderr, so the eval prints one line per finished job instead.
@@ -2866,7 +2869,7 @@ async function cmdSkill(rawArgs: string[]) {
   if (o.json) out(jsonEnvelope("skill", results, rollup ? { rollups: [rollup], minPassRate, allowBudgetStop } : {}));
   else if (rollup) log(formatRepeatRollup(rollup, minPassRate, allowBudgetStop));
   const ok = rollup ? rollupPasses(rollup, minPassRate, allowBudgetStop) : results.every((r) => computeVerdict(r, "live").pass);
-  process.exit(ok ? 0 : 1);
+  exitWith(ok ? 0 : 1);
 }
 
 const PROBE_DISPATCH_HELP = `usage: probe-dispatch <skill-dir> "<prompt>"
@@ -3051,7 +3054,7 @@ async function cmdProbeDispatch(rawArgs: string[]) {
       }),
     );
   else out(formatDispatchProbe(projection));
-  process.exit(projection.verdict.pass ? 0 : 1);
+  exitWith(projection.verdict.pass ? 0 : 1);
 }
 
 /** Resolve the on-disk file a named baseline loads from (mirrors loadBaseline's resolution) so the JSON
@@ -3143,7 +3146,7 @@ function cmdVm(args: string[]) {
   // per-subcommand --help (e.g. `vm init --help`).
   if (sub && VM_SUBS.includes(sub) && (args.includes("--help") || args.includes("-h"))) {
     log(VM_SUB_HELP[sub]);
-    process.exit(0);
+    exitWith(0);
   }
 
   // validate the subcommand BEFORE loadBaseline(args[1]) — a bad subcommand (e.g. `vm typo`)
@@ -3272,7 +3275,7 @@ function cmdBoundary(args: string[]) {
   } else {
     log(formatBoundary(results));
   }
-  process.exit(results.every((r) => r.pass) ? 0 : 1);
+  exitWith(results.every((r) => r.pass) ? 0 : 1);
 }
 
 /** Best-effort fetch of the official per-version linux-arm64 release checksum from Anthropic's release
@@ -4350,7 +4353,7 @@ async function cmdDecide(args: string[]) {
       if (d === ABSTAIN) {
         if (json) out(JSON.stringify({ tool: "cowork-harness", command: "decide", ok: false, matched: false }));
         else log(`✗ no rule matched — this question would fall to --on-unanswered (add an --answer/--answer-policy rule)`);
-        process.exit(1); // cli-error-envelope-exempt: emits its own {matched:false} shape above, not jsonError
+        exitWith(1); // cli-error-envelope-exempt: emits its own {matched:false} shape above, not jsonError
       }
       const answer = (d as { response: { answers?: Record<string, string> } }).response.answers?.[question];
       if (json) out(JSON.stringify({ tool: "cowork-harness", command: "decide", ok: true, matched: true, answer }));
@@ -4362,7 +4365,7 @@ async function cmdDecide(args: string[]) {
     else log(`✗ decider error: ${String((e as Error).message)}`);
     // Runtime failure → exit 2, matching the global "usage/runtime → 2" contract (SPEC §11). The JSON
     // envelope already tags this category "runtime"; the exit code now agrees. No-match/ABSTAIN stays 1.
-    process.exit(2); // cli-error-envelope-exempt: emits its own custom envelope shape above, not jsonError
+    exitWith(2); // cli-error-envelope-exempt: emits its own custom envelope shape above, not jsonError
   }
 }
 
@@ -4432,7 +4435,7 @@ async function cmdStatus(args: string[]) {
       // (wrong dir, or the run genuinely never started). Neither is a silent hang.
       const err = e as Error & { stale?: boolean };
       log(err.message);
-      return process.exit(err.stale ? 3 : 1);
+      return exitWith(err.stale ? 3 : 1);
     }
     // followRunStatus resolved — it only distinguishes "still running" from "reached a terminal state,"
     // not WHICH terminal state. The last line it wrote via the callback is always the JSON-serialized
@@ -4450,7 +4453,7 @@ async function cmdStatus(args: string[]) {
          * — fall through to the healthy default rather than crash the CLI on exit. */
       }
     }
-    return process.exit(terminalState === "error" ? 1 : 0);
+    return exitWith(terminalState === "error" ? 1 : 0);
   }
   if (!hasRunStatus(dir)) {
     return fail(
@@ -4511,7 +4514,7 @@ async function cmdStatus(args: string[]) {
   // Exit codes: 0 healthy (running/done, not stale) · 1 the run itself errored · 2 usage error (thrown
   // earlier) · 3 stale/probably-dead — distinct from 1 so a script can tell "it failed" from "can't
   // confirm it's alive" without parsing text.
-  return process.exit(stale ? 3 : status.state === "error" ? 1 : 0);
+  return exitWith(stale ? 3 : status.state === "error" ? 1 : 0);
 }
 
 /** `status --latest-for <scenario>` — resolve the newest run dir for a scenario by actual run time
@@ -4553,7 +4556,7 @@ async function cmdStatusLatestFor(scenarioArg: string, json: boolean): Promise<n
     );
     log(found.outDir);
   }
-  return process.exit(0);
+  return exitWith(0);
 }
 
 /** `gates <dir> [--follow]` — the gate stream for the in-band `--decider-dir` path. Emits one clean
@@ -5076,7 +5079,7 @@ async function cmdVerifyRun(args: string[]) {
         : `✗ verify-run: ${failed.length}/${assertions.length} assertion(s) failed`,
     );
   }
-  return process.exit(verdict.exitCode);
+  return exitWith(verdict.exitCode);
 }
 
 /** `assertions --list` — enumerate the available assertion keys + one-line semantics, generated from the
@@ -5676,7 +5679,7 @@ function cmdDiff(args: string[]) {
     else if (changelog) out(renderChangelog(entries, b));
     else if (identical) out("No differences.");
     else for (const line of formatDiffLines(entries, b)) out(line);
-    process.exit(identical ? 0 : 1);
+    exitWith(identical ? 0 : 1);
   }
 
   // run/cassette — cross-comparable
@@ -5739,7 +5742,7 @@ function cmdDiff(args: string[]) {
         `(also: no artifact manifest on side ${result.artifactsAvailability === "a-unavailable" ? "a" : "b"} — this alone makes the comparison non-identical; see --view artifacts)`,
       );
   }
-  process.exit(result.identical ? 0 : 1);
+  exitWith(result.identical ? 0 : 1);
 }
 
 function cmdInspect(args: string[]) {
@@ -5784,26 +5787,67 @@ function cmdInspect(args: string[]) {
   }
 }
 
-main().catch((e) => {
+/** The top level, once `main()` is done. Never calls fail(): a command's requested exit (ExitRequested) and its
+ *  errors set `process.exitCode`, then the event loop drains and the process exits by itself. A fallback timer
+ *  exits only if something still holds the loop (src/run/exit.ts). */
+function onMainFulfilled(): void {
+  settleExitCode(undefined, warn);
+  finishTopLevel();
+}
+
+function onMainRejected(e: unknown): void {
   const command = process.argv[2] ?? "";
   const json = isJsonOutput(process.argv.slice(2));
-  // A child died of the operator's interrupt before this process's own handler ran: handle it as that interrupt.
-  if (e instanceof InterruptedError) {
+  const err = e as Error | undefined;
+  if (e instanceof ExitRequested) settleExitCode(e.code, warn);
+  else if (e instanceof InterruptedError) {
+    // A child died of the operator's interrupt before this process's own handler ran: handle it as that interrupt.
     // warn(), not log(): on a hang-up the terminal is gone and a raw fd write would throw before interrupt() runs.
     warn(`::warning:: [interrupt] ${e.message} — stopping\n`);
     return interrupt(e.signal);
-  }
-  if (e instanceof UnansweredError) fail(command, "unanswered", e.message, e.hint, json);
-  if (e instanceof BoundaryError) fail(command, "boundary", e.message, undefined, json);
-  if (e instanceof UsageError) fail(command, "usage", e.message, (e as UsageError).hint, json);
+  } else if (e instanceof UnansweredError) settleExitCode(printFailure(command, "unanswered", e.message, e.hint, json), warn);
+  else if (e instanceof BoundaryError) settleExitCode(printFailure(command, "boundary", e.message, undefined, json), warn);
+  else if (e instanceof UsageError) settleExitCode(printFailure(command, "usage", e.message, e.hint, json), warn);
   // A refused legacy/mixed/pre-completion run dir (e.g. `--resume` onto one, see execute.ts) is a legible,
   // well-formed-invocation refusal, not an internal harness bug — route it the same clean, no-stack way as
   // BoundaryError/UsageError rather than falling through to the `internal` branch below, which prints a
   // stack trace for what is actually the expected "this dir predates the layout" message.
   // RunDirShapeError covers LegacyRunDirError and MultiLegRunDirError (a multi-leg root or a host-action leg).
-  if (e instanceof RunDirShapeError) fail(command, "runtime", e.message, undefined, json);
-  // runtime/unexpected: keep the stack on stderr for humans; a structured envelope on stdout for json.
-  if (json) out(jsonError(command, "internal", String(e?.message ?? e)));
-  else log(String(e?.stack ?? e));
-  process.exit(2); // cli-error-envelope-exempt: emits its own jsonError(...) call above (full stack on stderr for text mode), not a fail() plain-message shape
-});
+  else if (e instanceof RunDirShapeError) settleExitCode(printFailure(command, "runtime", e.message, undefined, json), warn);
+  else {
+    // runtime/unexpected: keep the stack on stderr for humans; a structured envelope on stdout for json.
+    if (json) out(jsonError(command, "internal", String(err?.message ?? e)));
+    else log(String(err?.stack ?? e));
+    settleExitCode(2, warn); // cli-error-envelope-exempt: emits its own jsonError(...) call above (full stack on stderr for text mode), not a fail() plain-message shape
+  }
+  finishTopLevel();
+}
+
+/** Kill helper process groups that would hold the loop open, then arm the exit fallback. */
+function sweepHelpers(): void {
+  killOutstandingChildGroups();
+  sweepHelperGroups();
+}
+
+function finishTopLevel(): void {
+  sweepHelpers();
+  armExitFallback(warn);
+}
+
+/** True when this module is the process's entry point (`node dist/cli.js`, the npm bin symlink, `npx`,
+ *  `tsx src/cli.ts`), false when a test or another module imports it. Both sides are realpathed; an unset
+ *  `argv[1]` (`node -e`, `--import`) or a path that cannot be resolved means "not the entry". */
+export function isCliEntry(argv1: string | undefined = process.argv[1], self: string = fileURLToPath(import.meta.url)): boolean {
+  if (!argv1) return false;
+  try {
+    return realpathSync(argv1) === realpathSync(self);
+  } catch (caught) {
+    rethrowIfExit(caught);
+    return false;
+  }
+}
+
+if (isCliEntry()) {
+  installExitHandlers({ sweep: sweepHelpers, warn });
+  main().then(onMainFulfilled, onMainRejected);
+}

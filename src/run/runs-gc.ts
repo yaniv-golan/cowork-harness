@@ -9,7 +9,7 @@ import { MIGRATION_JOURNAL_DIR } from "./migrate-run-dir.js";
 import { evalIdOfLabel, isHillclimbLabel, isSymlink, readSmallJson, runLabelOf } from "./run-labels.js";
 import { isStatusStale, isValidRunStatus } from "./run-status.js";
 
-import { rethrowIfExit } from "./exit.js";
+import { exitWith, rethrowIfExit } from "./exit.js";
 const log = (s: string) => process.stderr.write(s + "\n");
 
 /** How many interrupted migrations are recorded for this scenario. */
@@ -435,19 +435,19 @@ export function cmdRunsGc(args: string[]): void {
   } catch (e) {
     rethrowIfExit(e);
     log((e as Error).message);
-    return process.exit(2);
+    return exitWith(2);
   }
   applyParsedCommandGlobals("prune", p, false);
   if (p.positionals.length > 1) {
     log(`prune takes an optional <runs-dir> (got ${p.positionals.length}: ${p.positionals.join(", ")})`);
-    return process.exit(2);
+    return exitWith(2);
   }
 
   const rawKeep = p.options["--keep-last"];
   const keepLast = rawKeep !== undefined ? Number(rawKeep) : DEFAULT_KEEP_LAST;
   if (!Number.isInteger(keepLast) || keepLast < 1) {
     log(`prune: --keep-last must be a positive integer (got ${rawKeep})`);
-    return process.exit(2);
+    return exitWith(2);
   }
 
   const rawPinnedAge = p.options["--pinned-older-than"];
@@ -456,7 +456,7 @@ export function cmdRunsGc(args: string[]): void {
     pinnedOlderThanMs = parseRetentionMs(rawPinnedAge);
     if (pinnedOlderThanMs === undefined) {
       log(`prune: --pinned-older-than must be <N>d|h|m (e.g. 7d, 24h, 30m) — got "${rawPinnedAge}"`);
-      return process.exit(2);
+      return exitWith(2);
     }
   }
 
@@ -467,7 +467,7 @@ export function cmdRunsGc(args: string[]): void {
 
   if (!existsSync(runsRoot)) {
     log(`✓ prune: ${runsRoot} does not exist — nothing to prune`);
-    return process.exit(0);
+    return exitWith(0);
   }
   // ONE check, before anything is deleted and before every flag: a per-scenario check inside the loop would
   // delete earlier-sorted children before refusing.
@@ -475,7 +475,7 @@ export function cmdRunsGc(args: string[]): void {
   const refusal = pruneLevelRefusal(runsRoot, fromEnv ? " (from COWORK_HARNESS_RUNS_DIR)" : "");
   if (refusal !== undefined) {
     log(refusal);
-    return process.exit(2);
+    return exitWith(2);
   }
 
   let deleted = 0;
@@ -708,5 +708,5 @@ export function cmdRunsGc(args: string[]): void {
       ? `✓ prune: pruned ${deleted} run dir(s), kept ${kept}${extras.map((x) => `, ${x}`).join("")}${dryRun ? " (dry-run — nothing deleted)" : ""}`
       : `✓ prune: nothing to prune (${kept} run dir(s) within --keep-last ${keepLast}${extras.map((x) => `; ${x}`).join("")})`,
   );
-  return process.exit(0);
+  return exitWith(0);
 }

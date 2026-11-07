@@ -72,6 +72,7 @@ import { loadCostHistory, loadRowHistory, type RowHistoryLoad } from "./plan-his
 import { scheduleCostLine } from "./planner.js";
 import { planEval, type EvalPlan, type PlanScenarioInput } from "./plan.js";
 
+import { ExitRequested } from "../run/exit.js";
 /** BH's false-discovery rate for `confirmed`. Fixed; `--alpha` sets the per-row level and Holm's. */
 export const BH_Q = 0.1;
 export const DEFAULT_REPS = 5;
@@ -1135,63 +1136,77 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
     const runsFile = join(evalDir, RUNS_FILE);
     const snapByLabel = new Map(snaps.map((s) => [s.spec.label, s]));
     let done = 0;
-    await pMapBounded(jobs, args.concurrency, async (job) => {
-      const s = scenarios[job.scenarioIndex];
-      const session = sessions.get(`${job.arm}\0${job.scenario}`)!;
-      const expectedDir = evalJobRunDir({ scenario: s.scenario, job });
-      let result: RunResult | undefined;
-      let thrown: unknown;
-      try {
-        result = await deps.runJob({
-          job,
-          scenario: s.scenario,
-          session,
-          runLabel: `eval:${evalId}:${job.arm}`,
-          ...(args.judgeModel !== undefined ? { judgeModelOverride: args.judgeModel } : {}),
-          ...(searchCorpus
-            ? {
-                searchCorpus: {
-                  pool: searchCorpus.copyDir,
-                  miss: searchCorpus.pin.miss,
-                  ...(searchCorpus.pin.minScore !== undefined ? { minScore: searchCorpus.pin.minScore } : {}),
-                  expect: { sha256: searchCorpus.pin.sha256, miss: searchCorpus.pin.miss },
-                },
-              }
-            : {}),
-        });
-      } catch (e) {
-        // The operator's interrupt, learned from a probe inside the run: it stops the eval, not this rep.
-        if (e instanceof InterruptedError) throw e;
-        thrown = e;
-        result = salvagedResult(expectedDir);
-      }
-      let evidence;
-      try {
-        evidence = result ? evidenceFacts({ result, skillName: skill ?? undefined, pluginRoot: snapByLabel.get(job.arm)!.dir }) : undefined;
-      } catch {
-        evidence = { invoked: "unobservable" as const, sourceRead: "unobservable" as const, neither: "unobservable" as const };
-      }
-      const runDir = result?.outDir ?? (existsSync(expectedDir) ? expectedDir : undefined);
-      appendRunsLine(
-        runsFile,
-        buildRunsLine({
-          index: job.index,
-          arm: job.arm,
-          scenario: job.scenario,
-          rep: job.rep,
-          runId: job.runId,
-          runDir,
-          result,
-          thrown,
-          evidence,
-          ...(searchCorpus ? { searchPin: { sha256: searchCorpus.pin.sha256, miss: searchCorpus.pin.miss } } : {}),
-        }),
-      );
-      done++;
-      say(
-        `[eval] ${done}/${jobs.length} ${job.arm} ${job.scenario} r${job.rep}: ${thrown !== undefined ? `threw ${(thrown as Error)?.name ?? "error"}: ${String((thrown as Error)?.message ?? thrown).split("\n")[0]}` : `result ${result?.result}`}`,
-      );
-    });
+    await pMapBounded(
+      jobs,
+      args.concurrency,
+      async (job) => {
+        const s = scenarios[job.scenarioIndex];
+        const session = sessions.get(`${job.arm}\0${job.scenario}`)!;
+        const expectedDir = evalJobRunDir({ scenario: s.scenario, job });
+        let result: RunResult | undefined;
+        let thrown: unknown;
+        try {
+          result = await deps.runJob({
+            job,
+            scenario: s.scenario,
+            session,
+            runLabel: `eval:${evalId}:${job.arm}`,
+            ...(args.judgeModel !== undefined ? { judgeModelOverride: args.judgeModel } : {}),
+            ...(searchCorpus
+              ? {
+                  searchCorpus: {
+                    pool: searchCorpus.copyDir,
+                    miss: searchCorpus.pin.miss,
+                    ...(searchCorpus.pin.minScore !== undefined ? { minScore: searchCorpus.pin.minScore } : {}),
+                    expect: { sha256: searchCorpus.pin.sha256, miss: searchCorpus.pin.miss },
+                  },
+                }
+              : {}),
+          });
+        } catch (e) {
+          // The operator's interrupt, learned from a probe inside the run, and a requested exit (an unanswered gate):
+          // each stops the eval, not this rep.
+          if (e instanceof InterruptedError || e instanceof ExitRequested) throw e;
+          thrown = e;
+          result = salvagedResult(expectedDir);
+        }
+        let evidence;
+        try {
+          evidence = result
+            ? evidenceFacts({ result, skillName: skill ?? undefined, pluginRoot: snapByLabel.get(job.arm)!.dir })
+            : undefined;
+        } catch {
+          evidence = { invoked: "unobservable" as const, sourceRead: "unobservable" as const, neither: "unobservable" as const };
+        }
+        const runDir = result?.outDir ?? (existsSync(expectedDir) ? expectedDir : undefined);
+        appendRunsLine(
+          runsFile,
+          buildRunsLine({
+            index: job.index,
+            arm: job.arm,
+            scenario: job.scenario,
+            rep: job.rep,
+            runId: job.runId,
+            runDir,
+            result,
+            thrown,
+            evidence,
+            ...(searchCorpus ? { searchPin: { sha256: searchCorpus.pin.sha256, miss: searchCorpus.pin.miss } } : {}),
+          }),
+        );
+        done++;
+        say(
+          `[eval] ${done}/${jobs.length} ${job.arm} ${job.scenario} r${job.rep}: ${thrown !== undefined ? `threw ${(thrown as Error)?.name ?? "error"}: ${String((thrown as Error)?.message ?? thrown).split("\n")[0]}` : `result ${result?.result}`}`,
+        );
+      },
+      {
+        // An exit request from a job (an unanswered gate) stops the eval: no new job starts, the ones running finish and
+        // write their rows, then the request reaches the top level.
+        onStop: (inFlight) => {
+          if (inFlight > 0) process.stderr.write(`stopping: waiting for ${inFlight} in-flight job(s)\n`);
+        },
+      },
+    );
 
     const report = writeEvalReport(evalDir);
     say(`[eval] report: ${tildeify(join(evalDir, REPORT_MD))}`);

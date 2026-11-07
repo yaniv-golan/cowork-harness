@@ -34,6 +34,7 @@ import { normalizeModelId } from "../run/model-provenance.js";
 import { servedModelMismatch } from "./served-model.js";
 import { billingOf, costLine, costSummary, otherModelShareWarning, type Billing } from "./cost.js";
 
+import { ExitRequested } from "../run/exit.js";
 /** What one job hands back. */
 export interface JobReport {
   result?: RunResult;
@@ -446,14 +447,16 @@ async function run(
         try {
           await oneTask(c, rep);
         } catch (e) {
+          // exit-safe: captured, and rethrown below once the in-flight jobs have finished
           stopError ??= e;
         }
       });
     } finally {
       clearInterval(tick);
     }
-    // The operator's interrupt, learned from a probe inside a job: in-flight jobs have finished; exit as interrupted.
-    if (stopError instanceof InterruptedError) {
+    // The operator's interrupt, learned from a probe inside a job, or a requested exit: in-flight jobs have finished;
+    // exit as interrupted, or with the requested code.
+    if (stopError instanceof InterruptedError || stopError instanceof ExitRequested) {
       progress();
       throw stopError;
     }
@@ -469,8 +472,8 @@ async function run(
       try {
         report = await deps.runJob({ c, rep, variant: v, runLabel, timeoutS: args.timeoutS, ablate: args.ablate });
       } catch (e) {
-        // An interrupt stops the whole run; it is not this attempt's failure.
-        if (e instanceof InterruptedError) throw e;
+        // An interrupt or a requested exit (an unanswered gate) stops the whole run; it is not this attempt's failure.
+        if (e instanceof InterruptedError || e instanceof ExitRequested) throw e;
         report = { thrown: e, events: [], children: [], attemptS: (now() - tStart) / 1000, runnerTimeout: false };
       }
       const ctx: AttemptContext = {

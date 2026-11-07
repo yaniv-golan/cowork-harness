@@ -8,7 +8,7 @@ import { deriveOutcome } from "./outcome.js";
 import { writeAllSync } from "../io.js";
 import { budgetStatus, type BudgetStatus } from "./budget-status.js";
 
-import { rethrowIfExit } from "./exit.js";
+import { exitWith, rethrowIfExit } from "./exit.js";
 /** The `--max-budget-usd` marker as a frame fragment: `{budget}` when a pre-flight recorded a status, `{}`
  *  otherwise — so a command payload that ever carries its own `budget` key is not overwritten with
  *  `undefined` on an invocation that passed no cap. Spread AFTER a payload: when a status exists it is a
@@ -262,10 +262,25 @@ export function fail(
   results?: ReturnType<typeof publishedResult>[],
   extras?: JsonErrorExtras,
 ): never {
+  exitWith(printFailure(command, category, message, hint, json, exitCode, results, extras));
+}
+
+/** fail()'s output, without the exit: prints the error (the JSON envelope, or the message and hint) and returns the
+ *  exit code fail() would use. For the top-level catch, which sets the code instead of throwing. */
+export function printFailure(
+  command: string,
+  category: ErrCategory,
+  message: string,
+  hint: string | undefined,
+  json: boolean,
+  exitCode?: 1 | 2 | 3,
+  results?: ReturnType<typeof publishedResult>[],
+  extras?: JsonErrorExtras,
+): number {
   if (json) out(jsonError(command, category, message, hint, results, extras));
   else {
     log(message);
     if (hint) log(hint);
   }
-  process.exit(exitCode ?? (category === "boundary" ? 3 : 2));
+  return exitCode ?? (category === "boundary" ? 3 : 2);
 }

@@ -26,7 +26,7 @@ import { runtimeAuthKey } from "../runtime/host-env.js";
 import { pinnedDigestFor, resolveAgentImage, resolveContainerRuntime, resolveProxyImage } from "../runtime/agent-image.js";
 import { deviceImageStatus, dockerImageId } from "../runtime/device-image.js";
 
-import { rethrowIfExit } from "./exit.js";
+import { exitWith, rethrowIfExit } from "./exit.js";
 // Synchronous fd writes (match cli.ts): machine→stdout, human→stderr. A `process.stdout.write` +
 // `process.exit()` pair truncates on a PIPE (async tail dropped at exit past the ~64KB buffer);
 // writeAllSync retries EAGAIN and loops on short writes so the whole payload lands (see src/io.ts).
@@ -973,5 +973,5 @@ export function cmdDoctor(args: string[]): void {
         : `\n✗ not ready for \`${tier}\` — ${blocking.length} blocking issue(s): ${blocking.map((c) => c.id).join(", ")}`,
     );
   }
-  return process.exit(ok ? 0 : 1);
+  return exitWith(ok ? 0 : 1);
 }

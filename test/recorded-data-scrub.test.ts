@@ -131,7 +131,7 @@ it("the scrub's source is pinned next to RECORDED_SCRUB_VERSION (an edit forces 
   expect(
     { version: RECORDED_SCRUB_VERSION, sha },
     "the scrub changed: if what it removes changed, bump RECORDED_SCRUB_VERSION; then re-pin this hash",
-  ).toEqual({ version: 2, sha: "6ca29dce0e5949bbf38ce8d01cf8427389d5fe78dc7712c469d7667fce7aa9bb" });
+  ).toEqual({ version: 2, sha: "c27c39598f8806a084422d7bee898677e85ec3ce34292286286c02c291174e14" });
 });
 
 describe("scrubRecordedAgentData", () => {

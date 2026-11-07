@@ -8,7 +8,7 @@ import { analyzeArtifacts } from "./analyze-artifact.js";
 import { confirmArtifactRuntime, type RuntimeVerdict } from "./analyze-artifact-runtime.js";
 import { writeAllSync } from "../io.js";
 
-import { rethrowIfExit } from "./exit.js";
+import { exitWith, rethrowIfExit } from "./exit.js";
 /** Extensions an author plausibly points `analyze-skill` at expecting an artifact/write-back scan, that the
  *  artifact analyzer deliberately does NOT parse: the in-process acorn parser reads neither TypeScript
  *  annotations nor JSX (`src/run/analyze-artifact.ts`'s `CODE_EXTS` comment — advertising them produced
@@ -1488,5 +1488,5 @@ export async function cmdAnalyzeSkill(args: string[]): Promise<void> {
     log(`  scope: scanned ${fileList.length} file(s) — ${fileList.join(", ")}`);
     log(unscanned.length > 0 ? `  scope: left unscanned — ${unscanned.join("; ")}` : "  scope: no contract dirs left unscanned");
   }
-  return process.exit(exitCode);
+  return exitWith(exitCode);
 }

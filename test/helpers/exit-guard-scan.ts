@@ -20,8 +20,9 @@ export function srcFiles(root = SRC): string[] {
 }
 
 /** The source with every comment blanked to spaces (newlines kept, so offsets and line numbers still match).
- *  String and template literals are skipped over, so a `//` inside a URL string is not taken for a comment. */
-export function stripComments(src: string): string {
+ *  String and template literals are skipped over, so a `//` inside a URL string is not taken for a comment. With
+ *  `strings`, the contents of '…' and "…" literals are blanked too (template literals are kept: their `${}` is code). */
+export function stripComments(src: string, opts: { strings?: boolean } = {}): string {
   const out = src.split("");
   let i = 0;
   const blank = (from: number, to: number) => {
@@ -57,6 +58,7 @@ export function stripComments(src: string): string {
         }
         k++;
       }
+      if (opts.strings && c !== "`") blank(i + 1, k);
       i = k + 1;
     } else i++;
   }
@@ -94,7 +96,7 @@ const MARKER = /\/\/\s*exit-safe:\s*(.+)$/;
 
 export function catchSites(file: string): CatchSite[] {
   const raw = readFileSync(file, "utf8");
-  const src = stripComments(raw);
+  const src = stripComments(raw, { strings: true });
   const rawLines = raw.split("\n");
   const out: CatchSite[] = [];
   const re = /\}\s*catch\s*(?:\(\s*([A-Za-z_$][\w$]*)[^)]*\))?\s*\{/g;
@@ -122,7 +124,7 @@ export function catchSites(file: string): CatchSite[] {
 export function processExitSites(files = srcFiles()): string[] {
   const out: string[] = [];
   for (const f of files) {
-    const s = stripComments(readFileSync(f, "utf8"));
+    const s = stripComments(readFileSync(f, "utf8"), { strings: true });
     for (const m of s.matchAll(/\bprocess\.exit\(/g)) out.push(`${relative(process.cwd(), f)}:${lineOf(s, m.index!)}`);
   }
   return out;
