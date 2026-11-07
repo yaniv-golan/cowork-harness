@@ -12,6 +12,7 @@ import { loadBaseline } from "../src/baseline.js";
 import { ScenarioObject } from "../src/types.js";
 import type { Cassette } from "../src/run/cassette.js";
 import type { RunResult, Scenario } from "../src/types.js";
+import { INIT_CONTROL_LINE } from "./helpers/minimal-cassette.js";
 
 const LIVE = loadBaseline("latest").appVersion;
 const line = (o: unknown) => JSON.stringify(o);
@@ -108,7 +109,7 @@ describe("freezeRecordedRun scrubs the account model menu", () => {
         line({ type: "result", subtype: "success", is_error: false }),
       ].join("\n"),
     );
-    writeFileSync(join(outDir, "control-out.jsonl"), "");
+    writeFileSync(join(outDir, "control-out.jsonl"), INIT_CONTROL_LINE + "\n");
     const scenario = ScenarioObject.parse({ name: "menu-scrub-freeze", fidelity: "container", prompt: "hi" }) as unknown as Scenario;
     const result = {
       mode: "run",

@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { computeAgentVersionNote, computeStaleness, readCassette, CASSETTE_VERSION } from "../src/run/cassette.js";
 import { loadBaseline } from "../src/baseline.js";
+import { recordedControlOut, DEFAULT_USER_VISIBLE_ROOTS } from "./helpers/minimal-cassette.js";
 
 // A cassette's `fingerprint.baseline` can be re-stamped by hand across an agent bump, leaving a stream
 // recorded by one agent build filed under a baseline that pins another. The init frame already freezes
@@ -32,7 +33,8 @@ function cassette(o: { events?: string[]; baseline?: string | null } = {}): any 
     },
     effectiveFidelity: "container",
     events: o.events ?? [init({ claude_code_version: "9.9.9", tools: ["mcp__skills__list_skills"] }), result],
-    controlOut: [],
+    controlOut: recordedControlOut(),
+    userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
     ...(o.baseline === null ? {} : { fingerprint: { baseline: o.baseline ?? LATEST.appVersion, hashFormat: "jcs1" } }),
   };
 }

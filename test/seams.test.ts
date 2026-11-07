@@ -17,12 +17,13 @@ import {
   type RunContext,
 } from "../src/decide/decider.js";
 import { Run } from "../src/run/run.js";
-import { replayCassette } from "../src/run/cassette.js";
+import { replayCassette, parseCassetteObject, CASSETTE_VERSION } from "../src/run/cassette.js";
 import { microvmAgentArgs } from "../src/runtime/microvm.js";
 import { thinkingArgs, spawnEnv } from "../src/runtime/argv.js";
 import { loadBaseline } from "../src/baseline.js";
 import { executeScenario } from "../src/run/execute.js";
 import { Scenario } from "../src/types.js";
+import { emptyControlOut, withReplayContract } from "./helpers/minimal-cassette.js";
 import type { DecisionChannel } from "../src/decide/external-channel.js";
 
 const ctx: RunContext = { task: "", transcript: () => "", toolLog: () => [], runId: "t" };
@@ -1156,7 +1157,7 @@ describe("Cassette — protocol replay", () => {
       scenario: makeScenario([{ transcript_contains: "Hello from the skill" }, { result: "success" as const }]),
       events,
     } as any;
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     expect(r.assertions.every((a) => a.pass)).toBe(true);
     expect(r.result).toBe("success");
   });
@@ -1190,7 +1191,7 @@ describe("Cassette — protocol replay", () => {
         },
       ],
     } as any;
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     expect(r.assertions.filter((a) => !a.pass)).toHaveLength(0);
   });
 
@@ -1205,9 +1206,9 @@ describe("Cassette — protocol replay", () => {
       events,
       fingerprint: { baseline: "0.0.0-ancient" }, // != the current latest baseline
     } as any;
-    const lenient = await replayCassette(cassette); // warns to stderr only
+    const lenient = await replayCassette(withReplayContract(cassette)); // warns to stderr only
     expect(lenient.assertions.filter((a) => !a.pass)).toHaveLength(0);
-    const strict = await replayCassette(cassette, [], { strict: true });
+    const strict = await replayCassette(withReplayContract(cassette), [], { strict: true });
     expect(strict.assertions.some((a) => !a.pass && /stale/.test(a.message ?? ""))).toBe(true);
   });
 
@@ -1221,7 +1222,7 @@ describe("Cassette — protocol replay", () => {
     const future = { cassetteVersion: 999, scenario: makeScenario([{ result: "success" as const }]), events } as any;
 
     // Default: a failing assertion is pushed (no warn on the default lane), so the replay is not green.
-    const def = await replayCassette(future);
+    const def = await replayCassette(withReplayContract(future));
     expect(def.assertions.some((a) => !a.pass && /cassette format too new/.test(a.message ?? ""))).toBe(true);
 
     // Opt-in: warns and replays without the failing assertion.
@@ -1230,9 +1231,9 @@ describe("Cassette — protocol replay", () => {
     (process.stderr as any).write = (s: string | Uint8Array): boolean => (warnings.push(String(s)), true);
     let effort: Awaited<ReturnType<typeof replayCassette>>;
     try {
-      effort = await replayCassette(future, [], { bestEffortFutureCassette: true });
+      effort = await replayCassette(withReplayContract(future), [], { bestEffortFutureCassette: true });
       const legacy = { scenario: makeScenario([{ result: "success" as const }]), events } as any; // no version → legacy, clean
-      expect((await replayCassette(legacy)).assertions.every((a) => a.pass)).toBe(true);
+      expect((await replayCassette(withReplayContract(legacy))).assertions.every((a) => a.pass)).toBe(true);
     } finally {
       (process.stderr as any).write = orig;
     }
@@ -1288,7 +1289,7 @@ describe("Cassette — protocol replay", () => {
       events,
       controlOut,
     } as any;
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     const failed = r.assertions.filter((a) => !a.pass);
     expect(failed).toHaveLength(0);
     // Also assert delivered===true directly (not just "assertion passed") to guard against a vacuous pass
@@ -1322,7 +1323,7 @@ describe("Cassette — protocol replay", () => {
       events,
       controlOut,
     } as any;
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     const fidelity = r.assertions.find((a) => a.assertion.replay_protocol_fidelity !== undefined && !a.pass);
     expect(fidelity).toBeDefined();
     expect(fidelity!.message).toMatch(/truncated|no matching control_response/);
@@ -1354,14 +1355,14 @@ describe("Cassette — protocol replay", () => {
       }),
     ];
     const cassette = { scenario: makeScenario([{ result: "success" as const }]), events, controlOut } as any;
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     const fidelity = r.assertions.find((a) => a.assertion.replay_protocol_fidelity !== undefined && !a.pass);
     expect(fidelity).toBeDefined();
     expect(fidelity!.message).toMatch(/truncated|no matching control_response/);
   });
 
-  // ---- documented behaviour without fix: question_asked fails when controlOut absent ----
-  it("bug-documented: question_asked assertion FAILS on legacy events-only replay (no controlOut)", async () => {
+  // ---- an EMPTY controlOut is not a legacy mode: the gate is unanswered, so the cassette is truncated ----
+  it("an empty controlOut beside a recorded gate fails replay_protocol_fidelity — never excluded, never vacuous", async () => {
     const reqId = "req-q1";
     const toolUseId = "toolu_GATE1";
     const events = [
@@ -1382,19 +1383,27 @@ describe("Cassette — protocol replay", () => {
       }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
     ];
-    // No controlOut — legacy mode: question/gate assertions are EXCLUDED, not vacuously passed
     const cassette = {
       scenario: makeScenario([{ question_asked: "Which format" }, { result: "success" as const }]),
       events,
-      // no controlOut
+      controlOut: emptyControlOut(),
+      userVisibleRoots: ["outputs"],
     } as any;
     const r = await replayCassette(cassette);
-    // question_asked must be EXCLUDED (not evaluated), so only `result` should be in assertions
-    const qAssertion = r.assertions.find((a) => a.assertion.question_asked !== undefined);
-    expect(qAssertion).toBeUndefined(); // excluded, not vacuously passed
-    // result assertion still runs
-    const resultAssertion = r.assertions.find((a) => a.assertion.result !== undefined);
-    expect(resultAssertion?.pass).toBe(true);
+    const fidelity = r.assertions.find((a) => a.assertion.replay_protocol_fidelity !== undefined && !a.pass);
+    expect(fidelity?.message).toMatch(/truncated/);
+  });
+
+  it("a cassette document with no controlOut is refused on read, re-recordable", () => {
+    const doc = {
+      cassetteVersion: CASSETTE_VERSION,
+      scenario: makeScenario([{ result: "success" as const }]),
+      events: [JSON.stringify({ type: "result", subtype: "success", is_error: false })],
+      userVisibleRoots: ["outputs"],
+    };
+    const rc = parseCassetteObject(doc);
+    expect("error" in rc && rc.error).toMatch(/no `controlOut`/);
+    expect("error" in rc && rc.rerecordable).toBe(true);
   });
 
   // ---- tamper test: controlOut with `questions` dropped → replay_protocol_fidelity fails ----
@@ -1442,7 +1451,7 @@ describe("Cassette — protocol replay", () => {
       events,
       controlOut: tamperedControlOut,
     } as any;
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     // The re-serialization should include `questions` (from req), but the recorded body has none
     // → mismatch → replay_protocol_fidelity failing assertion
     const fidelityFailure = r.assertions.find((a) => a.assertion.replay_protocol_fidelity !== undefined && !a.pass);
@@ -1480,7 +1489,7 @@ describe("Cassette — protocol replay", () => {
       events,
       controlOut,
     } as any;
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     const fidelityFailure = r.assertions.find((a) => a.assertion.replay_protocol_fidelity !== undefined && !a.pass);
     expect(fidelityFailure).toBeUndefined(); // no mismatch — canonicalizer normalised the key order
   });
@@ -1618,110 +1627,33 @@ describe("Cassette — protocol replay", () => {
     expect((decoded2 as any).answers).toEqual({});
   });
 
-  // ---- Old cassette (no controlOut) → warn + question/gate excluded, not false-green ----
-  it("old-cassette: no controlOut → question/gate keys excluded (not vacuously passed)", async () => {
+  // ---- Gate keys are ALWAYS evaluated on replay: a recording with no gate grades them, never excludes them ----
+  it("a recording with no gate evaluates its gate keys (never excluded, never vacuous)", async () => {
     const events = [
       JSON.stringify({ type: "system", subtype: "init" }),
       JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "done" }] } }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
     ];
     const cassette = {
-      scenario: makeScenario([
-        { question_asked: "Format" },
-        { questions_count_max: 0 },
-        { gate_answers_delivered: true },
-        { result: "success" as const },
-      ]),
+      scenario: makeScenario([{ question_asked: "Format" }, { questions_count_max: 0 }, { result: "success" as const }]),
       events,
-      // no controlOut
     } as any;
-    const stderrChunks: string[] = [];
-    const origWrite = process.stderr.write.bind(process.stderr);
-    (process.stderr as any).write = (s: string, ...rest: any[]) => {
-      stderrChunks.push(s);
-      return origWrite(s, ...rest);
-    };
-    const r = await replayCassette(cassette);
-    (process.stderr as any).write = origWrite;
-    // Warning must have been emitted
-    expect(stderrChunks.join("")).toMatch(/no controlOut/);
-    // question/gate assertions must be excluded (not vacuously evaluated)
-    expect(r.assertions.find((a) => a.assertion.question_asked !== undefined)).toBeUndefined();
-    expect(r.assertions.find((a) => a.assertion.questions_count_max !== undefined)).toBeUndefined();
-    expect(r.assertions.find((a) => a.assertion.gate_answers_delivered !== undefined)).toBeUndefined();
-    // result still runs
-    expect(r.assertions.find((a) => a.assertion.result !== undefined)?.pass).toBe(true);
+    const r = await replayCassette(withReplayContract(cassette));
+    expect(r.assertions.find((a) => a.assertion.question_asked !== undefined)?.pass).toBe(false); // no gate asked it
+    expect(r.assertions.find((a) => a.assertion.questions_count_max !== undefined)?.pass).toBe(true);
   });
 
-  // ---- Mixed-object {question_asked, result}: controlOut present — both evaluated ----
-  it("mixed-object {question_asked, result}: controlOut present → both keys evaluated", async () => {
-    const reqId = "req-q1";
-    const toolUseId = "toolu_GATE1";
-    const events = [
-      JSON.stringify({ type: "system", subtype: "init", tools: ["AskUserQuestion"] }),
-      JSON.stringify({
-        type: "control_request",
-        request_id: reqId,
-        request: {
-          subtype: "can_use_tool",
-          tool_name: "AskUserQuestion",
-          tool_use_id: toolUseId,
-          input: { questions: [{ question: "Format?", options: [{ label: "PDF" }] }] },
-        },
-      }),
-      JSON.stringify({
-        type: "user",
-        message: { content: [{ type: "tool_result", tool_use_id: toolUseId, is_error: false, content: "PDF" }] },
-      }),
-      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
-    ];
-    const controlOut = [
-      JSON.stringify({
-        type: "control_response",
-        response: {
-          subtype: "success",
-          request_id: reqId,
-          response: {
-            behavior: "allow",
-            updatedInput: {
-              questions: [{ question: "Format?", options: [{ label: "PDF" }] }],
-              answers: { "Format?": "PDF" },
-            },
-          },
-        },
-      }),
-    ];
-    // Single assertion object with both question_asked AND result
-    const cassette = {
-      scenario: makeScenario([{ question_asked: "Format", result: "success" as const }]),
-      events,
-      controlOut,
-    } as any;
-    const r = await replayCassette(cassette);
-    expect(r.assertions).toHaveLength(1);
-    expect(r.assertions[0].pass).toBe(true);
-  });
-
-  // ---- Mixed-object {question_asked, result}: controlOut absent — only `result` evaluated ----
-  it("mixed-object {question_asked, result}: controlOut absent → only result evaluated", async () => {
+  it("mixed-object {question_asked, result}: the gate half is never stripped", async () => {
     const events = [
       JSON.stringify({ type: "system", subtype: "init" }),
       JSON.stringify({ type: "assistant", message: { content: [{ type: "text", text: "done" }] } }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
     ];
-    // Mixed assertion object with both keys
-    const cassette = {
-      scenario: makeScenario([{ question_asked: "Format", result: "success" as const }]),
-      events,
-      // no controlOut
-    } as any;
-    const r = await replayCassette(cassette);
-    // with AND-semantics, the mixed object is STRIPPED to its active content keys before
-    // evaluation. controlOut is absent → question_asked is not an active content key → stripped out,
-    // leaving only {result}. So exactly one assertion is evaluated and it PASSES (result=success).
-    // (Previously first-key-wins evaluated question_asked first and false-failed — the bug this fixes.)
+    const cassette = { scenario: makeScenario([{ question_asked: "Format", result: "success" as const }]), events } as any;
+    const r = await replayCassette(withReplayContract(cassette));
     expect(r.assertions).toHaveLength(1);
-    expect(r.assertions[0].pass).toBe(true);
+    expect(r.assertions[0].assertion.question_asked).toBe("Format");
+    expect(r.assertions[0].pass).toBe(false); // result passed, question_asked did not — AND
   });
 
   // ---- regression: nonDeterministic is explicitly false on replay, never undefined ----
@@ -1735,7 +1667,7 @@ describe("Cassette — protocol replay", () => {
       scenario: makeScenario([{ result: "success" as const }]),
       events,
     } as any;
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     // Must be explicitly false — not undefined — so renderer.ts treats it correctly.
     expect(r.nonDeterministic).toBe(false);
   });
@@ -1765,7 +1697,7 @@ describe("Cassette — protocol replay", () => {
       stderrChunks.push(s);
       return origWrite(s, ...rest);
     };
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     (process.stderr as any).write = origWrite;
     const combined = stderrChunks.join("");
     // Warning must mention the count: 1 (expect_denied) + 2 (pure fs/egress asserts) = 3
@@ -1795,7 +1727,7 @@ describe("Cassette — protocol replay", () => {
       stderrChunks.push(s);
       return origWrite(s, ...rest);
     };
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     (process.stderr as any).write = origWrite;
     const combined = stderrChunks.join("");
     // the dropped filesystem half MUST be announced as a partial drop (the bug: it used to be silent)
@@ -1824,7 +1756,7 @@ describe("Cassette — protocol replay", () => {
       stderrChunks.push(s);
       return origWrite(s, ...rest);
     };
-    await replayCassette(cassette);
+    await replayCassette(withReplayContract(cassette));
     (process.stderr as any).write = origWrite;
     expect(stderrChunks.join("")).not.toMatch(/filesystem\/egress\/expect_denied/);
   });
@@ -1847,7 +1779,7 @@ describe("Cassette — protocol replay", () => {
       stderrChunks.push(s);
       return origWrite(s, ...rest);
     };
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     (process.stderr as any).write = origWrite;
     const combined = stderrChunks.join("");
     // Warning must name the line index (1) and say "not valid JSON"
@@ -1892,7 +1824,7 @@ describe("Cassette — protocol replay", () => {
       events,
       controlOut,
     } as any;
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     // No replay_protocol_fidelity failure — the round-trip must canon-match
     const fidelityFailure = r.assertions.find((a) => a.assertion.replay_protocol_fidelity !== undefined && !a.pass);
     expect(fidelityFailure).toBeUndefined();
@@ -1930,7 +1862,7 @@ describe("Cassette — pathDenials reconstruction on replay (can_use_tool pairin
 
   it("a gated can_use_tool deny with a path, paired with its controlOut reply, becomes a can_use_tool pathDenial", async () => {
     const cassette = { scenario: makeScenario([{ result: "success" as const }]), events, controlOut } as any;
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     expect(r.pathDenials).toEqual([
       {
         source: "can_use_tool",
@@ -1946,10 +1878,12 @@ describe("Cassette — pathDenials reconstruction on replay (can_use_tool pairin
     ]);
   });
 
-  it("the SAME cassette without controlOut: pathDenials is undefined (evidence-unavailable, never a vacuous pass)", async () => {
-    const cassette = { scenario: makeScenario([{ result: "success" as const }]), events, controlOut: [] } as any;
-    const r = await replayCassette(cassette);
-    expect(r.pathDenials).toBeUndefined();
+  it("the SAME cassette with an empty controlOut is evaluated: the unanswered decision fails as truncated, no denial invented", async () => {
+    const cassette = { scenario: makeScenario([{ result: "success" as const }]), events, controlOut: emptyControlOut() } as any;
+    const r = await replayCassette(withReplayContract(cassette));
+    expect(r.pathDenials).toEqual([]);
+    const fidelity = r.assertions.find((a) => a.assertion.replay_protocol_fidelity !== undefined && !a.pass);
+    expect(fidelity?.message).toMatch(/truncated/);
   });
 });
 
@@ -2110,7 +2044,7 @@ describe("Cassette — transcript_not_contains evaluates on content (not on miss
       scenario: makeScenario([{ transcript_not_contains: "needle" }]),
       events,
     } as any;
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     expect(r.assertions.every((a) => a.pass)).toBe(true);
   });
 
@@ -2124,7 +2058,7 @@ describe("Cassette — transcript_not_contains evaluates on content (not on miss
       scenario: makeScenario([{ transcript_not_contains: "needle" }]),
       events,
     } as any;
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     const a = r.assertions.find((x) => x.assertion.transcript_not_contains !== undefined);
     expect(a?.pass).toBe(false);
     expect(a?.message).toContain("unexpectedly contains");
@@ -2144,7 +2078,7 @@ describe("Cassette — truncated artifact entries pass file_exists and user_visi
       events,
       artifacts: [truncatedArtifact],
     } as any;
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     const a = r.assertions.find((x) => x.assertion.file_exists !== undefined);
     expect(a?.pass).toBe(true);
   });
@@ -2159,7 +2093,7 @@ describe("Cassette — truncated artifact entries pass file_exists and user_visi
       events,
       artifacts: [truncatedArtifact],
     } as any;
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     const a = r.assertions.find((x) => x.assertion.user_visible_artifact !== undefined);
     expect(a?.pass).toBe(true);
   });
@@ -2177,7 +2111,7 @@ describe("Cassette — truncated artifact entries pass file_exists and user_visi
       events,
       artifacts: [{ path: "outputs/report.json", bytes: body.length, sha256, body }],
     } as any;
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     const a = r.assertions.find((x) => x.assertion.file_exists !== undefined);
     expect(a?.pass).toBe(true);
   });

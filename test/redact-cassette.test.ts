@@ -17,7 +17,7 @@ const scenario = (assert: unknown[], prompt = "hi") => ({
 });
 
 function cassetteWith(events: string[], assert: unknown[], prompt = "hi"): any {
-  return { scenario: scenario(assert, prompt), events };
+  return withReplayContract({ scenario: scenario(assert, prompt), events });
 }
 
 describe("redactCassette — whole-surface content redaction", () => {
@@ -385,7 +385,7 @@ describe("preRunHashes wiring: cassette → replay RunResult", () => {
         JSON.stringify({ type: "system", subtype: "init", tools: [] }),
         JSON.stringify({ type: "result", subtype: "success", is_error: false }),
       ],
-      controlOut: [],
+      controlOut: recordedControlOut(),
       preRunPaths: ["outputs/seed.md"],
       preRunHashes: { "outputs/seed.md": sha },
       artifacts: [{ path: "outputs/seed.md", bytes: body.length, sha256: sha, body, encoding: undefined }],
@@ -403,6 +403,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { recordedControlOut, withReplayContract } from "./helpers/minimal-cassette.js";
 
 describe("binary artifact bodies round-trip byte-exact via a base64 encoding marker", () => {
   it("buildManifest stores non-UTF-8 bytes as base64; materializeManifest restores them exactly", () => {
