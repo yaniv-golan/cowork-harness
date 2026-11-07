@@ -132,14 +132,13 @@ describe.runIf(can)("stdout/stderr are scrubbed with the same secret set as resu
       writePlugin(join(f.cwd, "demo"));
       const base = ["skill", join(f.cwd, "demo"), "say hi", "--fidelity", "protocol"];
       const j = await cli(f, [...base, "--output-format", "json"]);
-      // Exit 1, not 0: an L0 run against the fixture's own config dir fails the contamination guard. The
-      // run itself completes, which is all this case needs.
-      expect(j.code, j.stderr).toBe(1);
+      // Exit 0: the fixture's fake token puts the run on the sealed config dir, so the run completes and passes.
+      expect(j.code, j.stderr).toBe(0);
       scrubbed(j.stdout, "skill json stdout");
       expect(JSON.parse(j.stdout).results[0].finalMessage).toBe("The key is [REDACTED] ok");
       expect(j.stderr.includes(SECRET)).toBe(false);
       const t = await cli(f, base);
-      expect(t.code, t.stderr).toBe(1);
+      expect(t.code, t.stderr).toBe(0);
       expect(t.stdout.includes(SECRET)).toBe(false);
       expect(t.stderr.includes(SECRET), t.stderr).toBe(false);
     } finally {
