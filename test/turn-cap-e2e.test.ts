@@ -16,9 +16,18 @@ const CAPPED = [
 // The agent's own sign-in failure at the cap: a `<synthetic>` reply and a result the agent marks `success` but
 // `is_error`. Same result fields the cap gives (error, kind agent, num_turns == cap), so only the subtype and the
 // synthetic reply tell them apart.
-const syntheticAuth = (subtype: string) =>
+const syntheticAuth = (subtype: string, liveFirst = false) =>
   [
     out({ type: "system", subtype: "init", session_id: "stub", model: "claude-sonnet-5", tools: [], cwd: "/tmp" }),
+    ...(liveFirst
+      ? [
+          out({
+            type: "assistant",
+            session_id: "stub",
+            message: { model: "claude-sonnet-5", role: "assistant", content: [{ type: "text", text: "Working on it." }] },
+          }),
+        ]
+      : []),
     out({
       type: "assistant",
       session_id: "stub",
@@ -35,13 +44,14 @@ const syntheticAuth = (subtype: string) =>
       num_turns: 1,
       result: "Authentication required · Sign in again to continue",
       session_id: "stub",
-      total_cost_usd: 0,
+      total_cost_usd: liveFirst ? 0.01 : 0,
     }),
     "cat >/dev/null",
   ].join("\n");
 const SYNTHETIC_AUTH = syntheticAuth("success");
-// The same reply under a cap-stop subtype: only the `<synthetic>` reading (agent-infra-end.ts) can tell it from the cap.
-const SYNTHETIC_AUTH_CAP_SUBTYPE = syntheticAuth("error_during_execution");
+// The same reply under a cap-stop subtype, after a live model already spent (a sign-in that expired mid-run): only the
+// sign-in text beside the `<synthetic>` turn (agent-infra-end.ts) can tell it from the cap.
+const SYNTHETIC_AUTH_CAP_SUBTYPE = syntheticAuth("error_during_execution", true);
 
 function setUp(f: ReturnType<typeof makeStubFixture>, assertBlock: string): void {
   const session = join(f.cwd, "capped.session.yaml");
