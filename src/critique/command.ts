@@ -3011,10 +3011,19 @@ export async function cmdCritique(argv: string[]): Promise<void> {
 }
 
 import { pathToFileURL } from "node:url";
-import { exitWith, rethrowIfExit } from "../run/exit.js";
+import { exitWith, rethrowIfExit, runAsEntry } from "../run/exit.js";
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   installOrphanCleanupHandlers();
-  void main();
+  // The same top level as the cowork-harness entry (src/cli.ts): a requested exit settles its code. Anything else
+  // ends as it did before this entry had a top level, with its stack and exit 1.
+  runAsEntry(
+    () => main(),
+    { sweep: killAllOutstandingChildGroups, warn },
+    (e) => {
+      writeAllSync(2, `${e instanceof Error ? (e.stack ?? e.message) : String(e)}\n`);
+      return 1;
+    },
+  );
 }
 
 // Exported for the reflection-prompt version to be inspectable/testable without spawning anything.

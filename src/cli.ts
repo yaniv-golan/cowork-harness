@@ -246,7 +246,7 @@ import {
   type DecisionChannel,
 } from "./decide/external-channel.js";
 
-import { armExitFallback, ExitRequested, exitWith, installExitHandlers, rethrowIfExit, settleExitCode } from "./run/exit.js";
+import { exitWith, rethrowIfExit, runAsEntry } from "./run/exit.js";
 import { killOutstandingChildGroups } from "./bounded-spawn.js";
 // Synchronous writes (fd 1/2): `process.stdout.write` + `process.exit()` truncates on a PIPE, which
 // would lose the json envelope for any agent/CI that pipes us. writeAllSync retries EAGAIN and loops
@@ -5787,51 +5787,38 @@ function cmdInspect(args: string[]) {
   }
 }
 
-/** The top level, once `main()` is done. Never calls fail(): a command's requested exit (ExitRequested) and its
- *  errors set `process.exitCode`, then the event loop drains and the process exits by itself. A fallback timer
- *  exits only if something still holds the loop (src/run/exit.ts). */
-function onMainFulfilled(): void {
-  settleExitCode(undefined, warn);
-  finishTopLevel();
-}
-
-function onMainRejected(e: unknown): void {
+/** What the top level does with a rejection of `main()` that is not an exit request (runAsEntry settles those). Never
+ *  calls fail(): each known error class prints its envelope and returns its code; the process then drains by itself. */
+function onMainRejected(e: unknown): number | "handled" {
   const command = process.argv[2] ?? "";
   const json = isJsonOutput(process.argv.slice(2));
   const err = e as Error | undefined;
-  if (e instanceof ExitRequested) settleExitCode(e.code, warn);
-  else if (e instanceof InterruptedError) {
+  if (e instanceof InterruptedError) {
     // A child died of the operator's interrupt before this process's own handler ran: handle it as that interrupt.
     // warn(), not log(): on a hang-up the terminal is gone and a raw fd write would throw before interrupt() runs.
     warn(`::warning:: [interrupt] ${e.message} — stopping\n`);
-    return interrupt(e.signal);
-  } else if (e instanceof UnansweredError) settleExitCode(printFailure(command, "unanswered", e.message, e.hint, json), warn);
-  else if (e instanceof BoundaryError) settleExitCode(printFailure(command, "boundary", e.message, undefined, json), warn);
-  else if (e instanceof UsageError) settleExitCode(printFailure(command, "usage", e.message, e.hint, json), warn);
+    interrupt(e.signal);
+    return "handled";
+  }
+  if (e instanceof UnansweredError) return printFailure(command, "unanswered", e.message, e.hint, json);
+  if (e instanceof BoundaryError) return printFailure(command, "boundary", e.message, undefined, json);
+  if (e instanceof UsageError) return printFailure(command, "usage", e.message, e.hint, json);
   // A refused legacy/mixed/pre-completion run dir (e.g. `--resume` onto one, see execute.ts) is a legible,
   // well-formed-invocation refusal, not an internal harness bug — route it the same clean, no-stack way as
   // BoundaryError/UsageError rather than falling through to the `internal` branch below, which prints a
   // stack trace for what is actually the expected "this dir predates the layout" message.
   // RunDirShapeError covers LegacyRunDirError and MultiLegRunDirError (a multi-leg root or a host-action leg).
-  else if (e instanceof RunDirShapeError) settleExitCode(printFailure(command, "runtime", e.message, undefined, json), warn);
-  else {
-    // runtime/unexpected: keep the stack on stderr for humans; a structured envelope on stdout for json.
-    if (json) out(jsonError(command, "internal", String(err?.message ?? e)));
-    else log(String(err?.stack ?? e));
-    settleExitCode(2, warn); // cli-error-envelope-exempt: emits its own jsonError(...) call above (full stack on stderr for text mode), not a fail() plain-message shape
-  }
-  finishTopLevel();
+  if (e instanceof RunDirShapeError) return printFailure(command, "runtime", e.message, undefined, json);
+  // runtime/unexpected: keep the stack on stderr for humans; a structured envelope on stdout for json.
+  if (json) out(jsonError(command, "internal", String(err?.message ?? e)));
+  else log(String(err?.stack ?? e));
+  return 2; // cli-error-envelope-exempt: emits its own jsonError(...) call above (full stack on stderr for text mode), not a fail() plain-message shape
 }
 
 /** Kill helper process groups that would hold the loop open, then arm the exit fallback. */
 function sweepHelpers(): void {
   killOutstandingChildGroups();
   sweepHelperGroups();
-}
-
-function finishTopLevel(): void {
-  sweepHelpers();
-  armExitFallback(warn);
 }
 
 /** True when this module is the process's entry point (`node dist/cli.js`, the npm bin symlink, `npx`,
@@ -5847,7 +5834,4 @@ export function isCliEntry(argv1: string | undefined = process.argv[1], self: st
   }
 }
 
-if (isCliEntry()) {
-  installExitHandlers({ sweep: sweepHelpers, warn });
-  main().then(onMainFulfilled, onMainRejected);
-}
+if (isCliEntry()) runAsEntry(main, { sweep: sweepHelpers, warn }, onMainRejected);

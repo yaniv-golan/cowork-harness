@@ -10,6 +10,8 @@
  * into a later, different code without the top level noticing (it prints a warning naming both).
  */
 
+import { writeAllSync } from "../io.js";
+
 /** Thrown by {@link exitWith}. Not an error: every broad `catch` that can see one must rethrow it ({@link rethrowIfExit}). */
 export class ExitRequested extends Error {
   readonly code: number;
@@ -126,7 +128,8 @@ export function installExitHandlers(hooks: TopLevelExitHooks): void {
     }
     if (process.listenerCount(event) > 1) return;
     try {
-      process.stderr.write(`${e instanceof Error ? (e.stack ?? e.message) : String(e)}\n`);
+      // Synchronous, as Node's default handler writes: an async write to a piped stderr can be cut off by the exit.
+      writeAllSync(2, `${e instanceof Error ? (e.stack ?? e.message) : String(e)}\n`);
     } finally {
       process.exit(1); // exit-allowed: an uncaught error, as Node's default handling would end the process
     }
@@ -138,4 +141,35 @@ export function installExitHandlers(hooks: TopLevelExitHooks): void {
 /** Test-only: whether {@link installExitHandlers} has run in this process. */
 export function exitHandlersInstalled(): boolean {
   return handlersInstalled;
+}
+
+/** What an entry does with a rejection that is not an exit request: the code to exit with (after printing whatever it
+ *  prints), or `"handled"` when it ended the process its own way (an interrupt). */
+export type EntryRejectionHandler = (e: unknown) => number | "handled";
+
+/**
+ * The top level of a CLI entry, shared by every module that can be run directly: install the process-level handlers,
+ * run `main`, settle the exit code from its outcome, then sweep and arm the fallback. Never calls `process.exit`.
+ */
+export function runAsEntry(main: () => Promise<unknown>, hooks: TopLevelExitHooks, onRejected: EntryRejectionHandler): void {
+  installExitHandlers(hooks);
+  const finish = () => {
+    hooks.sweep();
+    armExitFallback(hooks.warn);
+  };
+  main().then(
+    () => {
+      settleExitCode(undefined, hooks.warn);
+      finish();
+    },
+    (e: unknown) => {
+      if (e instanceof ExitRequested) settleExitCode(e.code, hooks.warn);
+      else {
+        const code = onRejected(e);
+        if (code === "handled") return;
+        settleExitCode(code, hooks.warn);
+      }
+      finish();
+    },
+  );
 }
