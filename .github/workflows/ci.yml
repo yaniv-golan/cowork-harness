@@ -638,9 +638,19 @@ jobs:
         env:
           COWORK_HARNESS_CONTRACT_FETCH: required
           COWORK_TEST_HANG_DIR: ${{ runner.temp }}/hangs
+        # `npm run ci`'s three steps, inlined so the test run can carry reporters: `hanging-process` names what keeps
+        # vitest alive after the run, and the JSON report gives per-file wall time (the next step). `npm run ci` itself
+        # stays as it is: it is also prepublishOnly and runs locally, where $RUNNER_TEMP is unset.
         run: |
           set -o pipefail
-          npm run ci 2>&1 | tee "$RUNNER_TEMP/hangs/vitest.log"
+          { npm run typecheck && npm run build && npx vitest run --reporter=default --reporter=hanging-process \
+              --reporter=json --outputFile.json="$RUNNER_TEMP/hangs/vitest-files.json"; } 2>&1 | tee "$RUNNER_TEMP/hangs/vitest.log"
+      - name: Per-file wall time
+        if: always()
+        continue-on-error: true
+        run: |
+          [ -s "$RUNNER_TEMP/hangs/vitest-files.json" ] || { echo "no JSON report (the test run did not finish)"; exit 0; }
+          npx tsx scripts/ci/vitest-file-timing.ts "$RUNNER_TEMP/hangs/vitest-files.json" 40 | tee -a "$RUNNER_TEMP/hangs/vitest.log"
       - name: Disarm the job-level hang dump (let a dump already under way finish)
         if: always()
         run: |
@@ -654,6 +664,16 @@ jobs:
           path: ${{ runner.temp }}/hangs
           if-no-files-found: ignore
           retention-days: 14
+      - name: Upload the test log and per-file timing (passing run)
+        if: ${{ success() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: timing-floor
+          path: |
+            ${{ runner.temp }}/hangs/vitest.log
+            ${{ runner.temp }}/hangs/vitest-files.json
+          if-no-files-found: ignore
+          retention-days: 7
 
   # ── Command-metric runtimes at their floors ─────────────────────────────────────────────
   # A command metric runs Python scripts through python/metric-runner.py and Node scripts under the permission
