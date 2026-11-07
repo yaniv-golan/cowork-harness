@@ -68,6 +68,9 @@ All notable changes to this project are documented here. The format is based on
   `1`; the partial-migration `4` is gone. `--dry-run` and `--session` are still accepted and change nothing; the JSON
   payload keeps `migrated` (always `0`).
 - **`lint` no longer reports `gate-needs-controlout`**: every cassette this build reads carries `controlOut`.
+- **`verify-cassettes --margins` reports `questions_count_max` as not derivable (`null`) whenever the replay failed
+  as a truncated cassette**, instead of only when `controlOut` was absent or empty, so an unanswered decision never
+  reads as an infinite margin.
 
 ### Removed
 
@@ -77,8 +80,8 @@ All notable changes to this project are documented here. The format is based on
   field, re-record it. `record <dir/> --rerecord-stale` picks up every such cassette and re-records it from the
   scenario file it names; with no scenario file on disk it fails naming the `record <scenario.yaml> --out <path>`
   to run, since there is no readable embedded snapshot to fall back on.
-- **The pre-v12 skill-hash algorithm.** Digests are computed only the jcs1 way; nothing this build reads carries
-  the older ones.
+- **The pre-v12 skill-hash algorithm.** Digests are computed only the jcs1 way. No cassette this build reads
+  carries the older ones; a kept run dir that does is reported as not comparable (re-record), as before.
 - **`schema/cassette.v9.json`, `cassette.v10.json` and `cassette.v11.json`.** A cassette whose `$schema` names one
   of them is below the read floor; its `$schema` URL now returns 404.
 
