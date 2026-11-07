@@ -157,6 +157,28 @@ describe.skipIf(!built)("exit matrix: each subcommand exits by itself with its d
     30_000,
   );
 
+  it("critique whose task turn cannot run is an instrument failure: exit 2, the report, and no 'unexpected failure'", () => {
+    // The task turn is refused before any agent starts (the unit lane forbids spawning one). critique reports that
+    // as an instrument failure and asks to exit 2 from inside its own try; the outer catch must pass the request
+    // through. If it caught it instead, the exit code would still be 2, but with an "unexpected failure" stack.
+    const d = mkdtempSync(join(tmpdir(), "exit-matrix-critique-"));
+    try {
+      mkdirSync(join(d, "skill"));
+      mkdirSync(join(d, "home"));
+      writeFileSync(join(d, "skill", "SKILL.md"), "---\nname: s\ndescription: d\n---\nbody\n");
+      const r = cli(["critique", "skill", "--prompt", "do it", "--model", "claude-sonnet-5", "--output-format", "json"], d, {
+        HOME: join(d, "home"),
+        COWORK_HARNESS_FORBID_SPAWN: "1",
+      });
+      expect(r.code, r.stderr).toBe(2);
+      expect(JSON.parse(r.stdout)).toMatchObject({ infraFailurePhase: "task turn" });
+      expect(r.stderr).not.toContain("unexpected failure");
+      expect(r.stderr).not.toContain(EXIT_FALLBACK_LINE);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 60_000);
+
   it("a scenario file that does not exist is a usage error with a JSON envelope", () => {
     const r = cli(["run", join(cwd, "missing.yaml"), "--output-format", "json"], cwd);
     expect(r.code).toBe(2);
