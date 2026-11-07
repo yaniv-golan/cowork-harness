@@ -5731,9 +5731,27 @@ export async function cmdRecord(args: string[]) {
         // batch unless --allow-budget-stop, a record batch stopped by its cap still exits 0.
         return true;
       }
+      // A cassette written by a NEWER build reads through the forward-compat tolerance and can look stale (its
+      // baseline moved), but re-recording it here would overwrite that recording with an older build's: refuse.
+      const tooNew = (v: number | undefined): string | undefined =>
+        (v ?? 0) > CASSETTE_VERSION
+          ? `stamped v${v}, newer than this build (v${CASSETTE_VERSION}) — upgrade cowork-harness to re-record`
+          : undefined;
       // A multi-leg cassette re-records from the legs: scenario it names, into the same file.
       if (isMultiLegCassetteFile(cp)) {
         const m = readMultiLegCassette(cp);
+        const newer =
+          "error" in m
+            ? undefined
+            : (tooNew(m.cassette.cassetteVersion) ??
+              m.cassette.legs
+                .map((l) => ("cassette" in l ? tooNew((l as { cassette: Cassette }).cassette.cassetteVersion) : undefined))
+                .find((x) => x !== undefined));
+        if (newer) {
+          log(`  ✗ ${tag} ${cp}: ${newer}`);
+          staleItems[i] = { cassette: cp, status: "failed", error: newer };
+          return false;
+        }
         const srcPath = "error" in m || !m.cassette.scenarioSource ? undefined : join(dirname(cp), m.cassette.scenarioSource);
         if (!srcPath || !existsSync(srcPath)) {
           const why = "error" in m ? m.error : `its scenario source ${srcPath ?? "(none recorded)"} is not there`;
@@ -5771,6 +5789,12 @@ export async function cmdRecord(args: string[]) {
       if ("error" in t) {
         log(`  ✗ ${tag} ${cp}: ${t.error} — cannot re-record`);
         staleItems[i] = { cassette: cp, status: "failed", error: `${t.error} — cannot re-record` };
+        return false;
+      }
+      const newer = "cassette" in t ? tooNew(t.cassette.cassetteVersion) : undefined;
+      if (newer) {
+        log(`  ✗ ${tag} ${cp}: ${newer}`);
+        staleItems[i] = { cassette: cp, status: "failed", error: newer };
         return false;
       }
       // An older-format cassette (below the read floor, or missing a field replay now requires) still names its

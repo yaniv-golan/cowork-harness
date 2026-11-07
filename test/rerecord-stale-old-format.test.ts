@@ -5,6 +5,7 @@ import { describe, it, expect } from "vitest";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { makeStubFixture, spawnCli, exited, POSIX } from "./helpers/stub-agent.js";
+import { CASSETTE_VERSION } from "../src/run/cassette.js";
 
 const can = POSIX && existsSync(resolve("dist/cli.js"));
 const out = (o: unknown) => `printf '%s\\n' '${JSON.stringify(o)}'`;
@@ -68,6 +69,28 @@ describe.runIf(can)("record --rerecord-stale re-records an older-format cassette
     },
     180_000,
   );
+
+  it("a NEWER build's cassette that looks stale (baseline moved) is never re-recorded: bytes unchanged, upgrade named, not exit 0", async () => {
+    const f = makeStubFixture(OK);
+    try {
+      const v = CASSETTE_VERSION + 1;
+      const cass = await agedCassette(f, (c) => {
+        c.cassetteVersion = v;
+        c.fingerprint = { ...(c.fingerprint as object), baseline: "0.0.0-does-not-exist", hashFormat: "jcs1" };
+      });
+      const before = readFileSync(cass);
+      const rr = await cli(f, ["record", "--rerecord-stale", join(f.cwd, "cassettes"), "--output-format", "json"]);
+      expect(rr.code).not.toBe(0);
+      const env = JSON.parse(rr.stdout);
+      const items = env.payload?.items ?? env.items;
+      expect(items).toHaveLength(1); // it WAS selected as stale — the guard, not the selection, keeps it safe
+      expect(items[0].status).toBe("failed");
+      expect(items[0].error).toBe(`stamped v${v}, newer than this build (v${CASSETTE_VERSION}) — upgrade cowork-harness to re-record`);
+      expect(readFileSync(cass).equals(before)).toBe(true);
+    } finally {
+      f.cleanup();
+    }
+  }, 180_000);
 
   it("with no on-disk scenario it fails naming why — there is no readable embedded snapshot", async () => {
     const f = makeStubFixture(OK);

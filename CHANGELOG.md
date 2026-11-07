@@ -26,6 +26,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`record --rerecord-stale` no longer overwrites a cassette written by a newer cowork-harness.** Such a cassette
+  can read as stale (its baseline moved), and the re-record then replaced it with this build's recording. It is now
+  reported as failed (`stamped vN, newer than this build (vM) — upgrade cowork-harness to re-record`) and left
+  untouched, and the batch does not exit 0; the same holds for a multi-leg cassette with such a leg.
 - **At `protocol`, the session's agent flags now reach the agent.** The protocol tier built its own command line and
   dropped `--max-turns`, the thinking flags, `--thinking-display`, and `--session-id`/`--resume`. So
   `agent_max_turns` was recorded but never applied, and `skill --session-id … --resume` at protocol started a new
