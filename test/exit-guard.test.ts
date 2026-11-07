@@ -15,7 +15,16 @@ describe("every broad catch that can see an exit request lets it through", () =>
   it("the guarded set is computed and covers the files that raise exits", () => {
     // Printed on failure so a reviewer sees the set the guard applies to, not a count.
     const rel = files.map((f) => f.replace(/\\/g, "/"));
-    for (const must of ["src/cli.ts", "src/run/envelope.ts", "src/run/cassette.ts", "src/critique/command.ts", "src/run/chat.ts"])
+    for (const must of [
+      "src/cli.ts",
+      "src/run/envelope.ts",
+      "src/run/cassette.ts",
+      "src/critique/command.ts",
+      "src/run/chat.ts",
+      // the cross-file wrappers: they raise nothing, but decide what a job's throw means
+      "src/eval/command.ts",
+      "src/hillclimb/runner.ts",
+    ])
       expect(rel, rel.join("\n")).toContain(must);
     expect(files.length, rel.join("\n")).toBeGreaterThanOrEqual(15);
   });
@@ -43,10 +52,15 @@ describe("every broad catch that can see an exit request lets it through", () =>
           "try { a(); } catch { /* no binding */ }",
           "try { a(); } catch (e) { // exit-safe: test",
           "  log(e); }",
+          "try { a(); } catch (e) {",
+          "  // exit-safe: on the body's first line",
+          "  log(e); }",
+          "try { a(); } catch (e) { if (e instanceof InterruptedError || e instanceof ExitRequested) throw e; }",
+          "try { a(); } catch (e) { if (e instanceof InterruptedError || e instanceof UsageError) throw e; }",
           'const s = "} catch (e) { not code }";',
         ].join("\n"),
       );
-      expect(catchSites(f).map((c) => c.kind)).toEqual(["none", "rethrowIfExit", "narrow", "none", "marker"]);
+      expect(catchSites(f).map((c) => c.kind)).toEqual(["none", "rethrowIfExit", "narrow", "none", "marker", "marker", "narrow", "none"]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -34,7 +34,7 @@ import { normalizeModelId } from "../run/model-provenance.js";
 import { servedModelMismatch } from "./served-model.js";
 import { billingOf, costLine, costSummary, otherModelShareWarning, type Billing } from "./cost.js";
 
-import { ExitRequested } from "../run/exit.js";
+import { ExitRequested, rethrowIfExit } from "../run/exit.js";
 /** What one job hands back. */
 export interface JobReport {
   result?: RunResult;
@@ -156,7 +156,9 @@ export async function runHillclimb(args: HillclimbRunArgs, deps: RunnerDeps): Pr
       started = true;
     });
   } catch (e) {
-    if (e instanceof InterruptedError) throw e; // the operator's interrupt, learned from a probe: exit as interrupted
+    // The operator's interrupt, learned from a probe, or a requested exit (an unanswered gate inside a job): exit as
+    // interrupted, or with the requested code. Neither is a refusal or a mid-run stop.
+    if (e instanceof InterruptedError || e instanceof ExitRequested) throw e;
     // runner-scaffold.mjs l.591-602: before the workers start, anything thrown is a refusal (exit 2); after, a mid-run stop.
     if (started) {
       const m = `stopped mid-run (rows already written are kept; re-run to resume): ${message(e)}`;
@@ -428,7 +430,8 @@ async function run(
       say(line);
       try {
         writer.writeProgress(line);
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         /* runner-scaffold.mjs l.581: progress is best-effort */
       }
     };
@@ -517,6 +520,7 @@ async function run(
           ctx,
         );
       } catch (e) {
+        rethrowIfExit(e);
         // A row that cannot be built is this attempt's failure, not the pass's.
         out = {
           dest: "errors",
@@ -598,6 +602,7 @@ async function run(
           if (outputs.skipped.length) (out.row.meta as Record<string, unknown>).outputs_skipped = outputs.skipped;
         }
       } catch (e) {
+        rethrowIfExit(e);
         traceError = e;
       }
       writer.appendResult(out.row);
@@ -614,6 +619,7 @@ async function run(
         writer.writeTrace(c.id, rep, trace!.turns);
         ok++;
       } catch (e) {
+        rethrowIfExit(e);
         fail++;
         say(`  [${v}] ${c.stem} rep${rep} scored, but a post-row write failed: ${message(e)}`);
       }
@@ -626,6 +632,7 @@ async function run(
         for (const line of r.lines) say(line);
         stepFailures += r.failures;
       } catch (e) {
+        rethrowIfExit(e);
         stepFailures++;
         say(`[${v}] the pass finished, but its post-pass step failed: ${message(e)}`);
       }
@@ -640,6 +647,7 @@ async function run(
       for (const line of writeCostSummary(writer, v)) say(line);
       if (v === "baseline") for (const line of headroom(loadFlowSnapshot(flowAbs), all).warnings) say(line);
     } catch (e) {
+      rethrowIfExit(e);
       stepFailures++;
       say(`[${v}] the pass finished, but writing summary.json or the headroom report failed: ${message(e)}`);
     }
@@ -647,7 +655,8 @@ async function run(
     // mid-walk) is never a failed pass.
     try {
       for (const line of pairwiseHints(loadFlowSnapshot(flowAbs), flowArg, args.target)) say(line);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       /* warn-only */
     }
     say(`[${v}] done - ${ok} ok, ${fail} failed -> ${join(flowArg, v, "results.jsonl")}`);
@@ -663,7 +672,8 @@ function fallbackBilling(report: JobReport, ctx: AttemptContext): { billing?: Bi
   try {
     const billing = billingOf({ events: report.events, modelUsage: report.result?.modelUsage, credentialEnv: ctx.credentialEnv });
     return billing !== undefined ? { billing } : {};
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return {};
   }
 }
@@ -696,6 +706,7 @@ export function readStateIfPresent(flowArg: string, cwd: string): Record<string,
       throw new UsageError(`${join(flowArg, "_state.json")} must hold a JSON object`);
     return st;
   } catch (e) {
+    rethrowIfExit(e);
     if (e instanceof UsageError) throw e;
     throw new UsageError(`${join(flowArg, "_state.json")} exists but is not valid JSON - fix it before spending a pass`);
   }
@@ -718,7 +729,8 @@ function skillTrackedByVariant(snap: ReturnType<typeof loadFlowSnapshot>): Map<s
         const set = out.get(variant) ?? new Set<Tracked>();
         set.add(typeof t === "string" && t !== NONE ? t : UNRECORDED);
         out.set(variant, set);
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         /* schema-check reports malformed lines */
       }
     }
@@ -747,7 +759,8 @@ export function requestedSummary(results: string | null): Record<string, string 
     let meta: Record<string, unknown> | undefined;
     try {
       meta = (JSON.parse(line) as { meta?: Record<string, unknown> }).meta;
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       continue; // schema-check reports malformed lines
     }
     rows++;
@@ -797,7 +810,8 @@ function requestedMix(
     let r: { prompt_id?: unknown; model?: unknown; meta?: { model_requested?: unknown; effort?: unknown; effort_selector?: unknown } };
     try {
       r = JSON.parse(line);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       continue; // schema-check reports malformed lines
     }
     const id = String(r.prompt_id);
@@ -868,7 +882,8 @@ function ablationMix(snap: ReturnType<typeof loadFlowSnapshot>, ablate: boolean)
       try {
         const r = JSON.parse(line) as { prompt_id?: unknown; meta?: { ablated?: unknown } };
         if ((r.meta?.ablated === true) !== ablate) return `${variant}/${String(r.prompt_id)}`;
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         /* schema-check reports malformed lines */
       }
     }

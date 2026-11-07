@@ -67,12 +67,18 @@ export function stripComments(src: string, opts: { strings?: boolean } = {}): st
 
 const lineOf = (src: string, offset: number) => src.slice(0, offset).split("\n").length;
 
+/** Files that raise no exit request themselves but run code that can (a job, a pool item) and decide what a throw
+ *  from it means: a catch there that turned a request into a row or an ordinary stop would end the run with the
+ *  wrong code. Named, since no import marks them. */
+export const CROSS_FILE_WRAPPERS = [join("src", "eval", "command.ts"), join("src", "hillclimb", "runner.ts")];
+
 /**
  * The files whose catches must let an exit request through: those that import `fail` from envelope.js, call
- * `exitWith(`, or define a `: never` wrapper over either. Matched on comment-free text.
+ * `exitWith(`, or define a `: never` wrapper over either, plus the CROSS_FILE_WRAPPERS. Matched on comment-free text.
  */
 export function guardedFiles(files = srcFiles()): string[] {
   return files.filter((f) => {
+    if (CROSS_FILE_WRAPPERS.some((w) => f.endsWith(w))) return true;
     const s = stripComments(readFileSync(f, "utf8"));
     if (/import\s*(type\s*)?\{[^}]*\bfail\b[^}]*\}\s*from\s*"[^"]*envelope\.js"/.test(s)) return true;
     if (/\bexitWith\(/.test(s) && !f.endsWith(join("run", "exit.ts"))) return true;
@@ -110,10 +116,23 @@ export function catchSites(file: string): CatchSite[] {
       .trimStart()
       .split("\n")[0]
       .trim();
-    const marker = rawLines[line - 1].match(MARKER);
+    // A marker on the catch line itself, or as the body's first line: a line that holds only the marker comment and
+    // follows a catch line whose body is still open.
+    const bodyOpen = rawLines[line - 1].trimEnd().endsWith("{");
+    const marker =
+      rawLines[line - 1].match(MARKER) ??
+      (bodyOpen && /^\s*\/\/\s*exit-safe:/.test(rawLines[line] ?? "") ? (rawLines[line] ?? "").match(MARKER) : null);
     let kind: CatchSite["kind"] = "none";
     if (binding && first.startsWith(`rethrowIfExit(${binding});`)) kind = "rethrowIfExit";
     else if (binding && new RegExp(`^if \\(!\\(${binding} instanceof [\\w$.]+\\)\\) throw ${binding};`).test(first)) kind = "narrow";
+    // `if (e instanceof InterruptedError || e instanceof ExitRequested) throw e;`: rethrows the request by name.
+    else if (
+      binding &&
+      new RegExp(
+        `^if \\((${binding} instanceof [\\w$.]+ \\|\\| )*${binding} instanceof ExitRequested( \\|\\| ${binding} instanceof [\\w$.]+)*\\) throw ${binding};`,
+      ).test(first)
+    )
+      kind = "narrow";
     else if (marker) kind = "marker";
     out.push({ file: relative(process.cwd(), file), line, binding, kind, reason: marker?.[1].trim(), first });
   }

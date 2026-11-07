@@ -72,7 +72,7 @@ import { loadCostHistory, loadRowHistory, type RowHistoryLoad } from "./plan-his
 import { scheduleCostLine } from "./planner.js";
 import { planEval, type EvalPlan, type PlanScenarioInput } from "./plan.js";
 
-import { ExitRequested } from "../run/exit.js";
+import { ExitRequested, rethrowIfExit } from "../run/exit.js";
 /** BH's false-discovery rate for `confirmed`. Fixed; `--alpha` sets the per-row level and Holm's. */
 export const BH_Q = 0.1;
 export const DEFAULT_REPS = 5;
@@ -243,6 +243,7 @@ export function parseEvalArgs(argv: readonly string[]): EvalArgs {
     // The shared resolver: an explicit flag, else COWORK_HARNESS_OUTPUT_FORMAT.
     output = "--output-format" in values ? parseOutputFormat([...argv]) : envOutputFormat();
   } catch (e) {
+    rethrowIfExit(e);
     throw new UsageError((e as Error).message);
   }
   const onUnanswered = values["--on-unanswered"];
@@ -357,7 +358,8 @@ const sha256File = (p: string) => createHash("sha256").update(readFileSync(p)).d
 const realOr = (p: string) => {
   try {
     return realpathSync(p);
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return resolve(p);
   }
 };
@@ -390,7 +392,8 @@ function loadScenarios(args: EvalArgs, say: (s: string) => void): LoadedScenario
         let doc: unknown;
         try {
           doc = parseYaml(readFileSync(f, "utf8"));
-        } catch {
+        } catch (caught) {
+          rethrowIfExit(caught);
           return true; // unparseable: let the scenario loader report it
         }
         const isScenario = typeof doc === "object" && doc !== null && !Array.isArray(doc) && "prompt" in doc;
@@ -416,6 +419,7 @@ function loadScenarios(args: EvalArgs, say: (s: string) => void): LoadedScenario
     try {
       scenario = loadRunnableScenario(file);
     } catch (e) {
+      rethrowIfExit(e);
       throw new UsageError(`${file}: ${(e as Error).message}`);
     }
     if (scenario.on_unanswered === "prompt")
@@ -426,6 +430,7 @@ function loadScenarios(args: EvalArgs, say: (s: string) => void): LoadedScenario
     try {
       session = loadSessionFromFile(scenario.session);
     } catch (e) {
+      rethrowIfExit(e);
       throw new UsageError(`scenario "${scenario.name}": ${(e as Error).message}`);
     }
     if (session.plugins.local_plugins.length !== 1)
@@ -487,6 +492,7 @@ function resolveEvalContext(args: EvalArgs, deps: EvalDeps): EvalContext {
     try {
       rowCount += scenarioRows(s.scenario.name, s.scenario.assert ?? []).length + (s.scenario.metrics?.length ?? 0);
     } catch (e) {
+      rethrowIfExit(e);
       throw new UsageError((e as Error).message);
     }
   }
@@ -566,6 +572,7 @@ function prepareSearchCorpus(
   try {
     pool = effectivePool(src, opt.minScore);
   } catch (e) {
+    rethrowIfExit(e);
     if (e instanceof PoolBuildError || (e as NodeJS.ErrnoException)?.code)
       throw new UsageError(`--search-corpus ${opt.pool}: the pool cannot be read: ${(e as Error).message}`);
     throw e;
@@ -607,6 +614,7 @@ function prepareSearchCorpus(
   try {
     copyDir = copyPinnedPool(NoFollowRoot.open(root), src, join(root, "search-pool"), opt.minScore).dir;
   } catch (e) {
+    rethrowIfExit(e);
     if (e instanceof InterruptedError) throw e;
     throw new EvalStagingError(`--search-corpus ${opt.pool}: the pool could not be copied into the eval: ${(e as Error).message}`);
   }
@@ -651,6 +659,7 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
       const info = snapshotGitArm(spec.source, dest, cwd, spec.raw);
       return { ...info, spec };
     } catch (e) {
+      rethrowIfExit(e);
       // A refusal about the source is usage; anything else (an unreadable file, a full disk, a git that
       // failed mid-extraction, a tracked set that cannot be listed) is the eval's own staging failing.
       if (e instanceof UsageError) throw e;
@@ -669,7 +678,8 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
   const skillNames = snaps.map((s) => {
     try {
       return gradedSkillNameFor(args.skill, resolveCritiquedSkillDir(s.dir, args.skill));
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       return undefined;
     }
   });
@@ -707,6 +717,7 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
           skillDirSubstitution: [s.session.plugins.local_plugins[0], snap.dir],
         });
       } catch (e) {
+        rethrowIfExit(e);
         throw new UsageError(`arm ${snap.spec.label}, scenario "${s.scenario.name}": ${(e as Error).message}`);
       }
       sessions.set(`${snap.spec.label}\0${s.scenario.name}`, sub);
@@ -733,6 +744,7 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
         );
         if (pw) throw new UsageError(pw);
       } catch (e) {
+        rethrowIfExit(e);
         if (e instanceof BoundaryError)
           throw new EvalStagingError(`arm ${snap.spec.label}, scenario "${s.scenario.name}": ${(e as Error).message}`);
         if (e instanceof UsageError) throw new UsageError(`arm ${snap.spec.label}, scenario "${s.scenario.name}": ${e.message}`);
@@ -999,6 +1011,7 @@ export async function planEvalDryRun(args: EvalArgs, deps: EvalDeps): Promise<{ 
     try {
       inside = isInsideGitWorkTree(snapRoot);
     } catch (e) {
+      rethrowIfExit(e);
       if (e instanceof InterruptedError) throw e;
       throw new EvalStagingError(
         `could not tell whether the temp dir ${tildeify(snapRoot)} is inside a git work tree (${(e as Error).message.replace(/^could not tell whether .*? is inside a git work tree \((.*?)\);.*$/s, "$1")}): set TMPDIR to a directory git can answer for, outside any work tree`,
@@ -1041,6 +1054,7 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
   try {
     return await afterEvalDir();
   } catch (e) {
+    rethrowIfExit(e);
     discardUnstarted();
     throw e;
   } finally {
@@ -1175,7 +1189,8 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
           evidence = result
             ? evidenceFacts({ result, skillName: skill ?? undefined, pluginRoot: snapByLabel.get(job.arm)!.dir })
             : undefined;
-        } catch {
+        } catch (caught) {
+          rethrowIfExit(caught);
           evidence = { invoked: "unobservable" as const, sourceRead: "unobservable" as const, neither: "unobservable" as const };
         }
         const runDir = result?.outDir ?? (existsSync(expectedDir) ? expectedDir : undefined);
