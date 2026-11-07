@@ -10,6 +10,7 @@ import { evalIdOfLabel, isHillclimbLabel, isSymlink, readSmallJson, runLabelOf }
 import { isStatusStale, isValidRunStatus } from "./run-status.js";
 
 import { exitWith, rethrowIfExit } from "./exit.js";
+import { fail, isJsonOutput } from "./envelope.js";
 const log = (s: string) => process.stderr.write(s + "\n");
 
 /** How many interrupted migrations are recorded for this scenario. */
@@ -423,6 +424,9 @@ function levelRefusal(root: string, source: string): string | undefined {
  *  scenario dir is left alone and counted.
  *  Safe by default (dry-run-able). */
 export function cmdRunsGc(args: string[]): void {
+  // prune has no JSON output of its own, but a usage error asked for under `--output-format json` still gets the
+  // envelope every other command prints (the text form is the same message as before).
+  const json = isJsonOutput(args);
   let p;
   try {
     p = parseArgs(
@@ -434,20 +438,23 @@ export function cmdRunsGc(args: string[]): void {
     );
   } catch (e) {
     rethrowIfExit(e);
-    log((e as Error).message);
-    return exitWith(2);
+    return fail("prune", "usage", (e as Error).message, undefined, json);
   }
   applyParsedCommandGlobals("prune", p, false);
   if (p.positionals.length > 1) {
-    log(`prune takes an optional <runs-dir> (got ${p.positionals.length}: ${p.positionals.join(", ")})`);
-    return exitWith(2);
+    return fail(
+      "prune",
+      "usage",
+      `prune takes an optional <runs-dir> (got ${p.positionals.length}: ${p.positionals.join(", ")})`,
+      undefined,
+      json,
+    );
   }
 
   const rawKeep = p.options["--keep-last"];
   const keepLast = rawKeep !== undefined ? Number(rawKeep) : DEFAULT_KEEP_LAST;
   if (!Number.isInteger(keepLast) || keepLast < 1) {
-    log(`prune: --keep-last must be a positive integer (got ${rawKeep})`);
-    return exitWith(2);
+    return fail("prune", "usage", `prune: --keep-last must be a positive integer (got ${rawKeep})`, undefined, json);
   }
 
   const rawPinnedAge = p.options["--pinned-older-than"];
@@ -455,8 +462,13 @@ export function cmdRunsGc(args: string[]): void {
   if (rawPinnedAge !== undefined) {
     pinnedOlderThanMs = parseRetentionMs(rawPinnedAge);
     if (pinnedOlderThanMs === undefined) {
-      log(`prune: --pinned-older-than must be <N>d|h|m (e.g. 7d, 24h, 30m) — got "${rawPinnedAge}"`);
-      return exitWith(2);
+      return fail(
+        "prune",
+        "usage",
+        `prune: --pinned-older-than must be <N>d|h|m (e.g. 7d, 24h, 30m) — got "${rawPinnedAge}"`,
+        undefined,
+        json,
+      );
     }
   }
 
@@ -474,8 +486,7 @@ export function cmdRunsGc(args: string[]): void {
   const fromEnv = p.positionals[0] === undefined && !runDirFlagGiven() && process.env.COWORK_HARNESS_RUNS_DIR !== undefined;
   const refusal = pruneLevelRefusal(runsRoot, fromEnv ? " (from COWORK_HARNESS_RUNS_DIR)" : "");
   if (refusal !== undefined) {
-    log(refusal);
-    return exitWith(2);
+    return fail("prune", "usage", refusal, undefined, json);
   }
 
   let deleted = 0;

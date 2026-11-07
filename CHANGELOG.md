@@ -12,7 +12,10 @@ All notable changes to this project are documented here. The format is based on
   their own code, which on some Node 24+ builds could deadlock inside the exit itself. A command now sets its exit
   code and the process ends once its work is done. If something still holds the process 5 seconds after the command
   finished, it exits anyway with the same code and names what was holding it on stderr
-  (`::warning:: [exit] the event loop was still busy …`). Exit codes and output are unchanged.
+  (`::warning:: [exit] the event loop was still busy …`). Exit codes and output are unchanged, for
+  `cowork-harness` and for critique's module run directly (`node dist/critique/command.js`).
+- **`prune` reports a usage error as a JSON envelope when asked for `--output-format json`**, as every other command
+  does. It printed only the plain message before. The text form is unchanged.
 
 ### Changed
 

@@ -8,24 +8,27 @@ import { EXIT_FALLBACK_LINE } from "../src/run/exit.js";
 // Every subcommand ends by asking to exit (src/run/exit.ts) and lets the event loop drain. What this pins, per
 // subcommand: the exit code is the documented one, and the process ended by itself: the fallback (which fires 5 s
 // after the command when something still holds the loop) did not fire. A regression where every refusal waits for
-// the fallback would still exit with the right code; the absent fallback line and the wall-time bound catch it.
+// the fallback would still exit with the right code; the fallback's line on stderr is what catches it. (No wall-time
+// bound: on a loaded machine it would fail for reasons that say nothing about the fallback.)
 const CLI = resolve("dist/cli.js");
 const built = existsSync(CLI);
-// Well under the fallback's 5 s, with room for a loaded machine.
-const BOUND_MS = 4000;
 
 function cli(args: string[], cwd: string, env: NodeJS.ProcessEnv = {}) {
-  const t0 = Date.now();
   const base = { ...process.env };
   for (const k of ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "COWORK_HARNESS_OUTPUT_FORMAT"]) delete base[k];
   const r = spawnSync(process.execPath, [CLI, ...args], { cwd, encoding: "utf8", env: { ...base, ...env }, timeout: 30_000 });
-  return { code: r.status, stdout: r.stdout, stderr: r.stderr, ms: Date.now() - t0 };
+  return { code: r.status, stdout: r.stdout, stderr: r.stderr };
 }
 
 function endedByItself(r: ReturnType<typeof cli>) {
   expect(r.stderr, "the exit fallback fired: something held the event loop after the command").not.toContain(EXIT_FALLBACK_LINE);
-  expect(r.ms, `took ${r.ms} ms`).toBeLessThan(BOUND_MS);
 }
+
+/** Commands with no JSON output at all, so a usage error under `--output-format json` prints none. Each with why. */
+const NO_JSON_MODE: Record<string, string> = {
+  // An interactive session in the operator's terminal; it has no machine-readable mode to report an envelope in.
+  chat: "interactive, no JSON mode",
+};
 
 const COMMANDS = [
   "run",
@@ -66,12 +69,20 @@ describe.skipIf(!built)("exit matrix: each subcommand exits by itself with its d
       const j = cli([c, "--no-such-flag", "--output-format", "json"], cwd);
       expect(j.code, j.stderr).toBe(2);
       endedByItself(j);
-      if (j.stdout.trim()) {
-        const env = JSON.parse(j.stdout);
-        expect(env.ok).toBe(false);
-      }
+      if (c in NO_JSON_MODE) expect(j.stdout, NO_JSON_MODE[c]).toBe("");
+      else expect(JSON.parse(j.stdout)).toMatchObject({ ok: false, error: { category: "usage" } });
     });
   }
+
+  // critique's module can also be run directly (`node dist/critique/command.js`, `tsx src/critique/command.ts`). That
+  // entry has the same top level as this one, so a requested exit keeps its code and prints no stack.
+  for (const args of [[], ["--no-such-flag"]])
+    it(`critique run directly${args.length ? ` with ${args[0]}` : " with no arguments"} is a usage error: exit 2, no stack`, () => {
+      const r = spawnSync(process.execPath, [resolve("dist/critique/command.js"), ...args], { cwd, encoding: "utf8", timeout: 30_000 });
+      expect(r.status, r.stderr).toBe(2);
+      expect(r.stderr).not.toMatch(/ExitRequested|\n\s+at /);
+      expect(r.stderr).not.toContain(EXIT_FALLBACK_LINE);
+    });
 
   it("an unknown command exits 2", () => {
     const r = cli(["no-such-command"], cwd);
