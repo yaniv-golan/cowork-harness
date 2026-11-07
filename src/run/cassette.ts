@@ -9795,7 +9795,7 @@ export async function replayCassette(
       subagentTools: rec.subagentTools,
       egress: [],
       result: rec.result,
-      turnCapReached: turnCapReached({ ...rec, turnCap: cassette.turnCap }),
+      turnCapReached: turnCapReached({ ...rec, finalMessage: rec.resultText, turnCap: cassette.turnCap }),
       workRoot: replayWorkRoot,
       userVisiblePrefixes: replayPrefixes,
       lane: cassette.scenario.lane, // replay is held to the RECORDED scenario's contract

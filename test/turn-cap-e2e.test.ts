@@ -13,6 +13,31 @@ const CAPPED = [
   out({ type: "result", subtype: "error_max_turns", is_error: true, num_turns: 1, session_id: "stub", total_cost_usd: 0.01 }),
   "cat >/dev/null",
 ].join("\n");
+// The agent's own sign-in failure at the cap: a `<synthetic>` reply and a result the agent marks `success` but
+// `is_error`. Same result fields the cap gives (error, kind agent, num_turns == cap), so only the subtype and the
+// synthetic reply tell them apart.
+const SYNTHETIC_AUTH = [
+  out({ type: "system", subtype: "init", session_id: "stub", model: "claude-sonnet-5", tools: [], cwd: "/tmp" }),
+  out({
+    type: "assistant",
+    session_id: "stub",
+    message: {
+      model: "<synthetic>",
+      role: "assistant",
+      content: [{ type: "text", text: "Authentication required · Sign in again to continue" }],
+    },
+  }),
+  out({
+    type: "result",
+    subtype: "success",
+    is_error: true,
+    num_turns: 1,
+    result: "Authentication required · Sign in again to continue",
+    session_id: "stub",
+    total_cost_usd: 0,
+  }),
+  "cat >/dev/null",
+].join("\n");
 
 function setUp(f: ReturnType<typeof makeStubFixture>, assertBlock: string): void {
   const session = join(f.cwd, "capped.session.yaml");
@@ -26,8 +51,8 @@ async function cli(f: ReturnType<typeof makeStubFixture>, args: string[]) {
   return { code, stdout: c.stdoutText(), stderr: c.stderrText() };
 }
 
-async function run(assertBlock: string) {
-  const f = makeStubFixture(CAPPED);
+async function run(assertBlock: string, script = CAPPED) {
+  const f = makeStubFixture(script);
   try {
     setUp(f, assertBlock);
     const c = spawnCli(f, ["run", f.scenario, "--output-format", "json"]);
@@ -72,6 +97,26 @@ describe.runIf(can)("a session's turn cap, end to end (stub agent, protocol)", (
       const old = await cli(f, ["replay", cass, "--output-format", "json"]);
       expect(old.code).toBe(1);
       expect(JSON.parse(old.stdout).results[0].verdict.signals.map((s: { code: string }) => s.code)).toContain("result_error");
+    } finally {
+      f.cleanup();
+    }
+  }, 120_000);
+
+  it("the agent's own sign-in failure at the cap is not the cap: exit 1, result_error, live and on replay", async () => {
+    const { code, r } = await run("  - allow_max_turns: true\n  - result: error\n", SYNTHETIC_AUTH);
+    expect(code).toBe(1);
+    expect(r.usage.turns).toBe(1);
+    expect(r.verdict.signals.map((s: { code: string }) => s.code)).toContain("result_error");
+    const f = makeStubFixture(SYNTHETIC_AUTH);
+    try {
+      setUp(f, "  - allow_max_turns: true\n  - result: error\n");
+      const cass = join(f.cwd, "auth.cassette.json");
+      // The live verdict fails, so record refuses unless told to freeze it anyway.
+      const rec = await cli(f, ["record", f.scenario, "--out", cass, "--allow-failing"]);
+      expect(rec.code, rec.stderr).toBe(0);
+      const rep = await cli(f, ["replay", cass, "--output-format", "json"]);
+      expect(rep.code, rep.stderr).toBe(1);
+      expect(JSON.parse(rep.stdout).results[0].verdict.signals.map((s: { code: string }) => s.code)).toContain("result_error");
     } finally {
       f.cleanup();
     }

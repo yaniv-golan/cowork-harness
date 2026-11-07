@@ -2169,7 +2169,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       subagentTools: record.subagentTools,
       egress,
       result: record.result,
-      turnCapReached: turnCapReached({ ...record, turnCap }),
+      turnCapReached: turnCapReached({ ...record, finalMessage: record.resultText, turnCap }),
       workRoot,
       userVisiblePrefixes: userVisibleRoots,
       lane: scenario.lane,

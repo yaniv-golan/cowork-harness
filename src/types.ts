@@ -1468,7 +1468,7 @@ export const Assertion = z.strictObject({
     .literal(true)
     .optional()
     .describe(
-      "(verdict modifier) a run that stopped at the session's `agent_max_turns` cap is a COMPLETED run, not a failure: no `result_error` is raised, and `eval` buckets it `turn_cap_allowed`. It never makes the run a success — `result` is still `error`, so `result: success` beside it always fails (assert `result: error` or leave `result` out). Only the session's cap counts, and only an agent-reported error result at or past it; a transport, auth or usage-limit end is unchanged",
+      "(verdict modifier) a run that stopped at the session's `agent_max_turns` cap is a COMPLETED run, not a failure: no `result_error` is raised, and `eval` buckets it `turn_cap_allowed`. It never makes the run a success — `result` is still `error`, so `result: success` beside it always fails (assert `result: error` or leave `result` out). Only the session's cap counts, and only an agent-reported `error_max_turns` or `error_during_execution` result at or past it; any other end, the agent's own sign-in, usage-limit or no-model reply included, is unchanged",
     ),
   allow_undelivered_deliverables: z
     .literal(true)
@@ -3195,11 +3195,11 @@ export interface RunResult {
    */
   nonReproducibleAnswers?: Array<{ question: string; chosen: string; by: string; rationale?: string; model?: string; effort?: string }>;
   usage?: UsageInfo;
-  /** The session's `agent_max_turns` cap, when one was passed to the agent: the cap a `result: error` with
-   *  `usage.turns` at or over `maxTurns` reached. Read by `allow_max_turns` (src/run/turn-cap.ts). */
+  /** The session's `agent_max_turns` cap, when one was passed to the agent: the cap a cap-stop `result: error`
+   *  with `usage.turns` at or over `maxTurns` reached. Read by `allow_max_turns` (src/run/turn-cap.ts). */
   turnCap?: { maxTurns: number; source: "session" };
   /** The wall-clock budget the agent phase ran under, and where it came from: `--timeout` (`flag`), a runner's
-   *  ceiling lower than the scenario's own (`runner`, hillclimb), or the scenario's `timeout_ms` (`scenario`).
+   *  ceiling at or below the scenario's own (`runner`, hillclimb; a tie records `runner`), or the scenario's `timeout_ms` (`scenario`).
    *  Absent when none applied. Informational: no verdict reads it. */
   timeout?: { ms: number; source: "flag" | "scenario" | "runner" };
   cost?: CostInfo;

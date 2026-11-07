@@ -55,9 +55,27 @@ describe("turnCapReached: the cap the session set, reached, as an agent-reported
     expect(turnCapReached(capped({ errorSource: "timeout" }))).toBe(false);
     expect(turnCapReached(capped({ errorSource: "exit" }))).toBe(false);
   });
-  it("any subtype at the cap counts, error_during_execution included: the cap was reached either way", () => {
+  it("a cap-stop subtype counts at the cap, error_during_execution included", () => {
     expect(turnCapReached(capped({ resultSubtype: "error_during_execution" }))).toBe(true);
     expect(turnCapReached(capped({ resultSubtype: "error_during_execution", usage: { turns: 1 } }))).toBe(false);
+  });
+  it("any other subtype, or none, is not the cap stopping the agent", () => {
+    expect(turnCapReached(capped({ resultSubtype: "success" }))).toBe(false);
+    expect(turnCapReached(capped({ resultSubtype: undefined }))).toBe(false);
+    expect(turnCapReached(capped({ resultSubtype: "error_max_budget_usd" }))).toBe(false);
+  });
+  it("the agent's own sign-in, usage-limit or no-model end at the cap is not the cap, whatever its subtype", () => {
+    const synthetic = { models: ["<synthetic>"], cost: { usd: 0 } };
+    const auth = { ...synthetic, finalMessage: "Authentication required · Sign in again to continue" };
+    expect(turnCapReached(capped(auth))).toBe(false);
+    expect(turnCapReached(capped({ ...auth, resultSubtype: "error_during_execution" }))).toBe(false);
+    expect(turnCapReached(capped({ ...synthetic, finalMessage: "Not logged in · Please run /login" }))).toBe(false);
+    expect(
+      turnCapReached(capped({ models: ["claude-sonnet-5", "<synthetic>"], finalMessage: "You've hit your usage limit · resets 3pm" })),
+    ).toBe(false);
+    expect(turnCapReached(capped({ ...synthetic, finalMessage: "anything" }))).toBe(false);
+    // The same text from a live model alone is the skill's, so the cap still reads.
+    expect(turnCapReached(capped({ finalMessage: "Authentication required · Sign in again to continue" }))).toBe(true);
   });
   it("the modifier is read alone or beside another key, as allow_stall is", () => {
     expect(allowsMaxTurns([allow])).toBe(true);

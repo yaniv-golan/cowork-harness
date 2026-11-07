@@ -1478,7 +1478,7 @@
             "const": true
           },
           "allow_max_turns": {
-            "description": "(verdict modifier) a run that stopped at the session's `agent_max_turns` cap is a COMPLETED run, not a failure: no `result_error` is raised, and `eval` buckets it `turn_cap_allowed`. It never makes the run a success — `result` is still `error`, so `result: success` beside it always fails (assert `result: error` or leave `result` out). Only the session's cap counts, and only an agent-reported error result at or past it; a transport, auth or usage-limit end is unchanged",
+            "description": "(verdict modifier) a run that stopped at the session's `agent_max_turns` cap is a COMPLETED run, not a failure: no `result_error` is raised, and `eval` buckets it `turn_cap_allowed`. It never makes the run a success — `result` is still `error`, so `result: success` beside it always fails (assert `result: error` or leave `result` out). Only the session's cap counts, and only an agent-reported `error_max_turns` or `error_during_execution` result at or past it; any other end, the agent's own sign-in, usage-limit or no-model reply included, is unchanged",
             "type": "boolean",
             "const": true
           },

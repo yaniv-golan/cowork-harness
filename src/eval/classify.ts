@@ -14,7 +14,7 @@ import type { Assertion, MetricUnavailable, RunResult, ScenarioMetric } from "..
 import { VERDICT_MODIFIER_KEYS, isLiveModelId } from "../types.js";
 import { BoundaryError, DeciderTimeoutError, UnansweredError } from "../errors.js";
 import { firstAssertionKey } from "../run/repeat.js";
-import { matchesTerminalUsageLimitText } from "../usage-limit.js";
+import { agentInfraEnd } from "../run/agent-infra-end.js";
 import { PoolBuildError, SearchPoolPinError } from "../search-corpus/pool.js";
 
 type ErrorSource = NonNullable<RunResult["errorSource"]>;
@@ -149,20 +149,8 @@ const ERROR_SOURCE_RULE: Record<ErrorSource, "infra" | "agent" | "by_kind" | "ag
 
 const INFRA_KINDS: ReadonlySet<ResultErrorKind> = new Set(["transport", "usage_limit"]);
 
-/** The agent's own text when it could not authenticate — the whole reply, fabricated locally (model
- *  `<synthetic>`, the assistant event's `error: "authentication_failed"`), surfaced as the result's
- *  `finalMessage`. The two spellings are the ones kept runs hold (searched 2026-09-30): `Not logged in ·
- *  Please run /login` and `Authentication required · Sign in again to continue`. No kept run shows an
- *  invalid-API-key or 401 text, so none is guessed here; such a rep still lands in `no_model_answered`. */
-export const AUTH_FAILURE_SIGNATURE = /\bNot logged in\b.*\/login\b|\bAuthentication required\b.*\bSign in again\b/;
-
-/** No model answered: the agent reported models, every one a local marker (`<synthetic>`), and zero spend.
- *  Positive evidence only — an absent or empty `models` is "no evidence" and stays on the table below (a
- *  skill that crashes before its first model call must be scored, not excluded). Spend separates it from a
- *  slash-command run, whose `models` is synthetic-only too but which a model did answer. */
-function noModelAnswered(r: ClassifiableResult): boolean {
-  return Array.isArray(r.models) && r.models.length > 0 && !r.models.some(isLiveModelId) && r.cost?.usd === 0;
-}
+// The sign-in text lives with the shared reading of the agent's own no-work ends (run/agent-infra-end.ts).
+export { AUTH_FAILURE_SIGNATURE } from "../run/agent-infra-end.js";
 
 /** The scenario asserted `allow_stall: true` — the `stalled` verdict's opt-out, read exactly as verdict.ts
  *  reads it (any graded assertion carrying the modifier, alone or beside another key). */
@@ -202,8 +190,8 @@ export function thrownKind(e: unknown): ThrownKind {
  *  | error, models only `<synthetic>`, cost 0 (no model answered)          | errored_infra (no_model_answered) |
  *  | error, errorSource timeout / no_result                                | errored_agent                     |
  *  | error, errorSource result, kind agent, turns ≥ the session's turnCap, | valid (turn_cap_allowed)          |
- *  |   allow_max_turns (turn-cap.ts; any subtype, error_during_execution  |                                   |
- *  |   included: the cap was reached either way)                           |                                   |
+ *  |   subtype error_max_turns / error_during_execution, allow_max_turns   |                                   |
+ *  |   (turn-cap.ts; the agent's own infra ends above never reach it)      |                                   |
  *  | error, errorSource result, kind agent (any subtype)                   | errored_agent                     |
  *  | error, errorSource exit, kind agent                                   | errored_agent, ambiguousExit      |
  *  | error, errorSource agent, no kind (partial, or no terminal event)     | errored_agent                     |
@@ -265,16 +253,12 @@ export function classifyTermination(ev: RepEvidence): TerminationClassification 
   // skill for a missing credential.
   if (source !== undefined && ERROR_SOURCE_RULE[source] === "infra") return out("errored_infra", `source_${source}`);
   if (kind !== undefined && INFRA_KINDS.has(kind)) return out("errored_infra", `kind_${kind}`);
-  // The agent writes its own sign-in and limit replies as a `<synthetic>` turn (every kept error run with
-  // such text has one), so the text counts only beside that marker — a skill's own message that merely
-  // reads like a limit or a login prompt ("You've reached your daily limit of 5 files") stays the skill's.
-  const agentWrote = typeof r.finalMessage === "string" && (r.models ?? []).some((m) => !isLiveModelId(m));
-  if (agentWrote && AUTH_FAILURE_SIGNATURE.test(r.finalMessage!)) return out("errored_infra", "auth");
-  // The run lane names a usage limit on the `result` path (with its HTTP status) and from a sub-agent's failed
-  // task; on the nonzero-exit path the same terminal text arrives as kind `agent`, even after a live model has spent. The text is the
-  // account's quota, never the skill: the shared terminal-limit matcher (transient rate limits excluded).
-  if (agentWrote && matchesTerminalUsageLimitText(r.finalMessage!)) return out("errored_infra", "usage_limit");
-  if (noModelAnswered(r)) return out("errored_infra", "no_model_answered");
+  // The agent's own sign-in, terminal-limit and no-model-answered ends (agent-infra-end.ts: the text counts only
+  // beside a `<synthetic>` turn, so a skill's own message that reads like a limit stays the skill's). The run lane
+  // names a usage limit on the `result` path; on the nonzero-exit path the same terminal text arrives as kind
+  // `agent`, even after a live model has spent.
+  const infraEnd = agentInfraEnd(r);
+  if (infraEnd) return out("errored_infra", infraEnd);
 
   if (source !== undefined) {
     const rule = ERROR_SOURCE_RULE[source];
