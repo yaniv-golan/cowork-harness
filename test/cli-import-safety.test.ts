@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 // src/cli.ts runs the CLI only when it is the process's entry point. Several tests import it in-process for its pure
 // helpers; at import it must not run `main()`, install the process-level exit handlers (they would swallow this
@@ -49,4 +51,32 @@ describe("importing src/cli.ts", () => {
     expect(isCliEntry(resolve("src/no-such-file.ts"), self)).toBe(false);
     expect(isCliEntry(resolve("node_modules/vitest/package.json"), self)).toBe(false);
   });
+});
+
+// The same entry rule in real processes: the source run through tsx is the entry, and an importer of the built
+// module is not.
+describe("the CLI entry in a real process", () => {
+  it("`tsx src/cli.ts --help` runs the CLI and exits 0", () => {
+    const tsx = resolve("node_modules/.bin/tsx");
+    const r = spawnSync(tsx, ["src/cli.ts", "--help"], { encoding: "utf8", timeout: 60_000 });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout + r.stderr).toMatch(/usage|Usage|cowork-harness/);
+  }, 60_000);
+
+  it.skipIf(!existsSync(resolve("dist/cli.js")))(
+    "importing dist/cli.js prints nothing and installs no listener",
+    () => {
+      const src = `
+      const before = process.listenerCount("uncaughtException") + process.listenerCount("unhandledRejection");
+      const mod = await import(${JSON.stringify(pathToFileURL(resolve("dist/cli.js")).href)});
+      const after = process.listenerCount("uncaughtException") + process.listenerCount("unhandledRejection");
+      process.stderr.write(JSON.stringify({ entry: typeof mod.isCliEntry, added: after - before, exitCode: process.exitCode ?? null }));
+    `;
+      const r = spawnSync(process.execPath, ["--input-type=module", "-e", src], { encoding: "utf8", timeout: 30_000 });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toBe("");
+      expect(JSON.parse(r.stderr)).toEqual({ entry: "function", added: 0, exitCode: null });
+    },
+    60_000,
+  );
 });

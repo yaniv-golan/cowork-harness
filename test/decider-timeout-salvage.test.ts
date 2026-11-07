@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { EXIT_FALLBACK_LINE } from "../src/run/exit.js";
 import {
   CLI,
   POSIX,
@@ -49,6 +50,8 @@ describe.runIf(can)("a decider channel that fails to answer ends the run as an u
     try {
       const r = await runToEnd(f, ["--decider-cmd", "cat >/dev/null", "--output-format", "json"]);
       expect(r.code, r.stderr).toBe(2);
+      // The unanswered exit is a request the top level settles; the process then ends by itself, not by the fallback.
+      expect(r.stderr).not.toContain(EXIT_FALLBACK_LINE);
       const env = JSON.parse(r.stdout);
       expect(env.error?.category).toBe("unanswered");
       const res = result(f);
@@ -77,6 +80,7 @@ describe.runIf(can)("a decider channel that fails to answer ends the run as an u
       expect(r.code, r.stderr).toBe(2);
       expect(r.stderr).toContain("unanswered question (on_unanswered=decider-cmd)");
       expect(r.stderr).not.toMatch(/\n\s+at /);
+      expect(r.stderr).not.toContain(EXIT_FALLBACK_LINE);
     } finally {
       f.cleanup();
     }

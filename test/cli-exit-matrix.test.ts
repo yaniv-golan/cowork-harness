@@ -103,28 +103,33 @@ describe.skipIf(!built)("exit matrix: each subcommand exits by itself with its d
     endedByItself(r);
   });
 
-  it("a page's async throw under analyze-skill --runtime is recorded as a page crash, not an uncaught error", () => {
-    // The CLI's process-level handler is the first `unhandledRejection` listener; the runtime confirmer installs a
-    // second one that records a page's throw. The first must leave the error to it (and not end the process).
-    const d = mkdtempSync(join(tmpdir(), "exit-matrix-page-"));
-    try {
-      writeFileSync(
-        join(d, "viewer.html"),
-        "<!DOCTYPE html><html><body><button id='s'>Save</button><script>\n" +
-          'Promise.reject(new Error("page-async-rejection"));\n' +
-          "document.getElementById('s').addEventListener('click',function(){ fetch('/api/save',{method:'POST'}); });\n" +
-          "</script></body></html>\n",
-      );
-      const r = cli(["analyze-skill", join(d, "viewer.html"), "--runtime", "--output-format", "json"], d);
-      expect(r.code, r.stderr).toBe(0);
-      expect(r.stderr).not.toMatch(/\n\s+at /);
-      const c = JSON.parse(r.stdout).runtimeConfirmations[0];
-      if (c.available === false) return; // jsdom not installed: nothing ran
-      expect(JSON.stringify(c.evidence)).toContain("unhandled rejection: Error: page-async-rejection");
-    } finally {
-      rmSync(d, { recursive: true, force: true });
-    }
-  }, 60_000);
+  // Without jsdom the runtime confirmer runs nothing, so this case would prove nothing: a visible skip, not a pass.
+  it.runIf(existsSync(resolve("node_modules/jsdom")))(
+    "a page's async throw under analyze-skill --runtime is recorded as a page crash, not an uncaught error",
+    () => {
+      // The CLI's process-level handler is the first `unhandledRejection` listener; the runtime confirmer installs a
+      // second one that records a page's throw. The first must leave the error to it (and not end the process).
+      const d = mkdtempSync(join(tmpdir(), "exit-matrix-page-"));
+      try {
+        writeFileSync(
+          join(d, "viewer.html"),
+          "<!DOCTYPE html><html><body><button id='s'>Save</button><script>\n" +
+            'Promise.reject(new Error("page-async-rejection"));\n' +
+            "document.getElementById('s').addEventListener('click',function(){ fetch('/api/save',{method:'POST'}); });\n" +
+            "</script></body></html>\n",
+        );
+        const r = cli(["analyze-skill", join(d, "viewer.html"), "--runtime", "--output-format", "json"], d);
+        expect(r.code, r.stderr).toBe(0);
+        expect(r.stderr).not.toMatch(/\n\s+at /);
+        const c = JSON.parse(r.stdout).runtimeConfirmations[0];
+        expect(c.available, "jsdom is installed, so the confirmer must have run").not.toBe(false);
+        expect(JSON.stringify(c.evidence)).toContain("unhandled rejection: Error: page-async-rejection");
+      } finally {
+        rmSync(d, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
 
   it.skipIf(process.platform === "win32")(
     "chat --raw waits for the interactive session (longer than the exit fallback) and exits with its code",

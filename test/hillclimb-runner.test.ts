@@ -6,6 +6,7 @@
 // grades line up. The wiring through the real runOneScenario is covered by the CLI wiring tests, not this one.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { InterruptedError } from "../src/termination.js";
+import { ExitRequested } from "../src/run/exit.js";
 import {
   existsSync,
   mkdirSync,
@@ -946,5 +947,27 @@ describe("an interrupt learned from a probe inside a job", () => {
       throw new InterruptedError("SIGINT", "git");
     };
     await expect(runHillclimb(args(), deps({ runJob }))).rejects.toThrow(InterruptedError);
+  });
+});
+
+describe("a requested exit from inside a job (an unanswered gate)", () => {
+  it("lets the in-flight sibling finish and write its row, starts nothing else, then rethrows the request with its code", async () => {
+    await approved();
+    let started = 0;
+    const base = deps().runJob;
+    const runJob: RunnerDeps["runJob"] = async (j) => {
+      const n = ++started;
+      if (n === 1) {
+        await new Promise((r) => setTimeout(r, 20));
+        throw new ExitRequested(2);
+      }
+      await new Promise((r) => setTimeout(r, 120)); // still running when the first job asks to exit
+      return base(j);
+    };
+    const run = runHillclimb(args("--reps", "2"), deps({ runJob })); // 4 tasks, 2 at a time
+    await expect(run).rejects.toBeInstanceOf(ExitRequested);
+    await expect(run).rejects.toMatchObject({ code: 2 });
+    expect(started, "a task started after the request").toBe(2);
+    expect(rows("baseline"), "the in-flight sibling's row").toHaveLength(1);
   });
 });
