@@ -1,13 +1,17 @@
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // analyze-skill --runtime installs process-wide uncaughtException/unhandledRejection listeners while it drives a page,
 // to record the page's own throws as crashes and rethrow anything that is clearly the harness's. An exit request is
 // neither: those listeners must leave it to the CLI's process-level handler, which exits with its code. Rethrowing it
-// from inside a listener would end the process with Node's exit 7 instead.
+// from inside a listener would end the process with Node's exit 7 instead. The listeners rethrow only an error whose
+// stack points at the harness (the runtime module, or a test directory) and has no page frame, so the request is
+// raised from a script under a `test/` directory: without that, a listener that forgot to step aside would record the
+// request as a page crash and the process would still exit 4, and this test could not tell.
 const RUNTIME = resolve("dist/run/analyze-artifact-runtime.js");
 const EXIT = resolve("dist/run/exit.js");
 const can = existsSync(RUNTIME) && existsSync(EXIT) && existsSync(resolve("node_modules/jsdom"));
@@ -27,9 +31,17 @@ describe.skipIf(!can)("an exit request while the artifact runtime's listeners ar
       }, 5);
       await confirmArtifactRuntime("/tmp/v.html", "<!DOCTYPE html><html><body><button id='s'>Save</button><script>document.getElementById('s').addEventListener('click',function(){fetch('/api/x',{method:'POST'});});</script></body></html>");
     `;
-    const r = spawnSync(process.execPath, ["--input-type=module", "-e", src], { encoding: "utf8", timeout: 60_000 });
-    expect(r.stderr, "the request was raised before the runtime's listeners were installed").toContain("listeners-on");
-    expect(r.status, r.stderr).toBe(4);
-    expect(r.stderr).not.toMatch(/ExitRequested|\n\s+at /);
+    const dir = mkdtempSync(join(tmpdir(), "exit-artifact-"));
+    try {
+      mkdirSync(join(dir, "test"));
+      const script = join(dir, "test", "raise.mjs");
+      writeFileSync(script, src);
+      const r = spawnSync(process.execPath, [script], { encoding: "utf8", timeout: 60_000 });
+      expect(r.stderr, "the request was raised before the runtime's listeners were installed").toContain("listeners-on");
+      expect(r.status, r.stderr).toBe(4);
+      expect(r.stderr).not.toMatch(/ExitRequested|\n\s+at /);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   }, 90_000);
 });
