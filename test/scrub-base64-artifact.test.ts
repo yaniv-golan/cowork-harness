@@ -82,7 +82,7 @@ describe("cassette base64 artifact scrub — materializeManifest end-to-end", ()
     // If the record-time and replay-time hashes diverge, it throws — so not-throwing is the assertion.
     let workRoot: string | undefined;
     try {
-      ({ workRoot } = materializeManifest([entry]));
+      ({ workRoot } = materializeManifest([entry], ["outputs", ".projects"]));
     } finally {
       if (workRoot) rmSync(workRoot, { recursive: true, force: true });
     }
@@ -108,7 +108,7 @@ describe("cassette base64 artifact scrub — materializeManifest end-to-end", ()
 
     let workRoot: string | undefined;
     try {
-      ({ workRoot } = materializeManifest([entry]));
+      ({ workRoot } = materializeManifest([entry], ["outputs", ".projects"]));
     } finally {
       if (workRoot) rmSync(workRoot, { recursive: true, force: true });
     }
@@ -127,7 +127,7 @@ describe("cassette base64 artifact scrub — materializeManifest end-to-end", ()
     // materializeManifest writes an empty placeholder for truncated entries — should not throw.
     let workRoot: string | undefined;
     try {
-      ({ workRoot } = materializeManifest([entry]));
+      ({ workRoot } = materializeManifest([entry], ["outputs", ".projects"]));
     } finally {
       if (workRoot) rmSync(workRoot, { recursive: true, force: true });
     }

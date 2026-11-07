@@ -243,7 +243,7 @@ describe("artifact_json glob — replay parity on a cassette with a link entry a
     symlinkSync(join(root, "outputs/real.json"), join(root, "outputs/artifacts/runs/r2/run_status.json"));
     mkdirSync(join(root, "outputs/artifacts/runs/r3"), { recursive: true });
     writeFileSync(join(root, "outputs/artifacts/runs/r3/run_status.json"), Buffer.alloc(BIG, 0x20));
-    const manifest = buildManifest(root);
+    const manifest = buildManifest(root, undefined, ["outputs", ".projects"]);
     const replay = materializeManifest(manifest, ["outputs", ".projects"]);
     return { root, manifest, replay };
   }
@@ -285,7 +285,7 @@ describe("artifact_json glob — the record-time guard sees glob matches", () =>
       "outputs/artifacts/runs/r1/run_status.json": status("ok"),
       "outputs/artifacts/runs/r2/run_status.json": JSON.stringify({ status: "ok", pad: "x".repeat(200) }),
     });
-    const manifest = buildManifest(root, 64);
+    const manifest = buildManifest(root, 64, ["outputs", ".projects"]);
     const scenario = {
       assert: [{ artifact_json: { artifact: GLOB, match: "each", path: "status", equals: "ok" } }],
     } as unknown as Scenario;

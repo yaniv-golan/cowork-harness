@@ -45,7 +45,7 @@ const status = (s: string) => JSON.stringify({ status: s });
 const GLOB = "outputs/artifacts/runs/*/run_status.json";
 const both = (root: string, match: "each" | "any") => {
   const a = [{ artifact_json: { artifact: GLOB, match, path: "status", equals: "ok" } }];
-  const replay = materializeManifest(buildManifest(root), ["outputs", ".projects"]);
+  const replay = materializeManifest(buildManifest(root, undefined, ["outputs", ".projects"]), ["outputs", ".projects"]);
   try {
     const [live] = evaluate(a, ctx(root));
     const [rep] = evaluate(
@@ -172,7 +172,7 @@ describe("artifact_json glob — the literal prefix matches native names exactly
         "outputs/artífacts/runs/r1/run_status.json": status("ok"),
       });
       const a = [{ artifact_json: { artifact: glob, match: "each" as const, path: "status", equals: "ok" } }];
-      const replay = materializeManifest(buildManifest(root), ["outputs", ".projects"]);
+      const replay = materializeManifest(buildManifest(root, undefined, ["outputs", ".projects"]), ["outputs", ".projects"]);
       try {
         const [live] = evaluate(a, ctx(root));
         const [rep] = evaluate(

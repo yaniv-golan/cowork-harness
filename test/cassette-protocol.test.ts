@@ -328,7 +328,9 @@ describe("COWORK_HARNESS_MAX_ARTIFACT_BYTES uses the same positive-integer valid
     process.env.COWORK_HARNESS_MAX_ARTIFACT_BYTES = "garbage";
     try {
       // buildManifest with no explicit cap → defaultBodyCap() reads the env and must throw.
-      expect(() => buildManifest(d)).toThrow(/COWORK_HARNESS_MAX_ARTIFACT_BYTES must be a positive integer/);
+      expect(() => buildManifest(d, undefined, ["outputs", ".projects"])).toThrow(
+        /COWORK_HARNESS_MAX_ARTIFACT_BYTES must be a positive integer/,
+      );
     } finally {
       if (prev === undefined) delete process.env.COWORK_HARNESS_MAX_ARTIFACT_BYTES;
       else process.env.COWORK_HARNESS_MAX_ARTIFACT_BYTES = prev;

@@ -501,10 +501,11 @@ export function hookOutput(callbackId: string, input: any): Record<string, unkno
 /** Map a hook reply body (built-in `hookOutput` result OR a custom bundle reply) + the request input
  *  into a hook_event. A reply carrying `decision:"block"` (or `hookSpecificOutput.permissionDecision:"deny"`)
  *  is a block; anything else is allow. `tool` is the gated tool name from the request input. Shared by the
- *  live emit and the replay reconstruction so both classify a block identically. */
+ *  live emit and the replay reconstruction so both classify a block identically. The reply is required: with no
+ *  reply nothing is known, and replay reports that request as a truncated cassette rather than calling it allow. */
 export function hookEventFrom(
   callbackId: string,
-  reply: Record<string, unknown> | undefined,
+  reply: Record<string, unknown>,
   input: any,
   toolUseId?: string, // = msg.request.tool_use_id — a SIBLING of `input` on the request, NOT inside it
 ): {
@@ -518,7 +519,7 @@ export function hookEventFrom(
   toolUseId?: string;
   agentId?: string;
 } {
-  const r = reply ?? {};
+  const r = reply;
   const nested = (r.hookSpecificOutput ?? {}) as Record<string, unknown>;
   const isBlock = r.decision === "block" || nested.permissionDecision === "deny";
   const reason =

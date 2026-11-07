@@ -379,14 +379,15 @@ export interface Cassette {
   cassetteVersion?: number;
   scenario: Scenario;
   events: string[]; // recorded child→driver stdout (events.jsonl) — the cassette source
-  controlOut?: string[]; // driver→child control_responses (control-out.jsonl) — for full-fidelity replay
+  // driver→child control_responses (control-out.jsonl). REQUIRED: replay grades every recorded decision against it.
+  // A real recording always holds at least the `initialize` response; `[]` means zero recorded responses.
+  controlOut: string[];
   effectiveFidelity?: string; // the tier the live record actually resolved to (e.g. cowork → hostloop)
   artifacts?: ManifestEntry[]; // user-visible-roots snapshot (paths + hashes + small JSON bodies)
   fingerprint?: Fingerprint; // cassette→skill/baseline staleness tripwire
-  // v4: the user-visible mount roots captured at record time (`outputs` + each connected folder's resolved
-  // mount name). Replay reads THIS instead of a hardcoded `["outputs",".projects"]` prefix — folder mount
-  // names are dynamic/gated. ABSENT on pre-v4 cassettes → replay falls back to the legacy prefix.
-  userVisibleRoots?: string[];
+  // The user-visible mount roots captured at record time (`outputs` + each connected folder's resolved mount name).
+  // REQUIRED: replay materializes the manifest under exactly these (folder mount names are dynamic/gated).
+  userVisibleRoots: string[];
   // (v8 removed the cassette-level `readonlyFolderRoots` list — replay now reads WHY a body-less entry
   // is body-less from each `ManifestEntry.truncationReason`, which is self-describing and redaction-immune.)
   // the authored scenario SOURCE file this cassette was recorded from, RELATIVE to the cassette dir
@@ -577,7 +578,7 @@ export interface FrozenCommandMetric {
  *  maintained below this floor — an older cassette must be re-recorded, not silently tolerated. Raising
  *  this floor is how the pre-v9 legacy-reconstruction branches (buildFolderPrefixMap, cmdRehash's
  *  pre-v3/pre-v6 checks, contentSigAlgoOf) became dead code and were deleted. */
-export const MIN_SUPPORTED_CASSETTE_VERSION = 9;
+export const MIN_SUPPORTED_CASSETTE_VERSION = 12;
 
 // The contentSig algorithm version: every v9+ cassette (the read floor) was recorded under this same
 // algorithm — skillHash folds fixed-length content shas and contentSig/link entries are type-prefixed &
@@ -824,8 +825,8 @@ export const INPUT_ROOTS = ["uploads"] as const;
 
 export function buildManifest(
   workRoot: string,
-  cap?: number,
-  roots: string[] = ["outputs", ".projects"],
+  cap: number | undefined,
+  roots: string[],
   bodyLessPrefixes: string[] = [],
   inputRoots: string[] = [...INPUT_ROOTS],
 ): ManifestEntry[] {
@@ -897,7 +898,7 @@ function decodeBody(e: ManifestEntry): Buffer {
  *  against its recorded sha256 (over the decoded RAW bytes) — a mismatch fails replay (throws). */
 export function materializeManifest(
   entries: ManifestEntry[],
-  roots: string[] = ["outputs", ".projects"],
+  roots: string[],
 ): { workRoot: string; prefixes: string[]; truncatedPaths: Map<string, ManifestEntry["truncationReason"]>; linkPaths: Set<string> } {
   const workRoot = mkdtempSync(join(tmpdir(), "cwh-replay-"));
   // path → why the body is absent (from the entry's truncationReason; `undefined` on a pre-v8 entry that
@@ -3073,15 +3074,15 @@ class CassetteAgentSession implements AgentSession {
    *  whose request_id matches a known decision req.id — skips init-1 and mcp_response lines).
    *  Exposed (readonly) so replayCassette can hand it to the ReplayDecider without re-parsing. */
   readonly controlOutIndex: Map<string, Record<string, unknown>>;
-  /** true when controlOut was present and non-empty */
-  readonly hasControlOut: boolean;
+  /** `hook_callback` request ids in the stream with no recorded response: a truncated cassette. Replay never turns
+   *  one into a hook event (an absent reply is not an allow); replayCassette reports each as a cassette-format failure. */
+  readonly unpairedHookCallbacks: string[] = [];
 
   constructor(
     private readonly events: string[],
-    controlOut: string[] | undefined,
+    controlOut: string[],
   ) {
-    this.hasControlOut = !!(controlOut && controlOut.length > 0);
-    const { index, differingDuplicates, malformedLines } = buildControlOutIndex(controlOut ?? []);
+    const { index, differingDuplicates, malformedLines } = buildControlOutIndex(controlOut);
     this.controlOutIndex = index;
     this.duplicateControlOutIds.push(...differingDuplicates);
     this.malformedControlOutLines.push(...malformedLines);
@@ -3126,7 +3127,6 @@ class CassetteAgentSession implements AgentSession {
         if (ev.type === "decision") {
           // Track the request for respond() (mirrors LiveAgentSession behaviour)
           this.reqById.set(ev.request.id, ev.request);
-          if (!this.hasControlOut) continue; // legacy: skip decision events
         }
         yield ev;
       }
@@ -3139,7 +3139,6 @@ class CassetteAgentSession implements AgentSession {
     // Replay never re-sends to a live process — the answer is "delivered" to the recording by
     // definition. Always report delivered:true so run.ts records "answered" exactly as before on this
     // lane; the delivered:false path is a LIVE-only session-teardown condition (#20).
-    if (!this.hasControlOut) return { delivered: true }; // no-op in legacy mode
     const req = this.reqById.get(id);
     if (!req) return { delivered: true };
     // Re-serialize the response through serializeDecision (the live path) and compare to the
@@ -3276,12 +3275,6 @@ function withPartlyScriptedFindings(inner: Decider, rules: Scenario["answers"] |
     },
   };
 }
-
-const NOOP_DECIDER: Decider = {
-  async decide() {
-    return ABSTAIN;
-  },
-};
 
 /** Frozen tool_result text by tool_use_id (string or text-block content), for the record-time guard. */
 function frozenToolResults(events: string[]): Map<string, string> {
@@ -4284,7 +4277,21 @@ export function quarantineCassette(
 /** Read + parse a cassette, never throwing — a malformed `*.cassette.json` must be TALLIED, not crash a
  *  whole batch (a crash mid-walk reads as "the rest were fine" — a false-green by abort).
  *  Exported for tests (the validate-and-warn-on-assert behavior). */
-export function readCassette(path: string): { cassette: Cassette } | { error: string } {
+/** A refusal `record --rerecord-stale` can act on: the file is an old format, not a broken one, so its scenario source
+ *  is read leniently and the cassette re-recorded. Set on the read-floor and missing-required-field refusals. */
+export type CassetteReadResult = { cassette: Cassette } | { error: string; rerecordable?: true };
+
+/** The read-floor refusal, one wording for every reader. A v10/v11 cassette (recorded before 2.0.0's hash-format
+ *  epoch) can still be migrated by a 4.x `rehash`; a v9 one cannot, so the only remedy named for it is a re-record. */
+export function belowFloorRefusal(recordedVersion: number): string {
+  const head =
+    `cassette recorded at v${recordedVersion} (before 2.0.0) is below the minimum supported ` + `v${MIN_SUPPORTED_CASSETTE_VERSION}`;
+  return recordedVersion >= 10
+    ? `${head} — run \`npx cowork-harness@4 rehash <dir/>\` on it, or re-record it (\`record <dir/> --rerecord-stale\`)`
+    : `${head} — re-record it (\`record <dir/> --rerecord-stale\`); a 4.x \`rehash\` cannot migrate a v${recordedVersion} cassette`;
+}
+
+export function readCassette(path: string): CassetteReadResult {
   let raw: unknown;
   try {
     raw = JSON.parse(readFileSync(path, "utf8"));
@@ -4305,7 +4312,7 @@ export function readCassette(path: string): { cassette: Cassette } | { error: st
 
 /** Validate an already-parsed single-prompt cassette object — readCassette's checks without the file read. A
  *  multi-leg cassette nests one per prompt leg and validates each through here. Never throws. */
-export function parseCassetteObject(raw: unknown): { cassette: Cassette } | { error: string } {
+export function parseCassetteObject(raw: unknown): CassetteReadResult {
   const parsed = CassetteShape.safeParse(raw);
   if (!parsed.success) {
     // A NEWER format can fail this build's shape for reasons this build cannot know: say "too new", not "invalid",
@@ -4328,14 +4335,23 @@ export function parseCassetteObject(raw: unknown): { cassette: Cassette } | { er
   // from replay evaluation and green by omission. A cassette recorded by a NEWER harness (future version) may
   // legitimately carry an assertion key this build doesn't know: keep warn-and-tolerate there (forward-compat).
   const recordedVersion = cassette.cassetteVersion ?? 0;
-  if (recordedVersion < MIN_SUPPORTED_CASSETTE_VERSION) {
+  // Shape first (above), then the floor, then the required fields: a file that is not a cassette at all says so,
+  // and only a well-formed old cassette is told how to migrate.
+  if (recordedVersion < MIN_SUPPORTED_CASSETTE_VERSION) return { error: belowFloorRefusal(recordedVersion), rerecordable: true };
+  // `controlOut` and `userVisibleRoots` are required: replay grades every recorded decision against `controlOut` and
+  // materializes the manifest under `userVisibleRoots`. A recorder has written both since before 2.0.0, so an
+  // absent one is an old or hand-made cassette; there is no fallback that would grade it honestly.
+  const stringArray = (v: unknown): boolean => Array.isArray(v) && v.every((x) => typeof x === "string");
+  if (!stringArray((cassette as { controlOut?: unknown }).controlOut))
     return {
-      error:
-        `cassette recorded at v${recordedVersion} is older than the minimum supported version ` +
-        `v${MIN_SUPPORTED_CASSETTE_VERSION} — re-record this cassette (pre-1.0, no compatibility is ` +
-        `maintained for cassette formats below v${MIN_SUPPORTED_CASSETTE_VERSION})`,
+      error: "cassette has no `controlOut` (the recorded control responses replay grades decisions against) — re-record it",
+      rerecordable: true,
     };
-  }
+  if (!stringArray((cassette as { userVisibleRoots?: unknown }).userVisibleRoots))
+    return {
+      error: "cassette has no `userVisibleRoots` (the mount roots its manifest is replayed under) — re-record it",
+      rerecordable: true,
+    };
   // VERSION/FORMAT INVARIANT, at the read boundary. `cassetteVersion` says which reader is required;
   // `fingerprint.hashFormat` says which transform produced the digests. Nothing else ties them together,
   // and the "absent means legacy" rule would silently mis-read a v12 document that forgot the stamp.
@@ -4361,13 +4377,6 @@ export function parseCassetteObject(raw: unknown): { cassette: Cassette } | { er
         error:
           `cassette is stamped v${recordedVersion} but its fingerprint carries hashFormat ${shown} — a v${HASH_FORMAT_EPOCH}+ ` +
           `cassette must record 'jcs1'. The stamp and the digests disagree, so neither can be trusted; re-record`,
-      };
-    }
-    if (recordedVersion < HASH_FORMAT_EPOCH && fmt !== undefined) {
-      return {
-        error:
-          `cassette is stamped v${recordedVersion} (pre-epoch) but its fingerprint carries hashFormat ${shown} — a ` +
-          `pre-v${HASH_FORMAT_EPOCH} cassette predates that field entirely, so the stamp and the digests disagree; re-record`,
       };
     }
   }
@@ -6656,6 +6665,14 @@ export async function freezeRecordedRun(
   });
   // Read once — the decision stream feeds both the cassette body and the label-provenance stamp below.
   const recordedControlOut = safeLines(join(result.outDir, "control-out.jsonl"));
+  // Every driven session writes at least its `initialize` request to control-out.jsonl, so an empty one means the
+  // file is missing or was never written: freezing it would mint a cassette whose decisions cannot be graded.
+  if (recordedControlOut.length === 0)
+    throw new RecordPostRunRefusalError(
+      `control-out.jsonl in ${result.outDir} is missing or empty — the run's control responses were not captured, so a ` +
+        `cassette could not grade its decisions on replay. Re-run the record.`,
+      result,
+    );
   const base: Cassette = {
     $schema: cassetteSchemaUrl(stampedVersion),
     generator: "cowork-harness",
@@ -7309,7 +7326,7 @@ export function sessionFingerprintDrift(
  *  from the rest: `record` freezes live-only keys and replay STRIPS them (never a NEW false-green), so
  *  `--write` may persist them; every OTHER reason means a key that would SILENTLY SKIP — a permanent
  *  false-green if frozen — so `--write` refuses it. */
-type UncheckableReason = "manifest-missing" | "prerunpaths-missing" | "prerunhashes-missing" | "controlout-missing" | "live-only";
+type UncheckableReason = "manifest-missing" | "prerunpaths-missing" | "prerunhashes-missing" | "live-only";
 
 /** Classify which on-disk `assert:` keys are NOT evaluable on this cassette (reason code + human message
  *  per key), plus whether `expect_denied` changed. The shared core behind BOTH the warn path
@@ -7322,11 +7339,10 @@ export function classifyUncheckableOnDiskKeys(
 ): { keys: Map<keyof Assertion, { code: UncheckableReason; message: string }>; expectDeniedChanged: boolean } {
   const asserts = onDisk.assert ?? [];
   const hasManifest = !!cassette.artifacts?.length;
-  const hasControlOut = !!cassette.controlOut?.length;
-  // Reuse the exported classification constants — a hand-copied gateKeys list drifted once already (it was
-  // missing computer_links_resolve on the manifest side), silently suppressing the on-disk warning.
+  // Reuse the exported classification constants — a hand-copied key list drifted once already (it was missing
+  // computer_links_resolve on the manifest side), silently suppressing the on-disk warning. Gate keys are always
+  // checkable: `controlOut` is a required field.
   const manifestKeys = new Set<keyof Assertion>(MANIFEST_KEYS);
-  const gateKeys = new Set<keyof Assertion>(QUESTION_GATE_KEYS);
   const liveOnlyKeys = new Set<keyof Assertion>(LIVE_ONLY_KEYS);
   const hasPreRun = cassette.preRunPaths !== undefined;
   const hasPreRunHashes = cassette.preRunHashes !== undefined;
@@ -7358,7 +7374,6 @@ export function classifyUncheckableOnDiskKeys(
         };
       else if (k !== "no_unexpected_files" && k !== "input_unmodified" && manifestKeys.has(k) && !hasManifest)
         entry = { code: "manifest-missing", message: "no artifact manifest in this cassette" };
-      else if (gateKeys.has(k) && !hasControlOut) entry = { code: "controlout-missing", message: "no controlOut in this cassette" };
       if (entry) keys.set(k, entry);
     }
   }
@@ -8096,11 +8111,12 @@ async function computeCassetteMargins(cassette: Cassette, cassetteDir: string, s
   if (present.length === 0) return [];
   const result = await replayCassette(cassette, [], { cassetteDir, sessionOverride });
   const bf = budgetFields(result);
-  const hasControlOut = !!cassette.controlOut?.length;
+  // The re-drive answered its gates only when it reported no cassette-format failure (an unanswered question or an
+  // unpaired decision). Otherwise the sub-question count is a spurious 0 → a false-infinite margin: report "not
+  // derivable" (null) instead.
+  const answeredItsGates = !(result.assertions ?? []).some((a) => a.source === "cassette-format");
   return present.map(({ spec, budget }) => {
-    // A controlOut-less cassette re-drives with no question decisions (a truncated/legacy recording), so its
-    // sub-question count is a spurious 0 → a false-infinite margin. Report "not derivable" (null) instead.
-    const rec = spec.key === "questions_count_max" && !hasControlOut ? undefined : spec.recorded(result, bf);
+    const rec = spec.key === "questions_count_max" && !answeredItsGates ? undefined : spec.recorded(result, bf);
     const recorded = rec === undefined ? null : rec;
     let margin: number | null = null;
     if (recorded !== null)
@@ -9472,21 +9488,9 @@ export async function replayCassette(
   if (opts.notesSink) opts.notesSink(stalenessNotes);
   else for (const n of stalenessNotes) warn(`::notice:: [replay] cassette note: ${n}\n`);
 
-  // backward compat: warn loudly when controlOut is absent so the user knows question/gate
-  // assertions are being EXCLUDED (not vacuously evaluated) from this run.
-  if (!session.hasControlOut) {
-    warn(
-      "::warning:: [replay] cassette has no controlOut (pre-full-fidelity) — question/gate assertions are NOT checked; re-record to enable them\n",
-    );
-  }
-
-  // ReplayDecider: look up recorded decision body → deserialize → return.
-  // Only constructed (and only drives the decision pipeline) when controlOut is present.
-  // Reuse the session's already-parsed controlOut index for the decider (no re-parsing).
-  const replayDecider = withPartlyScriptedFindings(
-    session.hasControlOut ? buildReplayDecider(session, session.controlOutIndex) : NOOP_DECIDER,
-    cassette.scenario.answers,
-  );
+  // ReplayDecider: look up recorded decision body → deserialize → return. Reuses the session's already-parsed
+  // controlOut index (no re-parsing). `controlOut` is required, so every recorded decision is graded against it.
+  const replayDecider = withPartlyScriptedFindings(buildReplayDecider(session, session.controlOutIndex), cassette.scenario.answers);
 
   // pass Infinity as dialogTimeoutMs — the synchronous decider resolves before any timer,
   // and there is no child, so the synchronous respond() is safe here.
@@ -9511,12 +9515,11 @@ export async function replayCassette(
   const replayHookFailureBlocks = resolveHookFailureBlocks(cassette.hookFailureBlocks, initAgentVersions(cassette.events));
   // Reconstruct hook fire/block events from the recorded stream + control-out. A hook_callback is a
   // control_request in the stream; the harness's reply (built-in or custom) is the matching
-  // control_response in controlOut. Both are already recorded — no cassette field needed. Only when
-  // controlOut is present: a custom hook's decision exists ONLY there, so without it we cannot know
-  // whether a custom hook blocked, and the hook keys must exclude-loud rather than reconstruct a
-  // partial (built-in-only) view that could false-green no_hook_blocked.
+  // control_response in controlOut. Both are already recorded — no cassette field needed. A request with NO recorded
+  // response is a truncated cassette, never an allow: it is skipped here and reported as a cassette-format failure,
+  // because reading it as allow would pass `no_hook_blocked` over a block the recording lost.
   let replayHookEvents: RunResult["hookEvents"];
-  if (session.hasControlOut) {
+  {
     replayHookEvents = [];
     for (const line of cassette.events) {
       let m: any;
@@ -9529,6 +9532,11 @@ export async function replayCassette(
       if (m?.type !== "control_request" || m?.request?.subtype !== "hook_callback") continue;
       const reqId = typeof m.request_id === "string" ? m.request_id : undefined;
       const reply = reqId ? session.controlOutIndex.get(reqId) : undefined;
+      if (reply === undefined) {
+        const id = reqId ?? `(no request_id, callback ${String(m.request.callback_id)})`;
+        if (!session.unpairedHookCallbacks.includes(id)) session.unpairedHookCallbacks.push(id);
+        continue;
+      }
       replayHookEvents.push(
         hookEventFrom(
           m.request.callback_id,
@@ -9553,11 +9561,9 @@ export async function replayCassette(
   //  - producer (3) permission_denied: pure stream content (the tool_use + system_event both live in the
   //    ordinary events stream, not controlOut) — the re-drive reproduces it identically via run.ts's own
   //    correlation filter, so it's merged straight from `rec.pathDenials`.
-  // Only when controlOut is present: without it, source (2) never even reaches the re-drive (a
-  // can_use_tool `decision` event is skipped by CassetteAgentSession.start() in legacy mode), and source
-  // (1)'s custom-hook decision doesn't exist anywhere else — so the whole channel is evidence-unavailable.
+  // An unpaired path-gate callback is the truncation the hook-event loop above already reports: skipped, never allow.
   let replayPathDenials: RunResult["pathDenials"];
-  if (session.hasControlOut) {
+  {
     replayPathDenials = [];
     for (const line of cassette.events) {
       let m: any;
@@ -9572,7 +9578,7 @@ export async function replayCassette(
       const reply = reqId ? session.controlOutIndex.get(reqId) : undefined;
       if (m.request?.subtype === "hook_callback") {
         const callbackId = m.request.callback_id;
-        if (callbackId !== HOSTLOOP_PATH_GATE_ID) continue;
+        if (callbackId !== HOSTLOOP_PATH_GATE_ID || reply === undefined) continue;
         const toolUseId = typeof m.request.tool_use_id === "string" ? m.request.tool_use_id : undefined;
         const hev = hookEventFrom(callbackId, reply, m.request.input, toolUseId);
         if (hev.decision !== "block") continue;
@@ -9690,7 +9696,7 @@ export async function replayCassette(
     truncatedPaths: replayTruncatedPaths,
     linkPaths: replayLinkPaths,
   } = manifestKeys.length
-    ? materializeManifest(cassette.artifacts!, cassette.userVisibleRoots ?? ["outputs", ".projects"])
+    ? materializeManifest(cassette.artifacts!, cassette.userVisibleRoots)
     : {
         workRoot: "",
         prefixes: [] as string[],
@@ -9711,10 +9717,7 @@ export async function replayCassette(
   // across repeated replays. `replayWorkRoot` is declared OUTSIDE the try (visible in finally); the
   // returned object carries no reference into it, so post-return cleanup is safe.
   try {
-    const contentKeys: (keyof Assertion)[] = [
-      ...(session.hasControlOut ? [...alwaysContentKeys, ...questionGateKeys] : alwaysContentKeys),
-      ...manifestKeys,
-    ];
+    const contentKeys: (keyof Assertion)[] = [...alwaysContentKeys, ...questionGateKeys, ...manifestKeys];
 
     // with AND-semantics in check(), we must STRIP each assertion to only its active content keys
     // before evaluating — otherwise a mixed object (e.g. {question_asked, result} with controlOut
@@ -10125,6 +10128,15 @@ export async function replayCassette(
         assertion: { replay_protocol_fidelity: true },
         pass: false,
         message: `decision ${id} present in events.jsonl has no matching control_response in control-out.jsonl — cassette is truncated; re-record`,
+        source: "cassette-format",
+      });
+    }
+    // The same truncation for a hook callback: its reply decides block or allow, so without it nothing is known.
+    for (const id of session.unpairedHookCallbacks) {
+      assertions.push({
+        assertion: { replay_protocol_fidelity: true },
+        pass: false,
+        message: `hook_callback ${id} present in events.jsonl has no matching control_response in control-out.jsonl — cassette is truncated; re-record`,
         source: "cassette-format",
       });
     }
