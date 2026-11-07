@@ -2852,3 +2852,61 @@ def test_a_list_typed_enum_map_falls_back_whole(tmp_path):
 
 def test_the_missing_file_warning_says_missing_or_malformed():
     assert "not found next to scenario.py" not in SCENARIO_PY.read_text(encoding="utf-8")
+
+
+# ── allow_max_turns beside result: success; session files in the linted set ──────────────────────────────────
+
+
+def test_allow_max_turns_beside_result_success_warns(tmp_path):
+    assert "contradictory-turn-cap" in _rules("assert:\n  - allow_max_turns: true\n  - result: success\n", tmp_path)
+    assert "contradictory-turn-cap" in _rules("assert:\n  - {allow_max_turns: true, result: success}\n", tmp_path)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "assert:\n  - allow_max_turns: true\n  - result: error\n",
+        "assert:\n  - allow_max_turns: true\n",
+        "assert:\n  - result: success\n",
+    ],
+)
+def test_allow_max_turns_without_the_contradiction_is_quiet(body, tmp_path):
+    assert "contradictory-turn-cap" not in _rules(body, tmp_path)
+
+
+def _lint_raw(tmp_path, text):
+    f = tmp_path / "x.yaml"
+    f.write_text(text, encoding="utf-8")
+    return scenario.lint_file(str(f))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "model: claude-sonnet-5\npermission_parity: cowork\nagent_max_turns: 3\n",
+        # no `model`: a session file all the same (permission_mode is session-only; skills is in both)
+        "permission_mode: acceptEdits\nskills:\n  - x\n",
+    ],
+)
+def test_a_session_file_is_one_info_and_nothing_else(text, tmp_path):
+    found = _lint_raw(tmp_path, text)
+    assert [(x.severity, x.rule) for x in found] == [("INFO", "not-a-scenario")]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "skills:\n  - x\n",  # only a key both take: not recognisably a session
+        "model: claude-sonnet-5\nprompt: hi\n",  # a scenario key: linted as a scenario
+        "model: claude-sonnet-5\nmystery: 1\n",  # a key neither takes
+    ],
+)
+def test_not_a_session_file_is_linted_as_a_scenario(text, tmp_path):
+    assert "not-a-scenario" not in {x.rule for x in _lint_raw(tmp_path, text)}
+
+
+def test_session_key_sets_come_from_the_generated_file():
+    generated = set(json.loads(KEYS_JSON.read_text(encoding="utf-8"))["sessionKeys"])
+    assert scenario.SESSION_KEYS == generated
+    assert scenario.SESSION_ONLY_KEYS == generated - scenario.TOP_LEVEL_KEYS
+    assert "skills" in generated and "skills" not in scenario.SESSION_ONLY_KEYS

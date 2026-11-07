@@ -105,6 +105,9 @@ export function buildAssertionKeys(): string {
         // Every valid top-level scenario key, from the ScenarioObject strictObject shape (NOT the `Scenario`
         // preprocess wrapper). scenario.py keeps an embedded fallback parity-tested against this.
         topLevelKeys: Object.keys(ScenarioObject.shape).sort(),
+        // Every session-file key: `lint` recognises a session file in the linted set (keys all from here, one or
+        // more a scenario never takes) and reports it once instead of a WARN per key. See looksLikeSessionFile.
+        sessionKeys: Object.keys(SessionConfig.shape).sort(),
         // The verdict-modifier subset (no-op assertions that suppress a default-fail). scenario.py keeps a
         // hardcoded copy parity-tested against this; see VERDICT_MODIFIER_KEYS in src/types.ts.
         verdictModifierKeys: [...VERDICT_MODIFIER_KEYS].sort(),

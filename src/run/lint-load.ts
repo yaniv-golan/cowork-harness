@@ -12,14 +12,16 @@
 // and the tier-dependent pre-spawn refusals. A consumer's token-free lint lane often runs where the scenario
 // never will.
 import { searchCorpusAssertRefusal } from "../search-corpus/assert-keys.js";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { parse as parseYaml } from "yaml";
 import { isAbsolute, join } from "node:path";
 import { loadBaseline as realLoadBaseline } from "../baseline.js";
 import { UsageError, renderIssuePath } from "../errors.js";
 import { loadScenarioPure, isMultiLegFile, loadMultiLegScenario } from "./execute.js";
 import { inlineSchemaFiles } from "./schema-files.js";
 import { resolveCommandMetrics } from "../metric-command/resolve.js";
-import type { Scenario } from "../types.js";
+import { ScenarioObject, type Scenario } from "../types.js";
+import { SessionConfig } from "../session.js";
 import { scanWorkspaceFixture, workspaceFixtureAsWritten, workspaceFixtureAssertRefusal } from "../fixture/workspace.js";
 
 /** Python's `Finding.as_dict()` shape (`scenario.py`), field for field. */
@@ -40,7 +42,29 @@ export interface LoaderDeps {
 /** Most schema findings reported for one file; the last slot then summarises the rest. */
 const MAX_ISSUES_PER_FILE = 10;
 
-const NOT_A_SCENARIO = "If this file is not a scenario (a session, matrix or answer-policy file), move it out of the linted set.";
+const NOT_A_SCENARIO = "If this file is not a scenario (a matrix or answer-policy file), move it out of the linted set.";
+
+/** Every key a session file takes, and those of them a scenario never takes (`skills` is in both). Generated into
+ *  `assertion-keys.json` (`sessionKeys`) so scenario.py applies the same rule; a test keeps the two equal. */
+export const SESSION_KEYS: readonly string[] = Object.keys(SessionConfig.shape).sort();
+export const SESSION_ONLY_KEYS: readonly string[] = SESSION_KEYS.filter((k) => !(k in ScenarioObject.shape));
+
+/** A YAML mapping made only of session keys, with at least one a scenario never takes: a session file in the linted
+ *  set (a directory of sessions, or `lint <session.yaml>`). scenario.py reports it as one INFO `not-a-scenario` and
+ *  checks nothing else; the loader pass here skips it, so its scenario-schema refusals are not reported. */
+export function looksLikeSessionFile(doc: unknown): boolean {
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return false;
+  const keys = Object.keys(doc);
+  return keys.length > 0 && keys.every((k) => SESSION_KEYS.includes(k)) && keys.some((k) => SESSION_ONLY_KEYS.includes(k));
+}
+
+function readsAsSessionFile(file: string): boolean {
+  try {
+    return looksLikeSessionFile(parseYaml(readFileSync(file, "utf8")));
+  } catch {
+    return false; // unreadable or not YAML: the loader reports it
+  }
+}
 
 /** Value-taking flags shared by the loader pre-pass and scenario.py's own positional scan. */
 export const LINT_VALUE_FLAGS = ["--min-severity", "--output-format", "--cassette-dir"] as const;
@@ -261,6 +285,8 @@ export function loaderFindings(files: string[], deps: LoaderDeps = {}): LintFind
   const baselineOk = new Map<string, unknown>(); // name → the error, or null when it resolved
   const out: LintFinding[] = [];
   for (const file of files) {
+    // A session file is not a scenario: scenario.py reports it once (INFO `not-a-scenario`).
+    if (!deps.load && readsAsSessionFile(file)) continue;
     try {
       let scenario: Scenario | undefined;
       let name: string;
