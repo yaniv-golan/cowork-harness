@@ -7,7 +7,6 @@ import {
   skillHashEntries,
   skillHashSnapshot,
   renderWireEntries,
-  legacyHashedContent,
   classifyManifest,
   OS_JUNK_PATTERN,
   compileIgnore,
@@ -476,45 +475,11 @@ describe("skillHashSnapshot — one walk must reproduce every rendering", () => 
   });
 });
 
-describe("legacy-nover is FROZEN — the migration proof depends on it byte-for-byte", () => {
-  // At the epoch this stops being how digests are made and becomes the only way to VERIFY an old one:
-  // `rehash` proves a pre-epoch cassette unchanged by recomputing under exactly this rule. Drift of a
-  // single byte makes every pre-epoch artifact unprovable and turns the free migration into paid
-  // re-records. These are golden vectors, not examples — update them only alongside a read-floor raise.
-  const sha = (v: Buffer | string) => createHash("sha256").update(v).digest("hex");
-
-  it("strips ONLY `version`, and normalizes nothing else", () => {
-    const bytes = Buffer.from('{ "name": "p", "version": "0.0.1", "skills": "./skills" }');
-    // Whitespace IS normalized (JSON round-trip) but key ORDER is not — that non-normalization is the
-    // defect jcs1 fixes, and it is exactly what must be preserved here to reproduce old digests.
-    expect(legacyHashedContent(bytes, "claude-manifest")).toBe('{"name":"p","skills":"./skills"}');
-    expect(legacyHashedContent(Buffer.from('{"skills":"./skills","name":"p","version":"1"}'), "claude-manifest")).toBe(
-      '{"skills":"./skills","name":"p"}',
-    );
-  });
-
-  it("reproduces the digest recorded in the committed cassette", () => {
-    // The real fixture's manifest, and the sha its cassette has carried since it was recorded.
-    const bytes = Buffer.from('{ "name": "my-pdf-skill", "version": "0.0.1", "skills": "./skills" }');
-    expect(sha(legacyHashedContent(bytes, "claude-manifest"))).toBe("d7e743622f41cee7a6089bbc989193868849501bfe9a905b40f9c62c16b22b2a");
-  });
-
-  it("falls back to RAW BYTES on unparseable JSON — part of the algorithm, not an escape", () => {
-    const broken = Buffer.from("{not json");
-    expect(legacyHashedContent(broken, "claude-manifest")).toBe(broken);
-  });
-
-  it("classifies BOTH spellings — the root arm is frozen history, not dead code", () => {
+describe("manifest spellings", () => {
+  it("classifies BOTH spellings; anything else is not a manifest", () => {
     expect(classifyManifest("a/.claude-plugin/plugin.json")).toBe("claude-manifest");
     expect(classifyManifest("plugin.json")).toBe("root-manifest");
     expect(classifyManifest(".cursor-plugin/plugin.json")).toBe("none");
     expect(classifyManifest("skills/x/SKILL.md")).toBe("none");
-    // A root manifest gets the exemption too, and must keep getting it.
-    expect(legacyHashedContent(Buffer.from('{"name":"p","version":"9"}'), "root-manifest")).toBe('{"name":"p"}');
-  });
-
-  it("non-manifests are passed through untouched", () => {
-    const b = Buffer.from('{"name":"p","version":"1"}');
-    expect(legacyHashedContent(b, "none")).toBe(b);
   });
 });

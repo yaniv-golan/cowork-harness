@@ -2153,17 +2153,14 @@ export interface Fingerprint {
   // `.claude-plugin/plugin.json` (or root `plugin.json`) folds with `version` deleted. Hand-checking one of
   // those with `shasum` mismatches and looks exactly like corruption — it isn't.
   //
-  // The hand-check depends on `hashFormat`, so read that FIRST:
-  //   absent / legacy → JSON.parse, delete `version`, JSON.stringify, sha256
-  //   "jcs1"          → JSON.parse, delete `version`, jcsSerialize (run/jcs.ts), sha256
-  // Using the legacy recipe on a jcs1 cassette reproduces the original confusion exactly: for any manifest
-  // whose keys are not already sorted it will not match, and it will read as corruption.
+  // The hand-check (`hashFormat` "jcs1"): JSON.parse, delete `version`, jcsSerialize (run/jcs.ts), sha256.
+  // Re-serializing with JSON.stringify instead will not match for any manifest whose keys are not already
+  // sorted, and it reads as corruption.
   //
   // `COWORK_HARNESS_DEBUG_SKILLHASH=1` dumps the folded set with these shas, but only fires on a hash
   // MISMATCH — there is no on-demand dump for a cassette that verifies clean.
-  /** v12+: which manifest-transform algorithm produced the digests in this fingerprint. ABSENT means the
-   *  LEGACY (pre-epoch) transform — NOT "raw bytes": every cassette recorded before v12 already carries
-   *  version-stripped manifest digests, so defaulting absence to raw would mislabel all of them. */
+  /** v12+: which manifest-transform algorithm produced the digests in this fingerprint. Required on every
+   *  cassette this build reads. ABSENT only on a run kept before v12, whose digests are not comparable. */
   hashFormat?: "jcs1";
   fileSigs?: Array<[string, string]>;
   fileSigsOmitted?: boolean;
