@@ -165,9 +165,12 @@ describe("one predicate: nothing in src re-derives the turn-cap condition", () =
       );
     const offenders = walk("src").filter((f) => {
       if (f.endsWith(join("run", "turn-cap.ts"))) return false;
-      // A second copy of the condition: turns compared with maxTurns, either way round.
-      const t = readFileSync(f, "utf8");
-      return /turns\s*[<>]=?\s*[\w.!?]*maxTurns|maxTurns\s*[<>]=?\s*[\w.!?]*turns\b/.test(t);
+      // A second copy of the condition: any line that compares something with `maxTurns`, however the other side is
+      // spelled (`turns >= cap.maxTurns`, `(r.usage?.turns ?? 0) >= …maxTurns`, `cap.maxTurns <= n`). `=>` is not a
+      // comparison.
+      return readFileSync(f, "utf8")
+        .split("\n")
+        .some((line) => /maxTurns/.test(line) && /(?<![=!<>-])(?:[<>]=?)(?![=>])/.test(line.replace(/\/\/.*$/, "")));
     });
     expect(offenders).toEqual([]);
   });
