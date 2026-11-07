@@ -2647,6 +2647,74 @@
         "type": "string",
         "required": true
       },
+      ".hostInputs": {
+        "type": "object",
+        "closed": true
+      },
+      ".hostInputs.plugins": {
+        "type": "array",
+        "required": true
+      },
+      ".hostInputs.plugins[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".hostInputs.plugins[].gitCommitSha": {
+        "type": "string"
+      },
+      ".hostInputs.plugins[].key": {
+        "type": "string",
+        "required": true
+      },
+      ".hostInputs.plugins[].sha256": {
+        "type": "string",
+        "required": true
+      },
+      ".hostInputs.plugins[].version": {
+        "type": "string",
+        "required": true
+      },
+      ".hostInputs.setHash": {
+        "type": "string",
+        "required": true
+      },
+      ".hostInputs.shadowed": {
+        "type": "array"
+      },
+      ".hostInputs.shadowed[]": {
+        "type": "string"
+      },
+      ".hostInputs.skills": {
+        "type": "array",
+        "required": true
+      },
+      ".hostInputs.skills[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".hostInputs.skills[].name": {
+        "type": "string",
+        "required": true
+      },
+      ".hostInputs.skills[].sha256": {
+        "type": "string",
+        "required": true
+      },
+      ".hostInputs.skipped": {
+        "type": "array"
+      },
+      ".hostInputs.skipped[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".hostInputs.skipped[].key": {
+        "type": "string",
+        "required": true
+      },
+      ".hostInputs.skipped[].reason": {
+        "enum": ["not-installed", "not-user-scope"],
+        "required": true
+      },
       ".legs": {
         "type": "array"
       },
@@ -5371,6 +5439,74 @@
       },
       ".hookFailureBlocks<oneOf:1>.why": {
         "type": "string",
+        "required": true
+      },
+      ".hostInputs": {
+        "type": "object",
+        "closed": true
+      },
+      ".hostInputs.plugins": {
+        "type": "array",
+        "required": true
+      },
+      ".hostInputs.plugins[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".hostInputs.plugins[].gitCommitSha": {
+        "type": "string"
+      },
+      ".hostInputs.plugins[].key": {
+        "type": "string",
+        "required": true
+      },
+      ".hostInputs.plugins[].sha256": {
+        "type": "string",
+        "required": true
+      },
+      ".hostInputs.plugins[].version": {
+        "type": "string",
+        "required": true
+      },
+      ".hostInputs.setHash": {
+        "type": "string",
+        "required": true
+      },
+      ".hostInputs.shadowed": {
+        "type": "array"
+      },
+      ".hostInputs.shadowed[]": {
+        "type": "string"
+      },
+      ".hostInputs.skills": {
+        "type": "array",
+        "required": true
+      },
+      ".hostInputs.skills[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".hostInputs.skills[].name": {
+        "type": "string",
+        "required": true
+      },
+      ".hostInputs.skills[].sha256": {
+        "type": "string",
+        "required": true
+      },
+      ".hostInputs.skipped": {
+        "type": "array"
+      },
+      ".hostInputs.skipped[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".hostInputs.skipped[].key": {
+        "type": "string",
+        "required": true
+      },
+      ".hostInputs.skipped[].reason": {
+        "enum": ["not-installed", "not-user-scope"],
         "required": true
       },
       ".infraErrors": {
@@ -8344,6 +8480,28 @@
         "type": "array"
       },
       ".plugins.enabled[]": {
+        "type": "string",
+        "minLength": 1
+      },
+      ".plugins.from_host<anyOf:0>": {
+        "type": "boolean",
+        "const": true
+      },
+      ".plugins.from_host<anyOf:1>": {
+        "type": "object",
+        "closed": true
+      },
+      ".plugins.from_host<anyOf:1>.plugins": {
+        "type": "array"
+      },
+      ".plugins.from_host<anyOf:1>.plugins[]": {
+        "type": "string",
+        "minLength": 1
+      },
+      ".plugins.from_host<anyOf:1>.skills": {
+        "type": "array"
+      },
+      ".plugins.from_host<anyOf:1>.skills[]": {
         "type": "string",
         "minLength": 1
       },

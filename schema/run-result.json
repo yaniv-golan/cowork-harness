@@ -83,6 +83,85 @@
         }
       ]
     },
+    "hostInputs": {
+      "type": "object",
+      "description": "What `plugins.from_host` took from the host: each plugin's key, version, `gitCommitSha` and sha256 over its staged copy (every file's bytes and executable bit, every directory, every in-tree symlink); each skill's name and sha256; what `from_host: true` skipped (not installed, or not at user scope); and `setHash`. Names and hashes only, never a file body. Absent when the session has no `from_host`.",
+      "required": ["plugins", "skills", "setHash"],
+      "properties": {
+        "plugins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "version", "sha256"],
+            "properties": {
+              "key": {
+                "type": "string",
+                "description": "`<name>@<marketplace>`"
+              },
+              "version": {
+                "type": "string"
+              },
+              "gitCommitSha": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{7,64}$",
+                "description": "Information only: the marketplace commit the install came from. Not what the hash covers."
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "sha256"],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "skipped": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["key", "reason"],
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "reason": {
+                "enum": ["not-installed", "not-user-scope"]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "shadowed": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Host inputs a scenario plugin or skill of the same name replaced: plugin keys, and skills as `skill:<name>`."
+        },
+        "setHash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "sha256 over the delivered plugins and skills, sorted by (kind, key). `skipped` and `shadowed` do not enter it."
+        }
+      },
+      "additionalProperties": false
+    },
     "deviceBridge": {
       "type": "object",
       "description": "What a `device_bridge` run modeled of the remote lane's device bridge, and where it differs from production. `served`: the device tools served; `alwaysLoad`: those that load without ToolSearch; `measuredOn`: the Desktop build both were read from; `egress`: the egress branch modeled (`allowlist`: the session allowlist through the proxy; `unrestricted`: everything through it, from `egress.unrestricted: true`, and then no `egress-allowlist` divergence); `folders`: name and mode only. `divergences` by id: `delete-refusal-libc` (the device refuses deletes made through the C library until the user allows them; a static binary or raw system call is caught only after the run) or `delete-not-refused` (on an older recording, or on any run whose delete-refusal canary did not pass: a delete succeeded on the device copy and was reported after the run), `egress-allowlist`, `description-paraphrase`, `device-paths-tilde`, `device-tools-unserved`, `device-network-shared`, `decline-text`, `grant-without-prompt`, `rename-reads-as-delete` (and `shell-user` on a v17 recording). Absent when the scenario has no bridge.",

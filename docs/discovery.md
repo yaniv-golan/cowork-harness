@@ -52,6 +52,7 @@ Plugins are bind-mounted at the Cowork paths; the MCP config is passed via `--mc
 | Test a single local **skill** dir in isolation | `skills.local: ["./skills/my-skill"]` (staged into the config dir's `skills/`). Use `plugins.local_plugins` instead only for a **plugin** root — a dir with `.claude-plugin/plugin.json` — mounted via `--plugin-dir`. |
 | Swap an MCP server for a stub | point `mcp.config` at a test `mcp.json` (see `examples/data/mcp.json`) |
 | Exercise an org-remote plugin | `plugins.remote_plugins: ["./fixtures/org-plugin"]` |
+| Reproduce your installed plugins and skills | `plugins.from_host: true` (or name them). Copied into the run, hashed and recorded; see [session.md](./session.md#your-installed-set-pluginsfrom_host) |
 | Disable all discovery | leave the `plugins` / `skills` / `mcp` blocks empty |
 
 A pinned `plugins.config_dir` is **single-run**: the harness creates it (it must not exist yet), marks it with

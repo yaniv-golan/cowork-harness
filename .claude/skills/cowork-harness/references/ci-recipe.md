@@ -288,6 +288,7 @@ dollar figures). In a skill repo these cassettes get **committed**. So:
   still refuses the write and quarantines it. **You do not need to audit the session by hand to pass this
   flag**; that precondition was never decidable by the operator, and the scan is the real gate. Writing a
   recording the scan DID flag is the separate `--allow-host-inventory-findings`.
+  A `plugins.from_host` session is host-inheriting at **every** tier: its cassette names your installed set.
 
   Two details that matter for a re-record loop. The pre-spend check **warns rather than refuses when the
   cassette already exists**, deliberately: refusing there would fire on every `--rerecord-stale` pass and

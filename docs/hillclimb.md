@@ -85,7 +85,7 @@ each step of the loop) and [`references/hillclimb.md`](../.claude/skills/cowork-
 | Variant | One round: `baseline` (the first variant, the starting plugin), then `v1`, `v2`, …; each runs a snapshot of the plugin taken on its first run |
 | Case | One scenario file; its id is the file stem |
 | Rep, slot | One run of a case in a variant, counted from 0; a (case, rep) pair is a slot, and a pass resumes by slot |
-| Harness gate | A sha over the inputs the loop must not change (scenarios, sessions, uploads, workspace fixtures, lockfiles, `harness_paths`, the `--skill` selection, the harness version and Desktop baseline), recorded by `--approve-harness` in `_state.json` |
+| Harness gate | A sha over the inputs the loop must not change (scenarios, sessions, uploads, workspace fixtures, the installed set a `plugins.from_host` session takes, lockfiles, `harness_paths`, the `--skill` selection, the harness version and Desktop baseline), recorded by `--approve-harness` in `_state.json` |
 | Pairwise reference | A frozen output a `semantic_pairwise` assert is judged against: the baseline's, then any a `hillclimb freeze-ref --flow <dir>` adds |
 
 Other terms, defined where they are used: a fill (`hillclimb regrade --flow <dir> --fill-refs`) adds the columns
@@ -250,6 +250,8 @@ Three things live outside the flow dir, and the loop needs all three for the who
   ([scenario.md](./scenario.md)).
 - **`skill_invoked`** is 1 or 0 for whether the run invoked the tracked skill (`meta.skill_tracked` names it). A
   blank means not measured: no skill was tracked, or the run's record could not tell.
+- **`meta.host_inputs`** is the set hash of what a `plugins.from_host` session took from your machine
+  (`result.json`'s `hostInputs.setHash`); absent for a case without it.
 - **Reps count from 0**: `rep: 0`, `traces/<id>_rep0.json`, `out/<id>_rep0/`.
 - **An agent's own failure is a scored row**: every graded key 0, `meta.failure_class: "errored_agent"`, and the
   rule that classified it in `meta.termination_rule` (for example a run that ended asking for input). A row with

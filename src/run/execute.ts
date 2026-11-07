@@ -1,3 +1,4 @@
+import type { HostInputs } from "../host-inputs.js";
 import { warn, writeTextAtomic } from "../io.js";
 import { turnCapReached } from "./turn-cap.js";
 import { searchCorpusAssertRefusal } from "../search-corpus/assert-keys.js";
@@ -1979,6 +1980,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       const partialResult = buildPartialResult({
         hookFailureBlocks: runHookFailureBlocks(plan, effectiveFidelity, workRoot, sessionId, outDir),
         deviceBridge: scenario.device_bridge === true ? bridgeRecord() : undefined,
+        hostInputs: plan.hostInputs,
         fsDiff, // the turn's outputs diff — keep a filesystem-proven delete on the partial result
         outputsMountMode,
         turn,
@@ -2574,6 +2576,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
       hookFailureBlocks, // the onFailure: "block" inventory the hook keys read failed frames by
       deviceBridge: scenario.device_bridge === true ? bridgeRecord() : undefined, // what the bridge modeled, and how it differs
+      hostInputs: plan.hostInputs, // what plugins.from_host took from the host, hashed over the staged copy
       mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
       hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
       fileToolAttempts: record.fileToolAttempts, // uncollapsed — content-class, same as toolResults/decisions above
@@ -3584,6 +3587,8 @@ export function buildPartialResult(args: {
   hookFailureBlocks?: HookFailureBlocks;
   /** What a device_bridge run modeled (`deviceBridgeRecord`). */
   deviceBridge?: DeviceBridgeRecord;
+  /** What `plugins.from_host` took from the host (`LaunchPlan.hostInputs`). */
+  hostInputs?: HostInputs;
   /** True when this partial run was ablated (--ablate-skill). */
   ablated?: boolean;
   scenarioName: string;
@@ -3790,6 +3795,7 @@ export function buildPartialResult(args: {
     contextEvents: record.contextEvents, // system events we don't special-case — powers compaction_occurred
     hookFailureBlocks: args.hookFailureBlocks,
     deviceBridge: args.deviceBridge,
+    hostInputs: args.hostInputs,
     mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
     hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
     fileToolAttempts: record.fileToolAttempts, // uncollapsed — content-class, same as toolResults/decisions above

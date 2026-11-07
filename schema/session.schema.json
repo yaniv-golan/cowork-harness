@@ -182,6 +182,36 @@
             "type": "string",
             "minLength": 1
           }
+        },
+        "from_host": {
+          "anyOf": [
+            {
+              "type": "boolean",
+              "const": true
+            },
+            {
+              "type": "object",
+              "properties": {
+                "plugins": {
+                  "default": [],
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                },
+                "skills": {
+                  "default": [],
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
         }
       },
       "additionalProperties": false

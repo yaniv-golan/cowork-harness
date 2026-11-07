@@ -147,7 +147,10 @@ export function foldSnapshot(entries: HashEntry[]): string {
 type WalkEntry = HashEntry extends infer T ? (T extends HashEntry ? Omit<T, "rootOrdinal"> : never) : never;
 type OnEntryFn = (entry: WalkEntry) => void;
 
-function hashDir(dir: string, errors: string[], rel = "", accept?: AcceptFn, onEntry?: OnEntryFn, root = dir): void {
+/** `exact` (only `hashHostTree`, for `plugins.from_host`) hashes every byte a copy delivers: no name is skipped, a file's
+ *  raw bytes and its executable bit are folded (no manifest transform), and an escaping symlink is an error rather
+ *  than a skip. Every other caller passes nothing and is unchanged. */
+function hashDir(dir: string, errors: string[], rel = "", accept?: AcceptFn, onEntry?: OnEntryFn, root = dir, exact = false): void {
   let entries: string[];
   try {
     entries = readdirSync(dir).sort();
@@ -188,6 +191,10 @@ function hashDir(dir: string, errors: string[], rel = "", accept?: AcceptFn, onE
       const resolvedTarget = resolve(dirname(abs), target);
       const rootResolved = resolve(root);
       const inTree = resolvedTarget === rootResolved || resolvedTarget.startsWith(rootResolved + sep);
+      if (!inTree && exact) {
+        errors.push(`symlink ${relPath} points outside the tree (${target})`);
+        continue;
+      }
       if (!inTree) {
         process.stderr.write(`cowork-harness: skill-hash: skipping escaping symlink ${abs} -> ${target} (not followed)\n`);
         continue;
@@ -198,18 +205,18 @@ function hashDir(dir: string, errors: string[], rel = "", accept?: AcceptFn, onE
       continue;
     }
     if (st.isDirectory()) {
-      if (SKILL_HASH_DIR_DENYLIST.has(name) || OS_JUNK_PATTERN.test(relPath)) continue; // skip VCS/cache and OS-junk subtrees entirely
+      if (!exact && (SKILL_HASH_DIR_DENYLIST.has(name) || OS_JUNK_PATTERN.test(relPath))) continue; // skip VCS/cache and OS-junk subtrees entirely
       if (accept && !accept(relPath, true)) continue; // scoped out (an unlisted skill's subtree)
       if (onEntry) onEntry({ kind: "dir", path: relPath }); // `D:` structure marker — an empty/renamed dir registers // the digest has always folded these; the SNAPSHOT now sees them too
-      hashDir(abs, errors, relPath, accept, onEntry, root);
+      hashDir(abs, errors, relPath, accept, onEntry, root, exact);
     } else if (st.isFile()) {
-      if (name.endsWith(".cassette.json")) continue; // a recorded cassette is output, not skill source
-      if (relPath === HASH_IGNORE_FILE) continue; // the ignore file is harness metadata, not skill source
+      if (!exact && name.endsWith(".cassette.json")) continue; // a recorded cassette is output, not skill source
+      if (!exact && relPath === HASH_IGNORE_FILE) continue; // the ignore file is harness metadata, not skill source
       // OS-junk (.DS_Store / Thumbs.db / desktop.ini / …) is OS metadata the OS rewrites out-of-band (a
       // .DS_Store touch by Finder must NOT re-stale a cassette). Excluded under the same rationale as the dir
       // denylist (.git/node_modules) — provably-non-behavioral content the mount still delivers. Cassette
       // version bumped so existing cassettes get a graceful "older format — re-record once" (not "changed").
-      if (OS_JUNK_PATTERN.test(relPath)) continue;
+      if (!exact && OS_JUNK_PATTERN.test(relPath)) continue;
       if (accept && !accept(relPath, false)) continue; // scoped/ignored out
       // NOTE: the digest is not folded here — `foldSnapshot` folds the emitted entries.
       let bytes: Buffer;
@@ -229,6 +236,17 @@ function hashDir(dir: string, errors: string[], rel = "", accept?: AcceptFn, onE
       // Every behavior-bearing field (mcpServers, hooks, dependencies, …) still counts. Falls back to raw
       // bytes if the manifest isn't valid JSON. `hashedContent` is EXACTLY what folds into the digest — the
       // onFile sink reports its sha so the debug dump reflects what the hash actually saw.
+      if (exact) {
+        const mode = (st.mode & 0o111) !== 0 ? "x\0" : "-\0";
+        if (onEntry)
+          onEntry({
+            kind: "file",
+            path: relPath,
+            sha: createHash("sha256").update(mode).update(bytes).digest("hex"),
+            manifestKind: "none",
+          });
+        continue;
+      }
       const manifestKind = classifyManifest(relPath);
       let jcs1Sha: string;
       try {
@@ -513,4 +531,16 @@ export function hashSkillDirs(dirs: string[], scopeSkills?: string[], sessionIgn
         ...(missedSkills ? { missedSkills } : {}),
         ...(readErrors ? { readErrors } : {}),
       };
+}
+
+/** The digest of a `plugins.from_host` input as staged: every file (raw bytes and executable bit), every directory
+ *  and every in-tree symlink, in sorted path order. `errors` holds what could not be read and any symlink that
+ *  points outside the tree; the caller refuses on either. */
+export function hashHostTree(dir: string, skipNames?: ReadonlySet<string>): { sha256: string; errors: string[] } {
+  const errors: string[] = [];
+  const snapshot: HashEntry[] = [];
+  // `skipNames` lets a caller hash a host source as its copy would be: the names the copy filter drops.
+  const accept: AcceptFn | undefined = skipNames ? (rel) => !skipNames.has(rel.slice(rel.lastIndexOf("/") + 1)) : undefined;
+  hashDir(dir, errors, "", accept, (e) => snapshot.push({ ...e, rootOrdinal: 0 } as HashEntry), dir, true);
+  return { sha256: foldSnapshot(snapshot), errors };
 }
