@@ -70,19 +70,31 @@ const lineOf = (src: string, offset: number) => src.slice(0, offset).split("\n")
 /** Files that raise no exit request themselves but run code that can (a job, a pool item) and decide what a throw
  *  from it means: a catch there that turned a request into a row or an ordinary stop would end the run with the
  *  wrong code. Named, since no import marks them. */
-export const CROSS_FILE_WRAPPERS = [join("src", "eval", "command.ts"), join("src", "hillclimb", "runner.ts")];
+export const CROSS_FILE_WRAPPERS = [
+  join("src", "async-pool.ts"),
+  join("src", "eval", "command.ts"),
+  join("src", "eval", "job-runner.ts"),
+  join("src", "hillclimb", "runner.ts"),
+];
 
 /**
- * The files whose catches must let an exit request through: those that import `fail` from envelope.js, call
- * `exitWith(`, or define a `: never` wrapper over either, plus the CROSS_FILE_WRAPPERS. Matched on comment-free text.
+ * The files whose catches must let an exit request through, matched on comment-free text:
+ *  - the raisers: those that import `fail` from envelope.js or call `exitWith(` (and envelope.ts itself);
+ *  - every importer of run/exit.js or async-pool.js: sentinel-aware by definition, or running pool items that can
+ *    raise one;
+ *  - the CROSS_FILE_WRAPPERS.
+ * Known blind spot, unused in src today: a namespace import (`import * as env from "./envelope.js"` then `env.fail(`)
+ * is not matched by the `fail` import criterion. A file that does it and calls no `exitWith(` would be unguarded.
  */
 export function guardedFiles(files = srcFiles()): string[] {
   return files.filter((f) => {
+    if (f.endsWith(join("run", "exit.ts"))) return false;
     if (CROSS_FILE_WRAPPERS.some((w) => f.endsWith(w))) return true;
     const s = stripComments(readFileSync(f, "utf8"));
     if (/import\s*(type\s*)?\{[^}]*\bfail\b[^}]*\}\s*from\s*"[^"]*envelope\.js"/.test(s)) return true;
-    if (/\bexitWith\(/.test(s) && !f.endsWith(join("run", "exit.ts"))) return true;
+    if (/\bexitWith\(/.test(s)) return true;
     if (/\bfail\(/.test(s) && f.endsWith(join("run", "envelope.ts"))) return true;
+    if (/\bfrom\s*"[^"]*\/(exit|async-pool)\.js"/.test(s)) return true;
     return false;
   });
 }
@@ -96,47 +108,76 @@ export interface CatchSite {
   reason?: string;
   /** The catch's first statement, for the failure message. */
   first: string;
+  /** `catch` for a `} catch` block, `.catch` for a promise handler. */
+  form: "catch" | ".catch";
 }
 
 const MARKER = /\/\/\s*exit-safe:\s*(.+)$/;
 
+function classify(binding: string | undefined, first: string): CatchSite["kind"] {
+  if (!binding) return "none";
+  if (first.startsWith(`rethrowIfExit(${binding});`)) return "rethrowIfExit";
+  // `if (!(e instanceof UsageError)) throw e;` rethrows everything but one class. With ExitRequested as that class it
+  // rethrows everything EXCEPT the request, so it swallows exactly what this guard is for.
+  if (new RegExp(`^if \\(!\\(${binding} instanceof (?!ExitRequested\\b)[\\w$.]+\\)\\) throw ${binding};`).test(first)) return "narrow";
+  // `if (e instanceof InterruptedError || e instanceof ExitRequested) throw e;`: rethrows the request by name.
+  if (
+    new RegExp(
+      `^if \\((${binding} instanceof [\\w$.]+ \\|\\| )*${binding} instanceof ExitRequested( \\|\\| ${binding} instanceof [\\w$.]+)*\\) throw ${binding};`,
+    ).test(first)
+  )
+    return "narrow";
+  return "none";
+}
+
+/** A marker on the given line, or as the body's first line: a line holding only the marker comment, after a line
+ *  whose body is still open. */
+function markerAt(rawLines: string[], line: number): RegExpMatchArray | null {
+  const bodyOpen = rawLines[line - 1].trimEnd().endsWith("{");
+  return (
+    rawLines[line - 1].match(MARKER) ??
+    (bodyOpen && /^\s*\/\/\s*exit-safe:/.test(rawLines[line] ?? "") ? (rawLines[line] ?? "").match(MARKER) : null)
+  );
+}
+
+const firstStatement = (src: string, bodyStart: number) =>
+  src
+    .slice(bodyStart, bodyStart + 300)
+    .trimStart()
+    .split("\n")[0]
+    .trim();
+
+/** Every `} catch` block and every `.catch(` promise handler in the file. A handler that is an arrow with a block body
+ *  is classified like a catch block; an expression-bodied arrow or a function reference cannot be read, so it counts
+ *  as letting nothing through unless it carries a marker. */
 export function catchSites(file: string): CatchSite[] {
   const raw = readFileSync(file, "utf8");
   const src = stripComments(raw, { strings: true });
   const rawLines = raw.split("\n");
+  const rel = relative(process.cwd(), file);
   const out: CatchSite[] = [];
-  const re = /\}\s*catch\s*(?:\(\s*([A-Za-z_$][\w$]*)[^)]*\))?\s*\{/g;
-  for (const m of src.matchAll(re)) {
-    const at = m.index! + m[0].indexOf("catch");
-    const line = lineOf(src, at);
+  for (const m of src.matchAll(/\}\s*catch\s*(?:\(\s*([A-Za-z_$][\w$]*)[^)]*\))?\s*\{/g)) {
+    const line = lineOf(src, m.index! + m[0].indexOf("catch"));
     const binding = m[1];
-    const bodyStart = m.index! + m[0].length;
-    const first = src
-      .slice(bodyStart, bodyStart + 300)
-      .trimStart()
-      .split("\n")[0]
-      .trim();
-    // A marker on the catch line itself, or as the body's first line: a line that holds only the marker comment and
-    // follows a catch line whose body is still open.
-    const bodyOpen = rawLines[line - 1].trimEnd().endsWith("{");
-    const marker =
-      rawLines[line - 1].match(MARKER) ??
-      (bodyOpen && /^\s*\/\/\s*exit-safe:/.test(rawLines[line] ?? "") ? (rawLines[line] ?? "").match(MARKER) : null);
-    let kind: CatchSite["kind"] = "none";
-    if (binding && first.startsWith(`rethrowIfExit(${binding});`)) kind = "rethrowIfExit";
-    else if (binding && new RegExp(`^if \\(!\\(${binding} instanceof [\\w$.]+\\)\\) throw ${binding};`).test(first)) kind = "narrow";
-    // `if (e instanceof InterruptedError || e instanceof ExitRequested) throw e;`: rethrows the request by name.
-    else if (
-      binding &&
-      new RegExp(
-        `^if \\((${binding} instanceof [\\w$.]+ \\|\\| )*${binding} instanceof ExitRequested( \\|\\| ${binding} instanceof [\\w$.]+)*\\) throw ${binding};`,
-      ).test(first)
-    )
-      kind = "narrow";
-    else if (marker) kind = "marker";
-    out.push({ file: relative(process.cwd(), file), line, binding, kind, reason: marker?.[1].trim(), first });
+    const first = firstStatement(src, m.index! + m[0].length);
+    const marker = markerAt(rawLines, line);
+    let kind = classify(binding, first);
+    if (kind === "none" && marker) kind = "marker";
+    out.push({ file: rel, line, binding, kind, reason: marker?.[1].trim(), first, form: "catch" });
   }
-  return out;
+  for (const m of src.matchAll(/\.catch\(/g)) {
+    const line = lineOf(src, m.index!);
+    const after = src.slice(m.index! + m[0].length);
+    const arrow = after.match(/^\s*(?:async\s+)?(?:\(\s*([A-Za-z_$][\w$]*)?\s*(?::[^)]*)?\)|([A-Za-z_$][\w$]*))\s*=>\s*(\{)?/);
+    const binding = arrow ? (arrow[1] ?? arrow[2]) : undefined;
+    const block = !!arrow?.[3];
+    const first = block ? firstStatement(src, m.index! + m[0].length + arrow![0].length) : after.slice(0, 80).split("\n")[0].trim();
+    const marker = markerAt(rawLines, line);
+    let kind: CatchSite["kind"] = block ? classify(binding, first) : "none";
+    if (kind === "none" && marker) kind = "marker";
+    out.push({ file: rel, line, binding, kind, reason: marker?.[1].trim(), first, form: ".catch" });
+  }
+  return out.sort((a, b) => a.line - b.line);
 }
 
 /** Every `process.exit(` call in code (comments excluded), as `file:line`. */

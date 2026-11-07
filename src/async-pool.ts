@@ -32,6 +32,8 @@ export async function pMapBounded<T, R>(
       try {
         results[i] = await fn(items[i], i);
       } catch (e) {
+        // exit-safe: the first error (an exit request included) is kept and rethrown once the in-flight items settle
+        // By design the first error wins: one raised by another item after the pool has stopped is dropped here.
         if (!stopped) {
           stopped = true;
           firstError = { e };

@@ -22,11 +22,26 @@ describe("every broad catch that can see an exit request lets it through", () =>
       "src/critique/command.ts",
       "src/run/chat.ts",
       // the cross-file wrappers: they raise nothing, but decide what a job's throw means
+      "src/async-pool.ts",
       "src/eval/command.ts",
+      "src/eval/job-runner.ts",
       "src/hillclimb/runner.ts",
+      // importers of run/exit.js
+      "src/hillclimb/job.ts",
+      "src/run/analyze-artifact-runtime.ts",
     ])
       expect(rel, rel.join("\n")).toContain(must);
-    expect(files.length, rel.join("\n")).toBeGreaterThanOrEqual(15);
+    expect(files.length, rel.join("\n")).toBeGreaterThanOrEqual(20);
+  });
+
+  it("every caller of a library function that can raise an exit request is guarded", () => {
+    // These live outside the command files and call exitWith themselves; a caller outside the set could swallow it.
+    const LIBRARY_EXITS = /\b(preflightBudget|preflightBatchBudget|applyCommandGlobals?|stripCommandGlobals)\(/;
+    const guarded = new Set(files);
+    const callers = srcFiles().filter((f) => LIBRARY_EXITS.test(stripComments(readFileSync(f, "utf8"), { strings: true })));
+    expect(callers.length).toBeGreaterThan(1);
+    const outside = callers.filter((f) => !guarded.has(f));
+    expect(outside, "callers outside the guarded set").toEqual([]);
   });
 
   it("each catch opens with rethrowIfExit(e), a narrow rethrow, or an `// exit-safe:` marker", () => {
@@ -57,10 +72,34 @@ describe("every broad catch that can see an exit request lets it through", () =>
           "  log(e); }",
           "try { a(); } catch (e) { if (e instanceof InterruptedError || e instanceof ExitRequested) throw e; }",
           "try { a(); } catch (e) { if (e instanceof InterruptedError || e instanceof UsageError) throw e; }",
+          // rethrows everything EXCEPT the request: it swallows exactly what the guard is for
+          "try { a(); } catch (e) { if (!(e instanceof ExitRequested)) throw e; }",
           'const s = "} catch (e) { not code }";',
+          // promise handlers
+          "p.catch((e) => { log(e); });",
+          "p.catch((e) => { rethrowIfExit(e); log(e); });",
+          "p.catch(() => undefined);",
+          "p.catch(onError);",
+          "p.catch((e) => { // exit-safe: test",
+          "  log(e); });",
         ].join("\n"),
       );
-      expect(catchSites(f).map((c) => c.kind)).toEqual(["none", "rethrowIfExit", "narrow", "none", "marker", "marker", "narrow", "none"]);
+      expect(catchSites(f).map((c) => `${c.form}:${c.kind}`)).toEqual([
+        "catch:none",
+        "catch:rethrowIfExit",
+        "catch:narrow",
+        "catch:none",
+        "catch:marker",
+        "catch:marker",
+        "catch:narrow",
+        "catch:none",
+        "catch:none",
+        ".catch:none",
+        ".catch:rethrowIfExit",
+        ".catch:none",
+        ".catch:none",
+        ".catch:marker",
+      ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -75,7 +114,10 @@ describe("every broad catch that can see an exit request lets it through", () =>
         if (m) markers.push(`${f.replace(/\\/g, "/")}: ${m[1].trim()}`);
       });
     }
-    expect(markers.sort()).toEqual(["src/hillclimb/runner.ts: captured, and rethrown below once the in-flight jobs have finished"]);
+    expect(markers.sort()).toEqual([
+      "src/async-pool.ts: the first error (an exit request included) is kept and rethrown once the in-flight items settle",
+      "src/hillclimb/runner.ts: captured, and rethrown below once the in-flight jobs have finished",
+    ]);
   });
 });
 

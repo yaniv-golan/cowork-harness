@@ -51,7 +51,7 @@
  * external CDN/framework bundle jsdom never loaded, or it has no interactive controls to click).
  */
 
-import { ExitRequested } from "./exit.js";
+import { ExitRequested, rethrowIfExit } from "./exit.js";
 
 // ------------------------------------------------------------------------------------------------- //
 // Minimal ambient typing for the optional `jsdom` devDependency.
@@ -120,7 +120,8 @@ export async function confirmArtifactRuntimeWithLoader(
   let jsdomModule: JsdomModule;
   try {
     jsdomModule = await loader();
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return { available: false, reason: JSDOM_UNAVAILABLE_REASON };
   }
 
@@ -130,6 +131,7 @@ export async function confirmArtifactRuntimeWithLoader(
     const { verdict, confidence, evidence } = computeVerdict(okRun, failRun);
     return { available: true, verdict, confidence, evidence };
   } catch (e) {
+    rethrowIfExit(e);
     // Belt-and-suspenders: runOnce() itself never throws (every phase is internally hardened — see the
     // module header), but a defensive outer catch means a genuinely unexpected failure still surfaces as
     // `inconclusive` evidence rather than propagating out of a "never throws" contract.
@@ -322,7 +324,8 @@ function installStubs(window: any, hooks: StubHooks): void {
         return /^[a-z]+:\/\//i.test(String(url)) ? "same-origin-absolute" : "relative";
       }
       return "remote";
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       return "unparseable";
     }
   };
@@ -500,6 +503,7 @@ function installStubs(window: any, hooks: StubHooks): void {
         try {
           on.call(this, ev);
         } catch (e) {
+          rethrowIfExit(e);
           errors.push(`xhr on${type}: ${errMessage(e).slice(0, 120)}`);
         }
       }
@@ -507,6 +511,7 @@ function installStubs(window: any, hooks: StubHooks): void {
         try {
           fn.call(this, ev);
         } catch (e) {
+          rethrowIfExit(e);
           errors.push(`xhr ${type} listener: ${errMessage(e).slice(0, 120)}`);
         }
       }
@@ -659,6 +664,7 @@ async function runOnce(jsdomModule: JsdomModule, html: string, mode: "ok" | "fai
       },
     });
   } catch (e) {
+    rethrowIfExit(e);
     log.crashed = true;
     log.errors.push(`jsdom construction threw: ${errMessage(e)}`);
   }
@@ -743,6 +749,7 @@ async function runOnce(jsdomModule: JsdomModule, html: string, mode: "ok" | "fai
         try {
           fn();
         } catch (e) {
+          rethrowIfExit(e);
           log.errors.push(`action(${label}): ${errMessage(e).slice(0, 120)}`);
         }
         ctxBox.current = null;
@@ -800,7 +807,8 @@ async function runOnce(jsdomModule: JsdomModule, html: string, mode: "ok" | "fai
             // Best-effort: expose the chosen submitter to any onsubmit handler, as a real submit event would.
             try {
               Object.defineProperty(ev, "submitter", { value: submitter, configurable: true });
-            } catch {
+            } catch (caught) {
+              rethrowIfExit(caught);
               /* some Event impls forbid redefining props — non-fatal */
             }
             form.dispatchEvent(ev);
@@ -813,12 +821,14 @@ async function runOnce(jsdomModule: JsdomModule, html: string, mode: "ok" | "fai
 
       log.finalDOM = document.body ? document.body.innerHTML.replace(/\s+/g, " ").trim() : "";
     } catch (e) {
+      rethrowIfExit(e);
       log.crashed = true;
       log.errors.push(`interaction loop threw: ${errMessage(e)}`);
     } finally {
       try {
         dom.window.close();
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         // best effort — a crashed page may leave the window in a state close() itself throws on
       }
     }
