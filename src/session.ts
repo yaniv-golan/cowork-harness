@@ -3,7 +3,7 @@ import { EFFORT_THINKING_ENV_KEYS } from "./effort-env.js";
 import { z } from "zod";
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, cpSync, existsSync, statSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join, resolve, relative, basename, isAbsolute } from "node:path";
+import { join, resolve, relative, basename, isAbsolute, dirname } from "node:path";
 import { homedir } from "node:os";
 import type { PlatformBaseline } from "./types.js";
 import { safePathSegment, safeMountSegment, resolveDeclaredSource } from "./staging/resolve.js";
@@ -835,6 +835,9 @@ export function includeHookEventsFor(mounts: ReadonlyArray<{ kind: string; hostP
 export interface LaunchSources {
   /** `plugins.config_dir`, `~`-expanded, when the session pins one. */
   pinnedConfigDir: string | undefined;
+  /** The pinned dir did not exist when it was checked, so this run creates it (exclusively) and marks it. An existing
+   *  one was accepted on its marker. Set only when the session pins a dir. */
+  createPinnedConfigDir?: boolean;
   /** Local skills to stage into CLAUDE_CONFIG_DIR/skills (each already existence- and kind-checked). */
   skills: { src: string; dest: string; filter: ((s: string, d: string) => boolean) | null }[];
   /** The mounts that will be staged (soft-missing sources already dropped). */
@@ -862,6 +865,10 @@ export function resolveLaunchSources(
     /** The scenario's `workspace_fixture` directory (absolute). Scanned and refused here, with the other
      *  declared sources, before any run dir exists. Skipped on resume: a fixture is turn-1 state. */
     workspaceFixture?: string;
+    /** The run's root dir (a multi-leg run's scenario root, else the run dir): an existing pinned `config_dir` is
+     *  accepted only when its marker names this root (see `configDirMarkerRefusal`). Absent: any existing pinned
+     *  dir is refused. */
+    runRoot?: string;
   } = {},
 ): LaunchSources {
   const warn = opts.quiet ? () => {} : warnToStderr;
@@ -898,17 +905,21 @@ export function resolveLaunchSources(
 
   // 1. CLAUDE_CONFIG_DIR — clean managed dir unless the session pins one.
   const pinnedConfigDir = pinnedConfigDirOf(session);
-  // Writing settings.json/cowork_settings.json into a user-supplied EXISTING dir would clobber
-  // their real Claude config. Require an explicit opt-in; a fresh/non-existent pinned dir is fine.
-  if (pinnedConfigDir && existsSync(pinnedConfigDir) && (process.env.COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE ?? "") === "")
-    throw new UsageError(
-      `plugins.config_dir is an existing directory (${pinnedConfigDir}); the harness would overwrite its settings.json/cowork_settings.json. ` +
-        `Set COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE=1 to allow, or use a managed dir (config_dir: null).`,
-    );
   // A pinned config_dir that exists but is NOT a directory (e.g. a regular file) would otherwise fail
-  // cryptically at the mkdirSync below with ENOTDIR — behind the write escape-hatch above. Fail clearly.
+  // cryptically at the mkdirSync in buildLaunchPlan with ENOTDIR. Fail clearly, first.
   if (pinnedConfigDir && existsSync(pinnedConfigDir) && !statSync(pinnedConfigDir).isDirectory())
     throw new UsageError(`plugins.config_dir exists but is not a directory: ${pinnedConfigDir}`);
+  // Protocol's agent reads its config dir in place: a pinned dir that IS the operator's is refused here, before
+  // buildLaunchPlan writes settings into it (spawnProtocol repeats the check as a backstop).
+  if (pinnedConfigDir && tier === "protocol") assertProtocolConfigSealed(pinnedConfigDir);
+  // An existing pinned config_dir is used only by the run that created it (its later legs):
+  // writing settings into any other dir would clobber a real Claude config, and an agent reading one would see its
+  // plugins, skills, hooks and MCP servers beside the thing under test.
+  const createPinnedConfigDir = pinnedConfigDir !== undefined && !existsSync(pinnedConfigDir);
+  if (pinnedConfigDir && !createPinnedConfigDir) {
+    const refusal = configDirMarkerRefusal(pinnedConfigDir, opts.runRoot);
+    if (refusal) throw new UsageError(refusal);
+  }
   // Fail-loud is the only path for a declared source. A missing source FAILS by default (the
   // runtimes existsSync-skip the copy, so the agent silently gets a path that does not exist — a
   // confusing late failure, or a manufactured green). COWORK_HARNESS_SOFT_MISSING=1 downgrades every
@@ -1295,13 +1306,90 @@ export function resolveLaunchSources(
       );
   }
 
-  return { pinnedConfigDir, skills, mounts: presentMounts, hostOnlyFolders, ...(workspaceFixture ? { workspaceFixture } : {}) };
+  return {
+    pinnedConfigDir,
+    ...(pinnedConfigDir ? { createPinnedConfigDir } : {}),
+    skills,
+    mounts: presentMounts,
+    hostOnlyFolders,
+    ...(workspaceFixture ? { workspaceFixture } : {}),
+  };
 }
 
 /** A later leg's staging. `persistent`: the same tree, nothing re-copied, the agent config kept. `cowork-task`: a new
  *  tree staged fresh, then each connected folder replaced by the previous leg's post-state of it (`carryFromMnt`), and
  *  outputs not carried. */
 export type LegStage = { workdir: "persistent" } | { workdir: "cowork-task"; carryFromMnt: string };
+
+/** The file a harness-created pinned `plugins.config_dir` carries: `{runId, runDir, createdAt}`. */
+export const CONFIG_DIR_MARKER = ".cowork-harness-config-dir";
+
+/** realpath when the path exists, else the resolved path: a dir that does not exist yet is still comparable by
+ *  spelling, and a symlinked HOME or tmp dir (macOS /tmp, /var) must not read as a different dir. */
+export function realpathOrSelf(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return resolve(p);
+  }
+}
+
+/** The L0 agent always reads the run's managed config dir (`plan.configDir`), never the operator's own: their
+ *  installed plugins, skills, hooks and MCP servers would otherwise be live beside the thing under test, and the
+ *  agent's session transcripts would land among their own. Throws a `BoundaryError` when the two are the same dir
+ *  (a pinned `plugins.config_dir` that names the operator's config dir). Both sides realpath'd, so a symlinked HOME
+ *  cannot fake a difference. User-level config only: machine-level managed settings are outside any config dir. */
+export function assertProtocolConfigSealed(configDir: string): void {
+  const operatorConfigDir = realpathOrSelf(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"));
+  const agentConfigDir = realpathOrSelf(configDir);
+  if (agentConfigDir === operatorConfigDir)
+    throw new BoundaryError(
+      `cowork-harness: the protocol agent's config dir (${agentConfigDir}) is your own config dir — the agent would read ` +
+        `your installed plugins, skills, hooks and MCP servers and write its transcripts there. Unpin plugins.config_dir.`,
+    );
+}
+
+/** A pinned `plugins.config_dir` belongs to the one run that creates it, so a command that runs the scenario more
+ *  than once refuses it before the first run spends (the second would otherwise be refused by the marker). `times`
+ *  is a count, or a phrase for a command whose count is open-ended. */
+export function configDirSingleRunRefusal(who: string, configDir: string | null | undefined, times: number | string): string | undefined {
+  if (!configDir || (typeof times === "number" && times <= 1)) return undefined;
+  const n = typeof times === "number" ? `${times} times` : times;
+  return (
+    `${who}: plugins.config_dir is single-run; this command runs ${n}. Drop plugins.config_dir from the session (every ` +
+    `run then gets its own config dir), or run the scenario once`
+  );
+}
+
+/** Mark a pinned config dir the harness just created as this run's. `runDir` is realpath'd, so a symlinked tmp dir
+ *  reads the same on a later leg. */
+export function writeConfigDirMarker(configDir: string, runRoot: string): void {
+  const runDir = realpathOrSelf(runRoot);
+  writeFileSync(
+    join(configDir, CONFIG_DIR_MARKER),
+    JSON.stringify({ runId: basename(runDir), runDir, createdAt: new Date().toISOString() }, null, 2) + "\n",
+  );
+}
+
+/** Why an EXISTING pinned config dir may not be used by the run rooted at `runRoot`, or undefined when it may: only
+ *  the run whose marker it carries can reuse it. */
+export function configDirMarkerRefusal(configDir: string, runRoot: string | undefined): string | undefined {
+  const lead = `plugins.config_dir is an existing directory (${configDir}) that this run did not create`;
+  const remedy = ` A pinned config_dir is single-run: point it at a path that does not exist yet (the harness creates and marks it), or drop it for a managed dir.`;
+  let marker: unknown;
+  try {
+    marker = JSON.parse(readFileSync(join(configDir, CONFIG_DIR_MARKER), "utf8"));
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    return code === "ENOENT"
+      ? `${lead} — it has no ${CONFIG_DIR_MARKER} marker, so it may be a real Claude config, and the harness would overwrite its settings.json.${remedy}`
+      : `${lead} — its ${CONFIG_DIR_MARKER} marker does not read (${(e as Error).message}).${remedy}`;
+  }
+  const runDir = typeof marker === "object" && marker !== null ? (marker as { runDir?: unknown }).runDir : undefined;
+  if (typeof runDir !== "string" || runDir === "") return `${lead} — its ${CONFIG_DIR_MARKER} marker names no run dir.${remedy}`;
+  if (runRoot === undefined || runDir !== realpathOrSelf(runRoot)) return `${lead} — it belongs to the run at ${runDir}.${remedy}`;
+  return undefined;
+}
 
 /** The dir holding a run's `work/` tree: the plan's `workBase`, else the run dir. The one place it is resolved. */
 export function workBaseOf(plan: { workBase?: string }, outDir: string): string {
@@ -1324,14 +1412,33 @@ export function buildLaunchPlan(
    *  directory, so a missing source refuses the run with nothing left behind. Computed here when absent. */
   sources: LaunchSources = resolveLaunchSources(session, baseline, tier, resume),
   /** `deviceBridge`: the scenario's `device_bridge`, which changes the mode an unset `permission_mode` resolves to.
-   *  `workBase` / `legStage`: a multi-leg run's shared tree and later-leg staging (see LaunchPlan). */
-  opts: { deviceBridge?: boolean; workBase?: string; legStage?: LegStage } = {},
+   *  `workBase` / `legStage`: a multi-leg run's shared tree and later-leg staging (see LaunchPlan). `runRoot`: the
+   *  run's root dir (a multi-leg run's scenario root), recorded in a pinned config_dir's marker; default `outDir`. */
+  opts: { deviceBridge?: boolean; workBase?: string; legStage?: LegStage; runRoot?: string } = {},
 ): LaunchPlan {
   const expand = (p: string) => p.replace(/^~(?=$|\/)/, homedir());
-  const { pinnedConfigDir, skills, mounts: presentMounts, hostOnlyFolders } = sources;
+  const { pinnedConfigDir, createPinnedConfigDir, skills, mounts: presentMounts, hostOnlyFolders } = sources;
   // Beside the session tree: a `workdir: persistent` multi-leg run shares one config dir across legs, as it shares the
   // tree (protocol's agent reads it directly; the sandbox tiers copy it into mnt/.claude on the first leg only).
   const configDir = pinnedConfigDir ?? join(resolve(opts.workBase ?? outDir), "claude-config");
+  // A pinned dir the harness creates carries a marker naming this run, so a later leg of the same
+  // run can reuse it and every other run is refused (resolveLaunchSources). Written only on creation, decided by what
+  // resolveLaunchSources saw (not re-checked here): a dir that already existed was accepted on its own marker.
+  if (pinnedConfigDir && createPinnedConfigDir) {
+    // The parents recursively, the leaf exclusively: a dir that appeared since resolveLaunchSources checked it was
+    // not created by this run, so it is refused (EEXIST) instead of being marked as this run's.
+    mkdirSync(dirname(pinnedConfigDir), { recursive: true });
+    try {
+      mkdirSync(pinnedConfigDir);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "EEXIST")
+        throw new UsageError(
+          `plugins.config_dir ${pinnedConfigDir} appeared after the run checked it, so this run did not create it — refused. Point plugins.config_dir at a path that does not exist yet`,
+        );
+      throw e;
+    }
+    writeConfigDirMarker(pinnedConfigDir, opts.runRoot ?? outDir);
+  }
   mkdirSync(join(configDir, "skills"), { recursive: true });
   mkdirSync(join(configDir, "plugins"), { recursive: true });
 

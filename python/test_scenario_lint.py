@@ -109,7 +109,7 @@ def test_modifier_only_scenario_is_replay_noop(tmp_path):
 
 def test_replay_noop_message_names_verdict_modifiers(tmp_path):
     # guards the broadened warning text against a silent revert (a rule-fires test alone wouldn't catch it).
-    findings = _findings("assert:\n  - allow_l0_host_config_contamination: true\n", tmp_path)
+    findings = _findings("assert:\n  - allow_missing_capability: true\n", tmp_path)
     msg = next(f.message for f in findings if f.rule == "replay-noop")
     assert "verdict modifier" in msg
 

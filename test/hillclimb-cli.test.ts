@@ -341,7 +341,6 @@ describe.skipIf(!existsSync(CLI))("hillclimb state-template, through the CLI", (
     const env: NodeJS.ProcessEnv = {
       ...process.env,
       COWORK_HARNESS_RUNS_DIR: join(cwd, "runs"),
-      COWORK_MANAGED_CONFIG: "",
       CLAUDE_CODE_OAUTH_TOKEN: "",
       ANTHROPIC_API_KEY: "",
       ANTHROPIC_AUTH_TOKEN: "",

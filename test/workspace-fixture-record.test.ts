@@ -32,6 +32,8 @@ let errSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   errSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
   vi.stubEnv("COWORK_HARNESS_GITSET", "0");
+  // spawnProtocol refuses without a credential in the environment; the stub agent never sends it.
+  vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "stub-not-a-real-token");
 });
 afterEach(() => {
   errSpy.mockRestore();

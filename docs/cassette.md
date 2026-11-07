@@ -574,7 +574,6 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `present_files_called` | at least one file was delivered via `present_files` (`RunResult.presentFilesCalls` > 0 — the invocation count, which a host-path redaction policy cannot alter) — the presence companion to `no_scratchpad_leak`; content-class (re-derives identically on replay); **container + hostloop tiers** |
 | `allow_permissive_auto_allow` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_missing_capability` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
-| `allow_l0_host_config_contamination` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_stall` | verdict modifier — kept on replay → no-op pass (suppresses the `stalled` default-fail; the stall is re-derived on the replay re-drive) |
 | `allow_max_turns` | verdict modifier — kept on replay → no-op pass; the verdict still reads it, against the cassette's frozen `turnCap` (a session-cap stop is a completed run, no `result_error`). Stamps the cassette v19 |
 | `allow_outputs_delete` | verdict modifier — kept on replay → no-op pass (the live outputs-delete scan it waives is zeroed on replay) |
@@ -1197,10 +1196,10 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   fields**. So this check reads specific name fields of the decoded events and flags: an `mcp_servers[].name`
   outside the harness's own servers, a `mcp__<server>__…` tool naming a foreign server, `account.email` /
   `.organization` / `.subscriptionType`, an `agents[]` entry outside the built-in roster, and a `skills[]`
-  entry outside the agent's own built-ins. The skills axis is not theoretical: at `protocol` with local
-  OAuth the harness keeps the operator's **real `CLAUDE_CONFIG_DIR`** (a fresh one breaks OAuth), so the
-  personal skills installed there are discoverable, and a skill name says what you have installed exactly
-  as an MCP server name does. Suppress with
+  entry outside the agent's own built-ins. The skills axis is not theoretical: before 5.0.0, `protocol`
+  could run the agent on your **real `CLAUDE_CONFIG_DIR`**, so a recording made then can carry the
+  personal skills installed there, and a skill name says what you have installed exactly as an MCP server
+  name does. Suppress with
   `--allow-host-inventory <regex>`; if the flagged name is a genuine Cowork server, add it to
   `KNOWN_COWORK_SERVERS` instead of allowing it.
   **A plugin the scenario mounted is not host inventory.** Its agents join the roster — at `hostloop`,

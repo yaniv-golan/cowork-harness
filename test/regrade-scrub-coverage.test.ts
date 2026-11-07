@@ -65,7 +65,6 @@ beforeEach(() => {
   setEnv("COWORK_HARNESS_MODEL", "claude-sonnet-5");
   setEnv("STUB_PID", f.stubPidFile);
   setEnv("STUB_ENV_DUMP", f.envDump);
-  setEnv("COWORK_MANAGED_CONFIG", "1");
   setEnv("COWORK_HARNESS_SCRUB_VALUES", undefined);
   setEnv("COWORK_HARNESS_SCRUB_KEYS", undefined);
   for (const k of ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"])
@@ -839,7 +838,6 @@ function buildHcFlow(o: { prompt: string; rubric: string[]; scrubValues: string;
   writeFileSync(judge, JUDGE_SH, { mode: 0o755 });
   const env = {
     ...f.env,
-    COWORK_MANAGED_CONFIG: "1",
     CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
     COWORK_HARNESS_CLAUDE_BIN: judge,
     COWORK_HARNESS_SCRUB_VALUES: o.scrubValues,
@@ -862,7 +860,6 @@ function buildHcFlow(o: { prompt: string; rubric: string[]; scrubValues: string;
     COWORK_HARNESS_CLAUDE_BIN: judge,
     HOME: f.env.HOME!,
     CLAUDE_CONFIG_DIR: join(f.env.HOME!, ".claude"),
-    COWORK_MANAGED_CONFIG: "1",
   }))
     setEnv(k, v);
   return { write };

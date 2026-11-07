@@ -55,6 +55,8 @@ import {
   VERDICT_MODIFIER_KEYS,
   FIDELITY_TIERS,
   isLiveModelId,
+  REMOVED_ASSERTION_KEYS,
+  removedAssertionKeysIn,
 } from "../types.js";
 import {
   executeScenario,
@@ -66,6 +68,7 @@ import {
   slugForPath,
   FidelityMissingError,
   unresolvedModelPreflight,
+  sharedConfigDirPreflight,
   scenarioInputRefusal,
   scenarioInputFindings,
   loadSessionFromFile,
@@ -4207,6 +4210,14 @@ export function parseCassetteObject(raw: unknown): CassetteReadResult {
     }
   }
   const isFutureCassette = recordedVersion > CASSETTE_VERSION;
+  // A key a past release accepted and this one refuses: named, and re-recordable (the remedy is the re-record from a
+  // scenario without it — `rehash` checks only, and a hand edit would change the frozen scenario's hash).
+  const removedKeys = isFutureCassette ? [] : removedAssertionKeysIn(scn.assert);
+  if (removedKeys.length)
+    return {
+      error: `cassette's frozen scenario uses ${removedKeys.map((k) => `\`${k}\`, ${REMOVED_ASSERTION_KEYS[k]}`).join("; ")} from the scenario, then re-record it`,
+      rerecordable: true,
+    };
   const assertErrors: string[] = [];
   scn.assert.forEach((a, i) => {
     const r = AssertionSchema.safeParse(a);
@@ -4895,6 +4906,24 @@ function recordBatchEnvelope(
   return jsonPayloadEnvelope("record", ok, payload);
 }
 
+/** True when the environment (or a loaded .env) holds a model credential: the only source any tier's agent gets. */
+function hasEnvCredential(): boolean {
+  return !!(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+}
+
+/** `record`'s refusal with no model credential. In-Docker containers cannot read the macOS Keychain, and protocol never
+ *  uses one; without it the failure would surface as result:"error" + empty stderr after the agent spawns. */
+function failNoRecordCredential(asJson: boolean) {
+  return fail(
+    "record",
+    "runtime",
+    "record: no model credentials — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN " +
+      "(in-Docker the macOS Keychain is not accessible; run `cowork-harness doctor` for full diagnostics)",
+    undefined,
+    asJson,
+  );
+}
+
 export async function cmdRecord(args: string[]) {
   // Computed up front (isJsonOutput, not a bare p.options read) so every error path — including a
   // parseArgs throw before options are known — emits the shared JSON error envelope in JSON mode.
@@ -5067,6 +5096,8 @@ export async function cmdRecord(args: string[]) {
         );
       return exitWith(0);
     }
+    // The same all-tier credential guard the single-scenario and directory paths run, before any leg's run dir.
+    if (!hasEnvCredential()) return failNoRecordCredential(asJson);
     try {
       const { outcome, cassettePath } = await recordMultiLeg(target, {
         ...(p.options["--out"] !== undefined ? { cassettePath: p.options["--out"] } : {}),
@@ -5619,20 +5650,9 @@ export async function cmdRecord(args: string[]) {
     }
   }
 
-  // Auth guard: fail with a clear message if no model token is present.
-  // In-Docker containers cannot read the macOS Keychain; the error would otherwise
-  // surface as result:"error" + empty stderr after the agent spawns.
+  // Auth guard (shared with the multi-leg branch above): no model token, no recording.
   // Note: --dry-run bypasses this guard (dry-run branch exits before reaching here).
-  if (!(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN)) {
-    return fail(
-      "record",
-      "runtime",
-      "record: no model credentials — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN " +
-        "(in-Docker the macOS Keychain is not accessible; run `cowork-harness doctor` for full diagnostics)",
-      undefined,
-      asJson,
-    );
-  }
+  if (!hasEnvCredential()) return failNoRecordCredential(asJson);
 
   // Shared live-decider opts for the dir-batch and single-scenario record paths. (--rerecord-stale is
   // excluded above, so it never sees these.) A plain `record` leaves every field undefined → no behavior change.
@@ -5669,6 +5689,7 @@ export async function cmdRecord(args: string[]) {
     // the loop below resolves it (its on-disk source, or the embedded snapshot under --from-embedded); one
     // that cannot be resolved or loaded here is left to the loop, which reports it.
     const staleUnpinned: string[] = [];
+    const staleLoaded: Scenario[] = [];
     for (const { path: cp } of stale) {
       const t = readRerecordTarget(cp);
       if ("error" in t) continue;
@@ -5685,9 +5706,13 @@ export async function cmdRecord(args: string[]) {
         sc = embeddedPairwiseRefs(embeddedScenario(t.cassette.scenario, cp), cp);
       }
       if (sc && unresolvedModelPreflight(sc, modelOverride)) staleUnpinned.push(src.path ?? cp);
+      if (sc) staleLoaded.push(sc);
     }
     if (staleUnpinned.length)
       return fail("record", "usage", `record: ${unresolvedModelRefusal(staleUnpinned.join(", "))}`, undefined, asJson, 1);
+    // Two stale scenarios pinning the same config_dir: the first would spend, then the marker refuse the second.
+    const staleSharedDir = sharedConfigDirPreflight(staleLoaded);
+    if (staleSharedDir) return fail("record", "usage", `record: ${staleSharedDir}`, undefined, asJson);
     if (maxBudgetUsd !== undefined) {
       preflightBatchBudget("record", staleNames, maxBudgetUsd, asJson);
       if (concurrency > 1) warn(CONCURRENCY_BUDGET_CAVEAT(concurrency));
@@ -5938,6 +5963,18 @@ export async function cmdRecord(args: string[]) {
       }
     });
     if (unpinned.length) return fail("record", "usage", `record: ${unresolvedModelRefusal(unpinned.join(", "))}`, undefined, asJson, 1);
+    // Two scenarios pinning the same config_dir: the first would spend, then the marker refuse the second.
+    const sharedDir = sharedConfigDirPreflight(
+      disc.scenarios.flatMap((f) => {
+        try {
+          return [parseScenarioFile(f)];
+        } catch (caught) {
+          rethrowIfExit(caught);
+          return [];
+        }
+      }),
+    );
+    if (sharedDir) return fail("record", "usage", `record: ${sharedDir}`, undefined, asJson);
 
     const total = disc.scenarios.length;
     // Budget pre-flight for the whole batch, BEFORE the first spawn — same rationale as the redaction
@@ -6898,7 +6935,6 @@ function replayErrorResult(file: string): RunResult {
     mutation: undefined, // the protocol-error stub carries no mutation report
     skippedAssertions: undefined,
     toolResults: undefined,
-    l0HostConfigContamination: undefined,
     missingCapabilityUse: undefined,
     gateProvenance: undefined,
     skillsInvoked: undefined,
@@ -9308,7 +9344,7 @@ export async function replayCassette(
       ...MANIFEST_KEYS,
       ...LIVE_ONLY_KEYS, // single source of truth for the live-only bucket (stripped on replay)
       "replay_protocol_fidelity",
-      // (verdict modifiers allow_permissive_auto_allow / allow_missing_capability / allow_l0_host_config_contamination
+      // (verdict modifiers allow_permissive_auto_allow / allow_missing_capability
       //  arrive via ...alwaysContentKeys above — kept on replay as no-op passes.)
     ]);
     for (const key of Object.keys(AssertionSchema.shape) as (keyof Assertion)[]) {
@@ -9943,7 +9979,6 @@ export async function replayCassette(
       fsDiff: undefined, // the outputs filesystem diff is live-only, like scan
       outputsMountMode: undefined, // no live run here; absent reads as rw
       fidelityWarnings: undefined,
-      l0HostConfigContamination: undefined,
       missingCapabilityUse: undefined,
       gateProvenance: undefined,
       // F46: cassette.fingerprint is the record-time snapshot; frozenFingerprint (above) is it plus a

@@ -81,6 +81,32 @@ All notable changes to this project are documented here. The format is based on
 - **`verify-cassettes --margins` reports `questions_count_max` as not derivable (`null`) whenever the replay failed
   as a truncated cassette**, instead of only when `controlOut` was absent or empty, so an unanswered decision never
   reads as an infinite margin.
+- **Breaking: `fidelity: protocol` always gives the agent the run's own config dir, and needs a credential in the
+  environment.** The agent never reads your `~/.claude` any more, so your installed plugins, skills, hooks and MCP
+  servers can no longer answer in place of the one under test, and its session transcripts stay in the run dir. A
+  fresh config dir holds no login, so a run needs `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`),
+  `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` in the environment or a `.env`; a Keychain or `/login` session is not
+  used. Without one, `run` (a file, a directory, a `--matrix` or a `legs:` file), `eval` and `hillclimb run` refuse
+  before any run starts (`run` exits 2, naming every such scenario), `skill` and `chat` refuse before the agent
+  starts, and `doctor --tier protocol` reports the token as missing (`✗`) instead of the former warning. `critique`
+  (which runs at `container` or `hostloop`) now runs doctor's credential check for its tier before its task turn,
+  where a run with no usable credential used to reach the agent and end at "Not logged in".
+  `record`'s existing refusal without a credential in the environment (at every tier) now also covers a `legs:`
+  file, which used to reach its first leg. Machine-level managed settings are outside any config dir and still reach the
+  agent.
+- **`ANTHROPIC_AUTH_TOKEN` reaches the protocol agent under its own name only.** It was also copied into
+  `CLAUDE_CODE_OAUTH_TOKEN`; the agent sent the original anyway, so what the agent sends is unchanged. A rejected
+  `ANTHROPIC_AUTH_TOKEN` is not reported as an auth error at `protocol`: the agent retries it until the run's timeout,
+  so the run ends as a timeout. `hostloop`, whose agent gets the token the same way, is expected to behave alike (not
+  measured). `doctor` says so when it is your only credential.
+- **Breaking: a pinned `plugins.config_dir` is single-run.** The harness creates it (the path must not exist yet),
+  marks it, and reuses it only for the same run's later legs. An existing directory the harness
+  did not create for this run is refused, so a real Claude config is never written to. `run --repeat` (above 1),
+  `run --matrix`, `eval` and `hillclimb` refuse a pinned `config_dir` before the first run, and so do `run <dir/>`,
+  `record <dir/>` and `record --rerecord-stale` when two of their scenarios pin the same dir.
+- **Breaking: `--resume` refuses a session manifest without its identity stamps** (`sessionId` and `fidelity`), where
+  it used to let one through with a warning. Start a fresh session, or delete the run dir and re-run with
+  `--session-id`.
 
 ### Removed
 
@@ -94,6 +120,14 @@ All notable changes to this project are documented here. The format is based on
   carries the older ones; a kept run dir that does is reported as not comparable (re-record), as before.
 - **`schema/cassette.v9.json`, `cassette.v10.json` and `cassette.v11.json`.** A cassette whose `$schema` names one
   of them is below the read floor; its `$schema` URL now returns 404.
+- **Breaking: `COWORK_MANAGED_CONFIG` and `COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE`.** Each is refused at startup
+  (exit 2) when set to a non-empty value, naming what replaced it: `protocol` is always sealed, and a pinned
+  `plugins.config_dir` is single-run.
+- **Breaking: the `allow_l0_host_config_contamination` modifier, the `l0_host_config_contamination` verdict signal and
+  the `RunResult.l0HostConfigContamination` field.** A `protocol` run can no longer read your config dir, so there is
+  nothing left to signal. A scenario that still uses the modifier is refused at load, naming it; a cassette that
+  froze it is refused as re-recordable, so `record <dir/> --rerecord-stale` re-records it once the line is deleted
+  from the scenario.
 
 ## [4.15.0] - 2026-11-06
 

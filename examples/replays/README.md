@@ -43,9 +43,9 @@ that allows choosing more than one option (`choose: [Auth, Audit]`, comma-separa
 `result: success` and `transcript_contains` for each chosen feature. Recorded at `protocol` tier.
 
 > Its capability manifest used to be a hand-written synthetic catalog, because a `protocol`-tier
-> recording keeps the operator's real config dir and would otherwise publish that machine's installed
-> plugins. As of the 1.32885.1 re-record it is a **real captured manifest from a sealed run** — recorded
-> with `ANTHROPIC_API_KEY` set, which switches the tier to a fresh managed config dir, so what it carries
+> recording could keep the operator's real config dir and would then publish that machine's installed
+> plugins. As of the 1.32885.1 re-record it is a **real captured manifest from a sealed run** — every
+> `protocol` run now gives the agent a fresh managed config dir, so what it carries
 > is the product's own built-in commands/agents/skills and no operator inventory. `verify-cassettes`
 > enforces that distinction on every commit. The current take was re-recorded on 2026-10-03 the same way,
 > on the host CLI 2.1.287 with auto-memory off. That CLI adds a built-in `plugin-authoring` skill, which

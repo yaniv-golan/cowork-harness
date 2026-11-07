@@ -11,7 +11,7 @@ Start with the [project README](../README.md) for the overview and quick start, 
 > - Run `cowork-harness doctor` (or `doctor --tier <t>`) to check Docker + staged agent + token in one pass.
 > - `lint` needs **python3** on PATH; `--fidelity microvm` needs a one-time `cowork-harness vm init`.
 > - **Replay-only usage** (running only committed cassettes) can **skip** `doctor` entirely — its default `container` tier checks Docker + the staged agent, neither of which replay touches.
-> - **Every tier `doctor` checks** validates an auth token — even `doctor --tier protocol` requires one, since `protocol` still calls a real model. (At `protocol` specifically, a Keychain-only login downgrades this to a **`!` warn** rather than a `✗`: that tier keeps your real `CLAUDE_CONFIG_DIR`, so the agent can self-source local login state. Every other tier uses a managed config dir and genuinely needs the token in env / `.env`.) A further reason replay-only users simply skip `doctor`: a token ✗ there is expected, not a blocker for replay.
+> - **Every tier `doctor` checks** validates an auth token — even `doctor --tier protocol` requires one, since `protocol` still calls a real model, and every tier gives the agent a managed config dir, so the token must be in env / `.env` (a Keychain login is not used). A further reason replay-only users simply skip `doctor`: a token ✗ there is expected, not a blocker for replay.
 
 ## Start here
 

@@ -57,8 +57,8 @@ describe("resolveSubagentConfigRoot — per-tier config-dir root", () => {
   });
 
   it("protocol uses only the root spawnProtocol reported — never configDir on its own", () => {
-    // Off managed config the host agent reads the operator's REAL config dir; spawnProtocol then reports no
-    // root, and nothing here may substitute one.
+    // spawnProtocol reports the root it gave the agent; without that report nothing here may substitute
+    // configDir on its own.
     expect(resolveSubagentConfigRoot("protocol", { configDir, workRoot, sessionId })).toBeUndefined();
     expect(resolveSubagentConfigRoot("protocol", { configDir, workRoot, sessionId, protocolConfigRoot: "/managed" })).toBe("/managed");
   });
@@ -686,18 +686,18 @@ describe("execute — readSessionManifest session ID mismatch", () => {
   };
 
   it("returns agentSessionId when sessionId matches", () => {
-    const f = writeManifest({ sessionId: "abc", agentSessionId: "uuid-123", createdAt: "2024-01-01T00:00:00.000Z" });
+    const f = writeManifest({ sessionId: "abc", agentSessionId: "uuid-123", fidelity: "container", createdAt: "2024-01-01T00:00:00.000Z" });
     expect(readSessionManifest(f, "abc", "container")).toBe("uuid-123");
   });
   it("throws when manifest sessionId does not match the requested sessionId", () => {
-    const f = writeManifest({ sessionId: "abc", agentSessionId: "uuid-123", createdAt: "2024-01-01T00:00:00.000Z" });
+    const f = writeManifest({ sessionId: "abc", agentSessionId: "uuid-123", fidelity: "container", createdAt: "2024-01-01T00:00:00.000Z" });
     expect(() => readSessionManifest(f, "xyz", "container")).toThrow(/manifest session ID mismatch/);
     expect(() => readSessionManifest(f, "xyz", "container")).toThrow(/abc/);
     expect(() => readSessionManifest(f, "xyz", "container")).toThrow(/xyz/);
   });
-  it("allows through a legacy manifest with no sessionId field (backward compat)", () => {
-    const f = writeManifest({ agentSessionId: "uuid-legacy" });
-    expect(readSessionManifest(f, "anyid", "container")).toBe("uuid-legacy");
+  it("refuses a legacy manifest with no sessionId field: it cannot be checked against the requested one", () => {
+    const f = writeManifest({ agentSessionId: "uuid-legacy", fidelity: "container" });
+    expect(() => readSessionManifest(f, "anyid", "container")).toThrow(/has no sessionId/);
   });
   it("throws for corrupt JSON", () => {
     const dir = mkdtempSync(join(tmpdir(), "cwh-manifest-bad-"));
@@ -706,7 +706,7 @@ describe("execute — readSessionManifest session ID mismatch", () => {
     expect(() => readSessionManifest(f, "abc", "container")).toThrow(/corrupt manifest/);
   });
   it("throws when agentSessionId is missing", () => {
-    const f = writeManifest({ sessionId: "abc" });
+    const f = writeManifest({ sessionId: "abc", fidelity: "container" });
     expect(() => readSessionManifest(f, "abc", "container")).toThrow(/missing agentSessionId/);
   });
 });

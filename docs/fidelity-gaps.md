@@ -188,7 +188,7 @@ a live bug report can be placed on the right lane before it is compared to a har
 | Hook lifecycle frames | `CLAUDE_CODE_REMOTE=true` turns on `hook_started`/`hook_response` frames for **every** hook event — the same switch as the CLI's `--include-hook-events`, which Desktop never passes. This is why a Stop hook was visible there and is not on a local-lane stream | frames for SessionStart/Setup only; the harness passes the flag itself, at every tier including `protocol`, when a staged plugin declares hooks |
 | Plugin root | `/root/.claude/plugins/synced/<org-uuid>_<account-uuid>/<plugin>/` (`CLAUDE_CODE_SYNC_PLUGINS=1`) | `mnt/.local-plugins/…` (docs/plugin-root.md) |
 | Plugin MCP servers | agent-side **not started** (`CLAUDE_CODE_SKIP_PLUGIN_MCP_SERVERS=1`, `_EXCEPT=documents`) — but Desktop bridges them from the Mac: `buildLocalMcpBridgeTools` runs host-side STDIO servers (`claude_desktop_config.json` and the Cowork plugin pool, exclusion default `["documents"]`) and announces their tools into the session as `<server>__<tool>` with `_meta anthropic/kind` = `local` \| `plugin`; calls route back over the remote-devices bridge behind Desktop's own approval prompt. URL-declared and `${user_config.*}` servers are dropped. Verified in asar 2.2553.1. The agent-facing name, `mcp__remote-devices__<server>__<tool>`, is from asar 2.19675.0 | conditionally stubbed to zero tools by Desktop, never stubbed here (see the plugin-MCP section under "Plugins" for the two conditions — the bridge is a third data point for that open decision) |
-| Plugin hooks | `Stop` fired (block → resend; no UI notice). `SessionStart` fired only on `source: "resume"`, never `startup` — inferred: plugins sync after the session starts. Cowork ships its **own** Stop hooks here (`stop-hook-reply-gate.py`, `stop-hook-git-check.sh` under `/home/claude/.claude/`) | hooks run at every tier (at `protocol` as native host processes; there, without a sealed managed config dir, a plugin installed on the host runs its hooks too); `hook_event_fired` / `hook_event_blocked` / `no_hook_event_blocked` grade them, `hook_decision` what they decided, and `hook_output_contains` / `hook_output_not_contains` what they printed |
+| Plugin hooks | `Stop` fired (block → resend; no UI notice). `SessionStart` fired only on `source: "resume"`, never `startup` — inferred: plugins sync after the session starts. Cowork ships its **own** Stop hooks here (`stop-hook-reply-gate.py`, `stop-hook-git-check.sh` under `/home/claude/.claude/`) | hooks run at every tier (at `protocol` as native host processes); `hook_event_fired` / `hook_event_blocked` / `no_hook_event_blocked` grade them, `hook_decision` what they decided, and `hook_output_contains` / `hook_output_not_contains` what they printed |
 | Other env markers | `CLAUDE_CODE_REMOTE_ENVIRONMENT_TYPE=cloud_default`, `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=1`, `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`, `CLAUDE_CODE_WEBFETCH_USE_CCR_PROXY=1`, `CLAUDE_EFFORT` (write-only — the effort that applies is the hook payload's `effort.level`) | `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` is in the pinned spawn env and set on every tier ([Background tasks](#background-tasks-are-off-on-every-tier)); the others are not |
 
 **Placing a live bug report on a lane — do this before comparing it to any harness run**, using the checks in
@@ -254,9 +254,8 @@ their sub-agent spend) do not run.
   every baseline that records the gate records it off, and no Desktop bundle older than 1.18286.2 was available to
   check.
 - **Settings `env`.** A settings file's `env` block reaches the agent's environment at startup and could set the key
-  to `"0"` (forced on). At `protocol` off the managed branch that is the operator's own `~/.claude/settings.json`,
-  which the L0 contamination signal already covers. Elsewhere only a managed-settings `env` could do it, and it would
-  do the same to Cowork on that machine.
+  to `"0"` (forced on). Every tier gives the agent the run's own config dir, so only a machine-level managed-settings
+  `env` could do it, and it would do the same to Cowork on that machine.
 - **The modeled session shape only.** Production returns no directory for a chat, scheduled or dispatched session
   outside a Space, whatever the gate says. The harness's rule encodes the ordinary-task arm only.
 - **Same rule everywhere it applies.** `lane: remote` gets the same rule; the evidence for it is local-lane, and the
@@ -1600,14 +1599,12 @@ harness models requires `sessionType === undefined` — so that term does not ex
 Nor is it "the harness never constructs `settings.autoMode`". That much is true — the spawn passes
 `--permission-mode` and `--setting-sources`, never an autoMode payload — but it is not sufficient on its
 own: auto-mode's `AUTO_MODE_TRUSTED_SOURCES` is `["userSettings","flagSettings","policySettings"]`, so
-**`userSettings` is a trusted source**, and the harness passes `--setting-sources user`. At
-`protocol` under OAuth the agent also reads the operator's REAL `CLAUDE_CONFIG_DIR` (a fresh one breaks
-local login, so that tier keeps it deliberately — `src/runtime/protocol.ts`). Every other tier, `hostloop`
-included, gets the managed dir: `hostNativeSpawnEnv` sets `CLAUDE_CONFIG_DIR` to `plan.configDir`
-(`src/runtime/argv.ts`), and pinning `plugins.config_dir` at an EXISTING directory is refused outright
-unless `COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE=1` (`src/session.ts`) — precisely so the harness cannot
-write into a real `~/.claude`. An operator's own settings are therefore a trusted source for auto-mode's
-`allow` / `soft_deny` / `hard_deny` / `environment` rules wherever that dir IS the real one.
+**`userSettings` is a trusted source**, and the harness passes `--setting-sources user`. Every tier, `protocol`
+and `hostloop` included, gives the agent the run's managed config dir (`CLAUDE_CONFIG_DIR` = `plan.configDir`;
+`src/runtime/protocol.ts`, `src/runtime/argv.ts`), and a pinned `plugins.config_dir` at a directory the harness
+did not create for this run is refused outright (`src/session.ts`) — precisely so the agent never reads, and the
+harness never writes, a real `~/.claude`. The user-level settings the agent trusts are therefore the harness's own.
+Machine-level managed settings (`policySettings`) sit outside any config dir and still reach a host-native agent.
 
 What actually closes it is the activation predicate. Binary-verified in agent **2.1.237**, auto-mode is
 entered on the permission mode alone:

@@ -6,11 +6,10 @@ import { commandMetricFiles } from "../metric-command/resolve.js";
 import { closeSync, openSync, realpathSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 import { UsageError } from "../errors.js";
-import { expandHome, resolveLaunchSources, type SessionConfig } from "../session.js";
+import { expandHome, resolveLaunchSources, configDirSingleRunRefusal, type SessionConfig } from "../session.js";
 import type { MountTier } from "../staging/mount-naming.js";
 import { loadSessionFromFile } from "../run/execute.js";
 import { loadBaseline } from "../baseline.js";
-import { managedConfigMode } from "../runtime/protocol.js";
 import { scenarioWorkspaceFixture } from "../fixture/workspace.js";
 import { resolveAgentPins, resolveJudgePins } from "../eval/pins.js";
 import type { PlatformBaseline } from "../types.js";
@@ -68,7 +67,7 @@ const realOr = (p: string): string => {
 /** Throws UsageError (exit 2) on anything an unattended loop cannot run or measure.
  *
  *  `selected` (default: every case) is the --case selection. The per-case refusals (on_unanswered: prompt, an
- *  inline session, a session that does not load, the model pins, the protocol tier's managed config) cover the
+ *  inline session, a session that does not load, the model pins, a pinned config_dir) cover the
  *  selected cases only: an unselected case does not run in this pass. What is flow-level covers every case: its
  *  baseline (the gate hashes the baseline ids) and the one-plugin rule, over every case whose session parses — an
  *  unselected case whose session does not parse is skipped for it, with a note. */
@@ -110,14 +109,16 @@ export function prepareCases(
       }
     }
     const session = sessions.get(c.id);
+    // A pinned config_dir belongs to one run; the loop runs every selected case once per slot, round after round.
+    // A caller that runs no agent (`hillclimb regrade`) creates no run, so it has nothing to refuse.
+    const singleRun =
+      !opts.noAgentRun && isSel
+        ? configDirSingleRunRefusal(`case ${c.id}`, session?.plugins.config_dir, "it once per slot, every round")
+        : undefined;
+    if (singleRun) throw new UsageError(singleRun);
     if (session !== undefined && session.plugins.local_plugins.length !== 1)
       throw new UsageError(
         `case ${c.id}: the session must declare exactly one plugins.local_plugins entry — the plugin the loop tunes (found ${session.plugins.local_plugins.length})`,
-      );
-    // A trace without its sub-agents' turns is incomplete: unmanaged protocol keeps no child transcripts.
-    if (!opts.noAgentRun && isSel && s.fidelity === "protocol" && !managedConfigMode(opts.env))
-      throw new UsageError(
-        `case ${c.id}: fidelity protocol without a managed config dir keeps no sub-agent transcripts, so its traces would be incomplete — set COWORK_MANAGED_CONFIG=1 or use another tier`,
       );
     baselines.set(c.id, loadBaseline(s.baseline));
   }

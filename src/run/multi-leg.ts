@@ -28,6 +28,7 @@ import {
   type ExecuteOptions,
   assertContradiction,
   tierVacuityRefusal,
+  protocolCredentialPreflight,
 } from "./execute.js";
 import { loadBaseline } from "../baseline.js";
 import { artifactsRootRefusal, answerChannelRefusal } from "../answer-channel.js";
@@ -223,13 +224,24 @@ async function executeHostAction(p: {
   session: SessionConfig;
   sessionId: string;
   workBase: string;
+  runRoot: string;
 }): Promise<{ pass: boolean; verdict: ScenarioVerdict; egress?: ActionRecord["egress"] }> {
-  const { leg, legDir, tier, baseline, session, sessionId, workBase } = p;
+  const { leg, legDir, tier, baseline, session, sessionId, workBase, runRoot } = p;
   const ha = leg.host_action!;
   const secrets = collectSecrets();
-  const plan = buildLaunchPlan(session, baseline, legDir, tier, false, "local", resolveLaunchSources(session, baseline, tier, false), {
-    workBase,
-  });
+  const plan = buildLaunchPlan(
+    session,
+    baseline,
+    legDir,
+    tier,
+    false,
+    "local",
+    resolveLaunchSources(session, baseline, tier, false, { runRoot }),
+    {
+      workBase,
+      runRoot,
+    },
+  );
   const paths = actionPaths(tier, baseline, sessionId, workBase);
   const empty = { sha256: "", bytes: 0, head: "" };
   const finish = (raw: Omit<ActionRecord, "pass">): { pass: boolean; verdict: ScenarioVerdict; egress?: ActionRecord["egress"] } => {
@@ -392,6 +404,9 @@ export async function executeMultiLeg(
     throw new UsageError('expect_denied asserts boundary behavior but fidelity is "protocol" (no sandbox); use container or microvm');
 
   legSnapshotCap(); // a malformed snapshot cap is refused before anything spends, not discovered after leg 1
+  // Last among the refusals, before the root or any status.json exists: protocol with no credential in the environment.
+  const noCredential = protocolCredentialPreflight([{ name: ms.name, fidelity: ms.fidelity }]);
+  if (noCredential) throw new UsageError(noCredential);
   // A caller's run id names the root, so it is checked (as a single run checks it) before anything is created.
   if (opts.runId !== undefined && !/^local_[0-9a-z]{8,32}$/.test(opts.runId))
     throw new UsageError(`run id "${opts.runId}" must be local_ followed by 8-32 base36 characters`);
@@ -448,6 +463,7 @@ export async function executeMultiLeg(
           session: prevSession ?? baseSession,
           sessionId: prevSessionId!,
           workBase: prevWorkBase!,
+          runRoot: root,
         });
         legEntries.push({ id: leg.id, kind, status: action.pass ? "passed" : "failed", verdict: action.verdict });
         actionEgress.push(...(action.egress ?? []));
@@ -496,6 +512,7 @@ export async function executeMultiLeg(
           session,
           leg: {
             outDir: legDir,
+            runRoot: root,
             sessionId: legSessionId,
             workBase,
             ...(legStage ? { legStage } : {}),

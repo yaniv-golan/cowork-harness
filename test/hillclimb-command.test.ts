@@ -24,9 +24,25 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("prepareCases", () => {
+  it("a selected case whose session pins plugins.config_dir is refused before any run: that dir is single-run", () => {
+    session("_session.yaml", `model: claude-sonnet-5\nplugins:\n  config_dir: ./pinned\n  local_plugins:\n    - ${SKILL}\n`);
+    scenario("a.yaml");
+    const { cases } = loadCases(join(dir, "a.yaml"));
+    expect(() => prepareCases(cases, { env: {} })).toThrow(
+      "plugins.config_dir is single-run; this command runs it once per slot, every round",
+    );
+  });
+
+  it("a caller that runs no agent (hillclimb regrade) is not refused a pinned config_dir: it creates no run", () => {
+    session("_session.yaml", `model: claude-sonnet-5\nplugins:\n  config_dir: ./pinned\n  local_plugins:\n    - ${SKILL}\n`);
+    scenario("a.yaml");
+    const { cases } = loadCases(join(dir, "a.yaml"));
+    expect(() => prepareCases(cases, { env: {}, noAgentRun: true })).not.toThrow();
+  });
+
   it("the repo's own eval scenarios: one lever (the companion skill), a concrete pin per case", () => {
     const { cases } = loadCases(join(EVALS, "eval-14-subagent-dispatch-and-declared-unused.yaml"));
-    const p = prepareCases(cases, { env: { COWORK_MANAGED_CONFIG: "0" } });
+    const p = prepareCases(cases, { env: {} });
     expect(realpathSync(p.lever)).toBe(realpathSync(SKILL));
     expect(p.pin(cases[0])).toBe("claude-sonnet-5");
     expect(p.session(cases[0]).plugins.local_plugins).toHaveLength(1);
@@ -74,25 +90,14 @@ describe("prepareCases", () => {
     expect(() => prepareCases(loadCases(dir).cases, { env: {} })).toThrow(/on_unanswered: prompt/);
   });
 
-  it("the protocol tier without a managed config dir is refused: its sub-agent turns could not be traced", () => {
+  // Every protocol run gives the agent its managed config dir, where its sub-agent transcripts land, so a protocol case's
+  // traces are complete without any switch: the refusal that used to guard the unmanaged branch is gone.
+  it("the protocol tier is accepted: its sub-agent turns are traced from the managed config dir", () => {
     mkdirSync(join(dir, "p"));
     writeFileSync(join(dir, "p", "_session.yaml"), `model: claude-sonnet-5\nplugins:\n  local_plugins:\n    - ${SKILL}\n`);
     writeFileSync(join(dir, "p", "a.yaml"), "name: a\nbaseline: latest\nsession: ./_session.yaml\nfidelity: protocol\nprompt: p\n");
     const { cases } = loadCases(join(dir, "p"));
-    // managedConfigMode reads COWORK_MANAGED_CONFIG and the auth tokens from process.env itself.
-    const keys = ["COWORK_MANAGED_CONFIG", "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"];
-    const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
-    try {
-      for (const k of keys) delete process.env[k];
-      process.env.COWORK_MANAGED_CONFIG = "0";
-      expect(() => prepareCases(cases, { env: {} })).toThrow(/managed config/);
-      process.env.COWORK_MANAGED_CONFIG = "1";
-      expect(() => prepareCases(cases, { env: {} })).not.toThrow();
-    } finally {
-      for (const k of keys)
-        if (saved[k] === undefined) delete process.env[k];
-        else process.env[k] = saved[k];
-    }
+    expect(() => prepareCases(cases, { env: {} })).not.toThrow();
   });
 });
 
@@ -114,21 +119,6 @@ describe("prepareCases — a --case selection scopes the per-case refusals", () 
     expect(() => prepareCases(cases, { env: {} }, sel(["a", "b"]).selected)).toThrow(/case b: on_unanswered: prompt/);
     expect(() => prepareCases(cases, { env: {} }, sel(["a", "c"]).selected)).toThrow(/case c: the scenario has no session file/);
     expect(() => prepareCases(cases, { env: {} }, sel(["a", "d"]).selected)).toThrow(/CONCRETE agent model/);
-  });
-
-  it("the protocol tier without a managed config dir refuses only when that case is selected", () => {
-    scenario("a.yaml");
-    writeFileSync(join(dir, "p.yaml"), "name: p\nbaseline: latest\nsession: ./_session.yaml\nfidelity: protocol\nprompt: p\n");
-    const saved = process.env.COWORK_MANAGED_CONFIG;
-    process.env.COWORK_MANAGED_CONFIG = "0";
-    try {
-      const { cases, selected } = sel(["a"]);
-      expect(() => prepareCases(cases, { env: {} }, selected)).not.toThrow();
-      expect(() => prepareCases(cases, { env: {} })).toThrow(/case p: fidelity protocol/);
-    } finally {
-      if (saved === undefined) delete process.env.COWORK_MANAGED_CONFIG;
-      else process.env.COWORK_MANAGED_CONFIG = saved;
-    }
   });
 
   it("the one-plugin rule still covers an unselected case whose session parses", () => {

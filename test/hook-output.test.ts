@@ -357,9 +357,9 @@ describe("warnAmbiguousHookOutput: output that cannot be attributed to one plugi
     return root;
   };
   const NOT = [{ hook_output_not_contains: { event: "Stop", text: "x" } }];
-  const msgs = (roots: string[], asserts: unknown[], host = false) => {
+  const msgs = (roots: string[], asserts: unknown[]) => {
     const out: string[] = [];
-    warnAmbiguousHookOutput(roots, asserts as Assertion[], host, (m) => out.push(m));
+    warnAmbiguousHookOutput(roots, asserts as Assertion[], (m) => out.push(m));
     return out;
   };
 
@@ -369,17 +369,10 @@ describe("warnAmbiguousHookOutput: output that cannot be attributed to one plugi
     expect(out[0]).toMatch(/hook_output_\* on `Stop`: 2 staged plugins declare `Stop`.*carry no plugin id/);
   });
 
-  it("warns when the operator's hooks are visible (protocol off the sealed config dir), even with one plugin", () => {
-    const out = msgs([plugin(["Stop"])], NOT, true);
-    expect(out).toHaveLength(1);
-    expect(out[0]).toMatch(/reads your real config dir.*plugin installed on this machine may also answer it/);
-    expect(out[0]).not.toMatch(/allow_host_hooks/);
-  });
-
   it("is silent with one declaring plugin, when the second declares another event, or with no hook_output_* key", () => {
     expect(msgs([plugin(["Stop"])], NOT)).toEqual([]);
     expect(msgs([plugin(["Stop"]), plugin(["PreToolUse"])], NOT)).toEqual([]);
-    expect(msgs([plugin(["Stop"]), plugin(["Stop"])], [{ hook_event_fired: "Stop" }], true)).toEqual([]);
+    expect(msgs([plugin(["Stop"]), plugin(["Stop"])], [{ hook_event_fired: "Stop" }])).toEqual([]);
   });
 
   it("covers the blocked and decision keys too, naming the keys that read the event", () => {
@@ -401,16 +394,9 @@ describe("warnAmbiguousHookOutput: output that cannot be attributed to one plugi
     expect(msgs([plugin(["Stop"])], [{ no_hook_event_blocked: true }])).toEqual([]);
   });
 
-  it("no_hook_event_blocked: true with operator hooks visible warns even when no staged plugin declares hooks", () => {
-    const out = msgs([], [{ no_hook_event_blocked: true }], true);
-    expect(out).toHaveLength(1);
-    expect(out[0]).toMatch(/no_hook_event_blocked on `any event`: this protocol run reads your real config dir/);
-  });
-
-  it("...and still warns for it when another hook key names an event", () => {
-    const out = msgs([], [{ no_hook_event_blocked: true }, { hook_event_blocked: "Stop" }], true);
-    expect(out.some((m) => /no_hook_event_blocked on `any event`/.test(m))).toBe(true);
-    expect(out.some((m) => /hook_event_blocked on `Stop`/.test(m))).toBe(true);
+  it("no staged plugin declaring hooks: nothing else can answer an event, so nothing warns", () => {
+    expect(msgs([], [{ no_hook_event_blocked: true }])).toEqual([]);
+    expect(msgs([], [{ no_hook_event_blocked: true }, { hook_event_blocked: "Stop" }])).toEqual([]);
   });
 });
 
@@ -622,9 +608,8 @@ describe("freezeRecordedRun emits the hook_output_* redaction finding", () => {
   });
 });
 
-// The plan-level wiring: which mounts count, and when the operator's own hooks are visible.
+// The plan-level wiring: which mounts count.
 describe("warnAmbiguousHookOutputForPlan", () => {
-  afterEach(() => vi.unstubAllEnvs());
   const hooked = () => {
     const root = mkdtempSync(join(tmpdir(), "hook-output-plan-"));
     mkdirSync(join(root, "hooks"));
@@ -635,42 +620,23 @@ describe("warnAmbiguousHookOutputForPlan", () => {
     return root;
   };
   const NOT = [{ hook_output_not_contains: { event: "Stop", text: "x" } }] as Assertion[];
-  const msgs = (plan: Partial<LaunchPlan>, tier: string) => {
+  const msgs = (plan: Partial<LaunchPlan>) => {
     const out: string[] = [];
-    warnAmbiguousHookOutputForPlan(plan as LaunchPlan, tier, NOT, (m) => out.push(m));
+    warnAmbiguousHookOutputForPlan(plan as LaunchPlan, NOT, (m) => out.push(m));
     return out;
   };
-  const configDir = () => mkdtempSync(join(tmpdir(), "hook-output-cfg-"));
 
   it("counts plugin mounts only: a folder holding a hooks.json is not a second plugin", () => {
     const mounts = [
       { kind: "local-plugin", hostPath: hooked() },
       { kind: "folder", hostPath: hooked() },
     ] as LaunchPlan["mounts"];
-    expect(msgs({ mounts, configDir: configDir() }, "container")).toEqual([]);
+    expect(msgs({ mounts })).toEqual([]);
     const two = [
       { kind: "local-plugin", hostPath: hooked() },
       { kind: "marketplace-plugin", hostPath: hooked() },
     ] as LaunchPlan["mounts"];
-    expect(msgs({ mounts: two, configDir: configDir() }, "container")[0]).toMatch(/2 staged plugins declare `Stop`/);
-  });
-
-  it("protocol reading the operator's real config dir warns; sealed, or another tier, does not", () => {
-    const operator = configDir();
-    vi.stubEnv("CLAUDE_CONFIG_DIR", operator);
-    for (const k of ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"]) vi.stubEnv(k, "");
-    const mounts = [{ kind: "local-plugin", hostPath: hooked() }] as LaunchPlan["mounts"];
-    const plan = { mounts, configDir: configDir(), baseEnv: {} };
-    vi.stubEnv("COWORK_MANAGED_CONFIG", "0");
-    expect(msgs(plan, "protocol")[0]).toMatch(/reads your real config dir/);
-    expect(msgs(plan, "container")).toEqual([]);
-    vi.stubEnv("COWORK_MANAGED_CONFIG", "1");
-    expect(msgs(plan, "protocol")).toEqual([]);
-    // managed, but the "managed" dir IS the operator's: still visible
-    expect(msgs({ ...plan, configDir: operator }, "protocol")[0]).toMatch(/reads your real config dir/);
-    // a bad COWORK_MANAGED_CONFIG is left for the spawn to refuse
-    vi.stubEnv("COWORK_MANAGED_CONFIG", "yes");
-    expect(() => msgs(plan, "protocol")).not.toThrow();
+    expect(msgs({ mounts: two })[0]).toMatch(/2 staged plugins declare `Stop`/);
   });
 });
 

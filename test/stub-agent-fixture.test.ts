@@ -7,12 +7,10 @@ import { STUB_TOKEN, credentialLeaks, makeStubFixture, stubInvocationPids } from
 // The stub-agent fixture's own contract: the credential it hands every CLI-level test, and the leak check that
 // exempts exactly that credential and nothing else.
 describe("stub-agent fixture", () => {
-  it("drives the managed-config branch with the fake token: the token is set and COWORK_MANAGED_CONFIG is not", () => {
+  it("supplies the fake token protocol requires, and no other credential", () => {
     const f = makeStubFixture("exec sleep 300");
     try {
       expect(f.env.CLAUDE_CODE_OAUTH_TOKEN).toBe(STUB_TOKEN);
-      // `=0` overrides a token, so it must stay unset for the token to select the managed branch.
-      expect("COWORK_MANAGED_CONFIG" in f.env).toBe(false);
       expect(f.env.ANTHROPIC_API_KEY).toBe("");
       expect(f.env.ANTHROPIC_AUTH_TOKEN).toBe("");
     } finally {

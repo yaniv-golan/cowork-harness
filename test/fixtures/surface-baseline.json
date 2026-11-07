@@ -5388,9 +5388,6 @@
         "enum": ["hostloop-sidecar", "hostloop-exec", "egress-sidecar", "device-container", "device-shim", "device-exec", "search-corpus"],
         "required": true
       },
-      ".l0HostConfigContamination": {
-        "type": "boolean"
-      },
       ".lane": {
         "type": "string",
         "enum": ["local", "remote"]
@@ -6554,7 +6551,6 @@
           "host_path_leak",
           "non_deterministic",
           "model_fallback",
-          "l0_host_config_contamination",
           "missing_capability",
           "infra_error",
           "exec_infra_error",
@@ -6895,10 +6891,6 @@
       ".assert[].allow_delete_in[]": {
         "type": "string",
         "minLength": 1
-      },
-      ".assert[].allow_l0_host_config_contamination": {
-        "type": "boolean",
-        "const": true
       },
       ".assert[].allow_max_turns": {
         "type": "boolean",

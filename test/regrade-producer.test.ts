@@ -31,10 +31,9 @@ const STUB = [
   "cat >/dev/null",
 ].join("\n");
 
-// One scoped and one unscoped assert, so both the priority-glob and the default capture are exercised. The
-// stub reads no config dir, so the L0 host-config guard is opted out to keep the exit code a real signal.
+// One scoped and one unscoped assert, so both the priority-glob and the default capture are exercised.
 const SCENARIO =
-  `baseline: latest\nfidelity: protocol\nprompt: write the report\nassert:\n  - allow_l0_host_config_contamination: true\n` +
+  `baseline: latest\nfidelity: protocol\nprompt: write the report\nassert:\n` +
   `  - semantic_matches:\n      rubric: ["the report names the risk"]\n      evidence_files: ["outputs/report.md"]\n` +
   `  - semantic_matches:\n      rubric: ["the answer points at the report"]\n`;
 

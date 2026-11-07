@@ -43,21 +43,23 @@ For each run it builds a **clean, hermetic `CLAUDE_CONFIG_DIR`** (under the run 
 
 Plugins are bind-mounted at the Cowork paths; the MCP config is passed via `--mcp-config`. Because nothing leaks from your real `~/.claude`, runs are reproducible across machines and CI.
 
-> **One exception, at `protocol` fidelity only.** A fresh config dir breaks local OAuth, whose login state lives in the real one — so with **no credential in the environment**, `protocol` keeps your real `CLAUDE_CONFIG_DIR` and layers the generated settings via `--settings`. Discovery still applies; the isolation does not, and your installed plugins/skills/MCP servers are visible to the agent and may answer instead of the thing under test (the run fails with `l0_host_config_contamination` unless you opt in). Any of `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_AUTH_TOKEN` in the environment takes the managed branch instead — the token is injected into the agent's env, since a managed config dir with no credential yields "Not logged in". `COWORK_MANAGED_CONFIG=1` forces it; `COWORK_MANAGED_CONFIG=0` suppresses only the token-derived branch (never the `ANTHROPIC_API_KEY` CI path); any other value is rejected. The sandboxed tiers are unaffected.
+> **Every tier, `protocol` included.** The agent always reads the run's own config dir, never your `~/.claude`. A fresh config dir holds no login, so the agent needs a credential in the environment or a `.env` — `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`), `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN`; a Keychain or `/login` session is not used, and a run without one is refused before it starts. What stays outside the seal: machine-level managed settings (`managed-settings.json`, `managed-mcp.json` in the system location) are not in any config dir, so they still reach an agent that runs on the host (`protocol`, `hostloop`). "Sealed" means user-level config.
 
 ## Overriding for tests
 
 | Goal | How |
 |---|---|
 | Test a single local **skill** dir in isolation | `skills.local: ["./skills/my-skill"]` (staged into the config dir's `skills/`). Use `plugins.local_plugins` instead only for a **plugin** root — a dir with `.claude-plugin/plugin.json` — mounted via `--plugin-dir`. |
-| Reproduce a real `~/.claude` setup | `plugins.config_dir: ~/.claude` (pins the real dir instead of a clean one) [^configdir] |
 | Swap an MCP server for a stub | point `mcp.config` at a test `mcp.json` (see `examples/data/mcp.json`) |
 | Exercise an org-remote plugin | `plugins.remote_plugins: ["./fixtures/org-plugin"]` |
 | Disable all discovery | leave the `plugins` / `skills` / `mcp` blocks empty |
 
-[^configdir]: Writing into an existing pinned `config_dir` is **refused by default** — the harness won't
-clobber a real Claude config. Set `COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE=1` to permit it, or use a managed
-(clean) dir with `config_dir: null`.
+A pinned `plugins.config_dir` is **single-run**: the harness creates it (it must not exist yet), marks it with
+`.cowork-harness-config-dir`, and reuses it only for the same run's later legs. An existing
+directory it did not create — a real Claude config, or another run's — is refused, so the harness never writes into it.
+A command that runs the scenario more than once (`run --repeat` above 1, `run --matrix`, `eval`, `hillclimb`) refuses
+a pinned `config_dir` before the first run, rather than spending one run and refusing the next. So does a batch
+(`run <dir/>`, `record <dir/>`, `record --rerecord-stale`) in which two scenarios pin the same dir; one is fine.
 
 ## What the model actually sees — and how to verify it
 

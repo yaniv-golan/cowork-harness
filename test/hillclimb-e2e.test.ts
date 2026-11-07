@@ -96,7 +96,7 @@ describe.runIf(POSIX)("hillclimb run through the CLI (stub agent, protocol, mana
       "name: alpha\nbaseline: latest\nsession: ./_session.yaml\nfidelity: protocol\nprompt: hi\nassert:\n  - result: success\n",
     );
     const argvFile = join(work, "argv");
-    const env = { ...f.env, COWORK_MANAGED_CONFIG: "1", CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token", STUB_ARGV: argvFile };
+    const env = { ...f.env, CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token", STUB_ARGV: argvFile };
     const cli = (...a: string[]) =>
       spawnSync(process.execPath, [CLI, "hillclimb", ...a], { cwd: f.cwd, env, encoding: "utf8", timeout: 60_000 });
 
@@ -189,7 +189,6 @@ describe.runIf(POSIX)("hillclimb run through the CLI (stub agent, protocol, mana
       );
       const env = {
         ...mf.env,
-        COWORK_MANAGED_CONFIG: "1",
         CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
         STUB_ARGV: join(work, "argv"),
       };
@@ -257,7 +256,6 @@ cat "${ENVELOPE}"
     const calls = join(work, "judge-calls");
     const env = {
       ...f.env,
-      COWORK_MANAGED_CONFIG: "1",
       CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
       STUB_ARGV: join(work, "argv"),
       COWORK_HARNESS_CLAUDE_BIN: judge,
@@ -371,7 +369,6 @@ cat "${ENVELOPE}"
     // The check is on: no COWORK_HARNESS_JUDGE_CHECK here.
     const env = {
       ...f.env,
-      COWORK_MANAGED_CONFIG: "1",
       CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
       STUB_ARGV: join(work, "argv"),
       COWORK_HARNESS_CLAUDE_BIN: judge,
@@ -424,7 +421,6 @@ cat "${ENVELOPE}"
     writeFileSync(judge, JUDGE, { mode: 0o755 });
     const env = {
       ...f.env,
-      COWORK_MANAGED_CONFIG: "1",
       CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
       STUB_ARGV: join(work, "argv"),
       COWORK_HARNESS_CLAUDE_BIN: judge,
@@ -500,7 +496,6 @@ cat "${ENVELOPE}"
     writeFileSync(calls, "");
     const env = {
       ...f.env,
-      COWORK_MANAGED_CONFIG: "1",
       CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
       STUB_ARGV: join(work, "argv"),
       COWORK_HARNESS_CLAUDE_BIN: judge,

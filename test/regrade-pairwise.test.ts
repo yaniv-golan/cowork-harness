@@ -47,7 +47,6 @@ beforeEach(() => {
   setEnv("COWORK_HARNESS_MODEL", "claude-sonnet-5");
   setEnv("STUB_PID", f.stubPidFile);
   setEnv("STUB_ENV_DUMP", f.envDump);
-  setEnv("COWORK_MANAGED_CONFIG", "1");
   for (const k of ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"])
     setEnv(k, k === "CLAUDE_CODE_OAUTH_TOKEN" ? "stub-not-a-real-token" : "");
 });

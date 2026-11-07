@@ -6,9 +6,11 @@ import { join } from "node:path";
 // spawnProtocol ultimately calls spawn("claude", ...) — mock node:child_process to prevent
 // any real subprocess and capture whether the guard fires before the spawn.
 const spawnMock = vi.fn(() => ({ stdin: null, stdout: null, stderr: null }));
-vi.mock("node:child_process", () => ({ spawn: (...a: any[]) => (spawnMock as any)(...a) }));
+// spawnSync: doctor's Keychain presence probe, reached on the no-credential refusal — reports no entry.
+vi.mock("node:child_process", () => ({ spawn: (...a: any[]) => (spawnMock as any)(...a), spawnSync: () => ({ status: 1 }) }));
 
 import { spawnProtocol } from "../src/runtime/protocol.js";
+import { BoundaryError, UsageError } from "../src/errors.js";
 import type { LaunchPlan } from "../src/session.js";
 import type { Scenario, PlatformBaseline } from "../src/types.js";
 
@@ -31,6 +33,15 @@ function minimalPlan(mounts: { hostPath: string; mountPath: string }[], over: Pa
 }
 
 const SCENARIO = { name: "test-scenario" } as unknown as Scenario;
+
+// spawnProtocol refuses without a credential in the environment (doctor's tokenCheck): every block here that is not
+// about that refusal runs with a fake token, and a temp operator config dir so the seal assertion never compares
+// against the developer's real one.
+beforeEach(() => {
+  vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "stub-not-a-real-token");
+  vi.stubEnv("CLAUDE_CONFIG_DIR", mkdtempSync(join(tmpdir(), "proto-operator-default-")));
+});
+afterEach(() => vi.unstubAllEnvs());
 const BASELINE = {} as unknown as PlatformBaseline;
 
 describe("spawnProtocol — L0 mount staging symlink-escape guard (bug 19)", () => {
@@ -126,15 +137,17 @@ describe("spawnProtocol — --include-hook-events follows plan.includeHookEvents
   });
 });
 
-// The sub-agent reasoning capture walks whatever root spawnProtocol reports. Under managed config that is the
-// run's own config dir (the agent's CLAUDE_CONFIG_DIR). Off it — or when the "managed" dir IS the operator's
-// real one — the agent reads the operator's config, which holds every session they ever ran: no root.
-describe("spawnProtocol — the config root it reports for the sub-agent reasoning capture", () => {
+// The protocol agent always reads the run's managed config dir: it is CLAUDE_CONFIG_DIR, it is the root the sub-agent
+// reasoning capture walks, and no `--settings` flag points anywhere else. Two refusals guard it before any spawn: no
+// credential in the environment (a Keychain or /login session cannot authenticate a managed dir), and a config dir that
+// IS the operator's own.
+describe("spawnProtocol — the sealed config dir and the credential it needs", () => {
   let warnSpy: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
     spawnMock.mockClear();
     warnSpy = vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    for (const k of ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN"]) vi.stubEnv(k, "");
+    for (const k of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"]) vi.stubEnv(k, "");
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "stub-not-a-real-token");
     vi.stubEnv("CLAUDE_CONFIG_DIR", mkdtempSync(join(tmpdir(), "proto-operator-config-")));
   });
   afterEach(() => {
@@ -142,23 +155,36 @@ describe("spawnProtocol — the config root it reports for the sub-agent reasoni
     vi.unstubAllEnvs();
   });
   const run = (plan: LaunchPlan) => spawnProtocol(SCENARIO, BASELINE, plan, join(mkdtempSync(join(tmpdir(), "proto-root-")), "out"));
+  const spawned = () => spawnMock.mock.calls[0] as unknown as [string, string[], { env: NodeJS.ProcessEnv }];
 
-  it("managed config: the plan's config dir", () => {
-    vi.stubEnv("COWORK_MANAGED_CONFIG", "1");
-    const plan = minimalPlan([]);
-    expect(run(plan).subagentConfigRoot).toBe(plan.configDir);
-  });
+  it.each(["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"])(
+    "with %s: the plan's config dir is CLAUDE_CONFIG_DIR and the capture root, and argv has no --settings",
+    (key) => {
+      vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "");
+      vi.stubEnv(key, "stub-not-a-real-credential");
+      const plan = minimalPlan([]);
+      expect(run(plan).subagentConfigRoot).toBe(plan.configDir);
+      const [, args, opts] = spawned();
+      expect(opts.env.CLAUDE_CONFIG_DIR).toBe(plan.configDir);
+      expect(args).not.toContain("--settings");
+    },
+  );
 
-  it("not managed: none — the operator's real config dir is never walked", () => {
-    vi.stubEnv("COWORK_MANAGED_CONFIG", "0");
-    expect(run(minimalPlan([])).subagentConfigRoot).toBeUndefined();
-  });
-
-  it("managed, but the config dir IS the operator's: none", () => {
-    vi.stubEnv("COWORK_MANAGED_CONFIG", "1");
+  it("the config dir IS the operator's own: a BoundaryError, and no spawn", () => {
     const plan = minimalPlan([]);
     vi.stubEnv("CLAUDE_CONFIG_DIR", plan.configDir);
-    expect(run(plan).subagentConfigRoot).toBeUndefined();
+    expect(() => run(plan)).toThrow(BoundaryError);
+    expect(() => run(plan)).toThrow(/is your own config dir/);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("no credential in the environment: refused with doctor's own row, and no spawn", () => {
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "");
+    expect(() => run(minimalPlan([]))).toThrow(UsageError);
+    expect(() => run(minimalPlan([]))).toThrow(
+      /^test-scenario: fidelity protocol needs a credential in the environment \(env \/ \.env\) — .*The agent runs with a managed config dir, so a Keychain or \/login session is not used\. Fix: /,
+    );
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 });
 

@@ -147,7 +147,6 @@ function buildFlow(
   if (opts.judgeTies) judge = tieJudge(work);
   const env = {
     ...f.env,
-    COWORK_MANAGED_CONFIG: "1",
     CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
     COWORK_HARNESS_CLAUDE_BIN: judge,
     ...(opts.env ?? {}),
@@ -167,7 +166,6 @@ function buildFlow(
     HOME: f.env.HOME!,
     // The judge transport's user-settings check reads CLAUDE_CONFIG_DIR ahead of HOME: keep it off this machine's config.
     CLAUDE_CONFIG_DIR: join(f.env.HOME!, ".claude"),
-    COWORK_MANAGED_CONFIG: "1",
     CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
     ...(opts.env ?? {}),
   })) {
@@ -280,7 +278,7 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
     const t = stateTemplateFor(
       "evals",
       f.cwd,
-      { ...process.env, ...f.env, COWORK_MANAGED_CONFIG: "1", CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" },
+      { ...process.env, ...f.env, CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" },
       { flow: "flow" },
     );
     expect(t.state.metrics.map((m) => m.id)).toContain("win_v1");
@@ -977,7 +975,7 @@ describe.runIf(POSIX)("hillclimb regrade re-measures a flow's metrics", () => {
     writing();
     const { cli, flow, rows, evals } = buildFlow({ metrics: [OTHER, WORDS] });
     // _state.json declares both metrics (the loop merged state-template's entries), and keeps them after the removal.
-    const env = { ...process.env, ...f.env, COWORK_MANAGED_CONFIG: "1", CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" };
+    const env = { ...process.env, ...f.env, CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" };
     const t = stateTemplateFor("evals", f.cwd, env, { flow: "flow" });
     const st = JSON.parse(readFileSync(join(flow, "_state.json"), "utf8"));
     writeFileSync(join(flow, "_state.json"), JSON.stringify({ ...st, ...t.state }));
@@ -1006,7 +1004,7 @@ describe.runIf(POSIX)("hillclimb regrade re-measures a flow's metrics", () => {
     const LOST = "  - { id: lost, artifact: outputs/lost.json, path: x, better: higher, scale: 1 }";
     const { cli, flow, rows, evals } = buildFlow({ metrics: [OTHER, WORDS, LOST] });
     expect(rows("v1")[0]!.meta.metrics_unavailable).toEqual({ lost: "missing_artifact" });
-    const env = { ...process.env, ...f.env, COWORK_MANAGED_CONFIG: "1", CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" };
+    const env = { ...process.env, ...f.env, CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" };
     const st = JSON.parse(readFileSync(join(flow, "_state.json"), "utf8"));
     writeFileSync(join(flow, "_state.json"), JSON.stringify({ ...st, ...stateTemplateFor("evals", f.cwd, env, { flow: "flow" }).state }));
     expect(cli("freeze-ref", "evals", "--flow", "flow", "--variant", "v1").status).toBe(0);
@@ -1151,7 +1149,7 @@ describe.runIf(POSIX)("hillclimb regrade re-measures metrics with no judge call"
     const kept = new Set(["baseline", "v1"].map((v) => rows(v)[0]!.meta.run_id as string));
     const r = spawnSync(process.execPath, [CLI, "run", "evals/alpha.yaml"], {
       cwd: f.cwd,
-      env: { ...f.env, COWORK_MANAGED_CONFIG: "1", CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" },
+      env: { ...f.env, CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" },
       encoding: "utf8",
       timeout: 60_000,
     });

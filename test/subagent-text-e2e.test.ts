@@ -82,7 +82,6 @@ beforeEach(() => {
   // Managed config is what points the agent's CLAUDE_CONFIG_DIR at the run's own dir; it needs a token, so a
   // made-up one is supplied (the stub is the agent — it goes nowhere). Every other credential is blanked so
   // nothing ambient from the developer's shell can reach the child.
-  setEnv("COWORK_MANAGED_CONFIG", "1");
   for (const k of CREDENTIAL_VARS) setEnv(k, k === "CLAUDE_CODE_OAUTH_TOKEN" ? FAKE_TOKEN : "");
 });
 

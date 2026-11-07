@@ -517,6 +517,17 @@ describe("eval: end to end over a fake runner", () => {
   });
 });
 
+describe("eval: a pinned plugins.config_dir", () => {
+  it("is refused before any run: every rep of both arms is its own run, and the dir is single-run", async () => {
+    const { scen, a, b } = setup({ extraSessionYaml: "  config_dir: ./pinned\n" });
+    const calls: EvalJobSpec[] = [];
+    const p = runEval(args(scen, a, b), deps(fakeRunner(undefined, calls)));
+    await expect(p).rejects.toThrow(/scenario "csv-metrics": plugins\.config_dir is single-run; this command runs \d+ times/);
+    expect(calls).toHaveLength(0);
+    expect(existsSync(join(root, "eval"))).toBe(false);
+  });
+});
+
 describe("eval: credential preflight (doctor's token check, before any run)", () => {
   // The consumer's machine: no env / .env token, a Claude Code login in the Keychain. Doctor's own check over
   // a probe saying exactly that — not a stand-in verdict.
@@ -543,12 +554,14 @@ describe("eval: credential preflight (doctor's token check, before any run)", ()
     expect(calls).toHaveLength(0);
     expect(existsSync(join(root, "eval"))).toBe(false);
   });
-  it("a tier doctor passes with a warning (protocol + Keychain) runs", async () => {
+  it("protocol + Keychain is refused too: protocol never uses a Keychain or /login session", async () => {
     const { scen, a, b } = setup();
     for (const f of readdirSync(scen))
       writeFileSync(join(scen, f), readFileSync(join(scen, f), "utf8").replace("fidelity: container", "fidelity: protocol"));
-    const out = await runEval(args(scen, a, b), { ...deps(fakeRunner()), tokenCheck: (tier) => tokenCheck(tier, keychainOnly) });
-    expect(out.report.arms.map((x) => x.buckets)).toEqual([{ valid: 5 }, { valid: 5 }]);
+    const calls: EvalJobSpec[] = [];
+    const p = runEval(args(scen, a, b), { ...deps(fakeRunner(undefined, calls)), tokenCheck: (tier) => tokenCheck(tier, keychainOnly) });
+    await expect(p).rejects.toThrow(/fidelity protocol.*Keychain entry.*setup-token/s);
+    expect(calls).toHaveLength(0);
   });
   it("asks once per distinct tier the scenarios declare", async () => {
     const { scen, a, b } = setup({ semantic: true });

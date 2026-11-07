@@ -41,7 +41,14 @@ import { createHash } from "node:crypto";
 import { searchAnchorsForSync, searchAnchorsRefusal, stagedForAnchors } from "./sync/search-anchors.js";
 import { hostLoopPermissionKeyFlags } from "./sync/hostloop-fence.js";
 import { checkCaptureOrg, LOCAL_ORG_RECORD, readLocalOrg, recordCaptureOrg } from "./sync/capture-org.js";
-import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
+import {
+  loadSession,
+  resolveSessionPaths,
+  applySessionOverrides,
+  resolveLaunchSources,
+  expandHome,
+  configDirSingleRunRefusal,
+} from "./session.js";
 import {
   executeScenario,
   isMultiLegFile,
@@ -51,6 +58,8 @@ import {
   loadSessionFromFile,
   firstLine,
   unresolvedModelPreflight,
+  protocolCredentialPreflight,
+  sharedConfigDirPreflight,
   scenarioInputRefusal,
   UnansweredError,
   BoundaryError,
@@ -132,6 +141,7 @@ import { remeasureCommandMetrics } from "./metric-command/live.js";
 import { classifyRunDir, hasTurnDirs, latestTurn, preLayoutMessage, requireTurns, turnArtifactPath } from "./run/turn-layout.js";
 import { parseArgs } from "./cli-args.js";
 import { loadDotenv } from "./dotenv.js";
+import { removedEnvRefusal } from "./removed-env.js";
 import { parseAnswerPolicyDoc } from "./answer-policy.js";
 import { makeRenderer, renderStart, renderFooter, startHeartbeat, type RenderPlan } from "./run/renderer.js";
 import {
@@ -1066,6 +1076,9 @@ async function main() {
     rethrowIfExit(err);
     fail(cmd, "usage", (err as Error).message, undefined, isJsonOutput(rest));
   }
+  // A variable 5.x no longer reads, still set: refused, so the run never differs silently from what it asked for.
+  const removed = removedEnvRefusal();
+  if (removed !== undefined) fail(cmd, "usage", removed, undefined, isJsonOutput(rest));
   // `--dotenv` / `--run-dir` AFTER the subcommand are each command's own flags: its parser knows which tokens
   // are values of its other flags, so a `--dotenv=…` VALUE is never taken as the flag (the leading scan above
   // stops at the subcommand for the same reason). run/command-globals.ts applies them with the same meaning.
@@ -2091,7 +2104,16 @@ async function cmdRun(rawArgs: string[]) {
     // without this the cap would be SILENTLY ignored on the single most expensive invocation shape the flag
     // exists to bound (N paid cells of one scenario). With --repeat the cumulative cap in runRepeatBatch
     // already applies per cell.
+    const singleRun = configDirSingleRunRefusal(
+      `scenario "${scenario.name}"`,
+      baseSession.plugins.config_dir,
+      cells.length * (repeatN ?? 1),
+    );
+    if (singleRun) fail("run", "usage", singleRun, undefined, o.json);
     if (maxBudgetUsd !== undefined && repeatN === undefined) preflightBudget("run", scenario.name, maxBudgetUsd, o.json);
+    // Last, as on the per-file arm: without it every protocol cell would fail at its own spawn as a "cell error".
+    const noCredential = protocolCredentialPreflight([scenario]);
+    if (noCredential) fail("run", "usage", noCredential, undefined, o.json);
     const results: RunResult[] = [];
     // Every cell resolves its own overridden scenario/session first (shared by both branches below) —
     // an error here (a bad skill_dirs substitution, an unresolvable overridden baseline) is a
@@ -2266,8 +2288,27 @@ async function cmdRun(rawArgs: string[]) {
         o.json,
       );
   }
+  // A pinned config_dir belongs to one run: --repeat would spend run 1 and have the marker refuse run 2.
+  if (repeatN !== undefined && repeatN > 1)
+    for (const scenario of loaded) {
+      let configDir: string | null | undefined;
+      try {
+        configDir = loadSessionFromFile(scenario.session).plugins.config_dir;
+      } catch (e) {
+        rethrowIfExit(e);
+        continue; // the run reports a session that does not load itself
+      }
+      const singleRun = configDirSingleRunRefusal(`scenario "${scenario.name}"`, configDir, repeatN);
+      if (singleRun) fail("run", "usage", singleRun, undefined, o.json);
+    }
+  // Likewise two scenarios of one batch pinning the same dir: the first would spend, then the marker refuse the second.
+  const sharedDir = sharedConfigDirPreflight(loaded);
+  if (sharedDir) fail("run", "usage", sharedDir, undefined, o.json);
   if (maxBudgetUsd !== undefined && repeatN === undefined)
     for (const scenario of loaded) preflightBudget("run", scenario.name, maxBudgetUsd, o.json);
+  // Last: a protocol scenario with no credential in the environment, named with every other one, before any runs.
+  const noCredential = protocolCredentialPreflight(loaded);
+  if (noCredential) fail("run", "usage", noCredential, undefined, o.json);
 
   const results: RunResult[] = [];
   const rollups: RepeatRollup[] = [];
@@ -2852,6 +2893,9 @@ async function cmdSkill(rawArgs: string[]) {
   // Single-run budget ceiling. The batch path enforces its own cumulative cap between iterations, so this
   // covers exactly the lane that had none — the open-ended one, where you know least what you will spend.
   if (repeatN === undefined && maxBudgetUsd !== undefined) preflightBudget("skill", scenario.name, maxBudgetUsd, o.json);
+  // Last: protocol with no credential in the environment, refused before staging (spawnProtocol is the backstop).
+  const noCredential = protocolCredentialPreflight([scenario]);
+  if (noCredential) fail("skill", "usage", noCredential, undefined, o.json);
   const runSkillOnce = (label: string, rethrowUnanswered = false) =>
     runOneScenario({
       command: "skill",

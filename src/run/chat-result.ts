@@ -186,7 +186,6 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     outputsMountMode: undefined, // no live run here; absent reads as rw
     effectiveFidelity: opts.fidelity,
     fidelityWarnings: undefined,
-    l0HostConfigContamination: undefined,
     missingCapabilityUse: undefined,
     capabilityProbe: undefined,
     requiresCapabilityUnmet: undefined,

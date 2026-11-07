@@ -200,11 +200,8 @@ refused there too.
 - an alias model or judge model, a case pinned to no concrete model;
 - a session that does not declare exactly one `plugins.local_plugins` entry (the same one in every case), an
   inline session, or `on_unanswered: prompt`;
-- `fidelity: protocol` without a managed config dir (its traces would miss the sub-agents' turns): set
-  `COWORK_MANAGED_CONFIG=1` or use another tier;
 - no usable agent credential at a selected case's tier: `doctor`'s own check (`cowork-harness doctor --tier
-  <tier>`), as `eval` applies it. At protocol, a login only in your Claude config dir (Keychain or
-  `.credentials.json`) is refused too: hillclimb's protocol runs use a managed config dir, where it is not read.
+  <tier>`), as `eval` applies it.
   Put `CLAUDE_CODE_OAUTH_TOKEN` in `./.env` or the environment, or pass `--dotenv <file>`. A run the agent still
   could not authenticate (an expired token) is an `errors.jsonl` row (`run ended error (auth)`), and the pass
   prints once which variables the agent takes at that tier, where they are looked up, in order, and what

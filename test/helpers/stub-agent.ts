@@ -10,11 +10,9 @@ import { spawn, type ChildProcess } from "node:child_process";
  * Credential safety is part of the fixture, not left to each test:
  *  - The CLI is spawned with a CONSTRUCTED environment, never `...process.env`, so nothing ambient (a
  *    token exported in the developer's shell) can ride into the child.
- *  - `CLAUDE_CODE_OAUTH_TOKEN` is the fixed fake {@link STUB_TOKEN}: a credential is what selects the protocol
- *    tier's managed-config branch (the sealed config dir every real run uses), so the fixture drives that
- *    branch by default. The stub never calls a network, and {@link credentialLeaks} exempts exactly this value.
- *  - `COWORK_MANAGED_CONFIG` is NOT set: `=0` overrides a token and would push the run back onto the
- *    unsealed branch, so it must stay unset for the fake token to take effect.
+ *  - `CLAUDE_CODE_OAUTH_TOKEN` is the fixed fake {@link STUB_TOKEN}: the protocol tier refuses a run with no
+ *    credential in the environment (its agent always reads the run's managed config dir, where no login lives).
+ *    The stub never calls a network, and {@link credentialLeaks} exempts exactly this value.
  *  - `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are set to "" rather than deleted. The CLI auto-loads
  *    `./.env` and `<install>/.env`, and the loader only fills a key that is `undefined`, so a deleted key is
  *    exactly the state a repo `.env` would fill, while "" is left alone and reads as "not provided".

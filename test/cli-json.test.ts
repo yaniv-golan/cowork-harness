@@ -199,7 +199,10 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
       const cwd = mkdtempSync(join(tmpdir(), "cc-bl-"));
       const s = scenarioIn(cwd);
       writeIn(cwd, "m.yaml", "baselines: [desktop-0.0.0]\n");
-      const r = run(["run", s, "--matrix", join(cwd, "m.yaml"), "--output-format", "json"]);
+      // A stand-in credential (never sent: the cell fails on its baseline first), past the protocol credential pre-flight.
+      const r = run(["run", s, "--matrix", join(cwd, "m.yaml"), "--output-format", "json"], {
+        CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
+      });
       expect(r.code).toBe(1); // a failing cell fails the matrix run — the matrix contract, unchanged
       expect(r.json?.matrix?.cells?.[0]?.error).toMatch(UNKNOWN);
     });
@@ -330,7 +333,10 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     const { cwd } = run(["--version"]); // borrow a temp cwd
     writeIn(cwd, "sess.yaml", "permission_mode: default\nmodel: claude-sonnet-5\n");
     writeIn(cwd, "b.yaml", "name: b\nbaseline: latest\nsession: ./sess.yaml\nfidelity: protocol\nprompt: hi\nexpect_denied: [evil.com]\n");
-    const r = spawnSync("node", [CLI, "run", "b.yaml", "--output-format=json"], { encoding: "utf8", cwd });
+    // A stand-in credential, so the protocol credential pre-flight (exit 2) does not answer first; the boundary refusal
+    // comes before any spawn, so the value is never sent anywhere.
+    const env = { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: "stub-not-real" };
+    const r = spawnSync("node", [CLI, "run", "b.yaml", "--output-format=json"], { encoding: "utf8", cwd, env });
     expect(r.status).toBe(3); // boundary violations → exit 3 (integrity, not usage)
     expect(JSON.parse(r.stdout).error.category).toBe("boundary");
   });
@@ -500,8 +506,8 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
   });
 
   // Every verdict modifier must (a) pass as a STANDALONE assertion (not "empty assertion") and (b) replay
-  // green without being misclassified as a filesystem/egress skip. Covering all three guards the exact gap
-  // `allow_l0_host_config_contamination` fell through (it had no assert.ts noop branch).
+  // green without being misclassified as a filesystem/egress skip. Covering every one guards against a modifier with
+  // no assert.ts noop branch.
   it.each([...VERDICT_MODIFIER_KEYS])("a standalone %s assertion replays green with no filesystem-skip warning", (modifier) => {
     const r0 = run(["--version"]); // borrow a temp cwd
     // Not every modifier is `literal(true)` — `allow_delete_in` takes a non-empty array of mount names.

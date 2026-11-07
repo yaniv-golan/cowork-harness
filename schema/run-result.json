@@ -996,7 +996,6 @@
                   "host_path_leak",
                   "non_deterministic",
                   "model_fallback",
-                  "l0_host_config_contamination",
                   "missing_capability",
                   "infra_error",
                   "exec_infra_error",
@@ -1719,10 +1718,6 @@
         "type": "string"
       },
       "description": "#49: structured prompt warnings visible to JSON callers"
-    },
-    "l0HostConfigContamination": {
-      "type": "boolean",
-      "description": "#20: failing fidelity signal for protocol+plugins"
     },
     "missingCapabilityUse": {
       "type": "array",

@@ -222,6 +222,8 @@ describe.skipIf(!built)("exit matrix: each subcommand exits by itself with its d
       const r = cli(["critique", "skill", "--prompt", "do it", "--model", "claude-sonnet-5", "--output-format", "json"], d, {
         HOME: join(d, "home"),
         COWORK_HARNESS_FORBID_SPAWN: "1",
+        // A stand-in credential (never sent: the spawn is forbidden), past critique's credential pre-flight.
+        CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
       });
       expect(r.code, r.stderr).toBe(2);
       expect(JSON.parse(r.stdout)).toMatchObject({ infraFailurePhase: "task turn" });

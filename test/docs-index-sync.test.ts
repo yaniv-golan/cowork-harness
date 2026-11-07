@@ -176,14 +176,13 @@ describe("verdict-signals docs ↔ code", () => {
     expect(warnCount).toBe(18);
     expect(scenarioMdText).toMatch(/Only eighteen codes are \*\*warn\*\*-severity/);
   });
-  // 12 as of `device_delete_bypassed`: a delete in a connected folder past the device's refusal, under an enforced
-  // device_bridge only.
-  it('the docs\' "twelve fail-severity signals" claim matches the actual count in verdict.ts', () => {
+  // 11 since 5.0.0 removed the protocol host-config signal (12 after `device_delete_bypassed` was added).
+  it('the docs\' "eleven fail-severity signals" claim matches the actual count in verdict.ts', () => {
     const verdictSrc = readFileSync(resolve("src/run/verdict.ts"), "utf8");
     // Distinct codes: some fail codes are pushed from more than one site.
     const failCodes = new Set([...verdictSrc.matchAll(/code:\s*"([a-z0-9_]+)",\s*\n?\s*severity:\s*"fail"/g)].map((m) => m[1]));
-    expect(failCodes.size).toBe(12);
-    expect(scenarioMdText).toMatch(/Twelve are \*\*fail\*\*-severity/);
+    expect(failCodes.size).toBe(11);
+    expect(scenarioMdText).toMatch(/Eleven are \*\*fail\*\*-severity/);
   });
 });
 

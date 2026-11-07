@@ -21,7 +21,9 @@ const can = existsSync(CLI);
 
 const PINNED = { COWORK_HARNESS_MODEL: "claude-sonnet-5" };
 /** Stops `run`/`skill` after the budget pre-flight and before any spawn or run dir (see header). */
-const STOP_BEFORE_SPAWN = { COWORK_HARNESS_AUTHORED_TOTAL_BYTES: "garbage" };
+// A protocol scenario passes the credential pre-flight first (after the budget one), so it carries a stand-in credential
+// that is never sent: the garbage byte cap refuses before any spawn.
+const STOP_BEFORE_SPAWN = { COWORK_HARNESS_AUTHORED_TOTAL_BYTES: "garbage", CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" };
 
 const tmp = (p: string) => mkdtempSync(join(tmpdir(), p));
 

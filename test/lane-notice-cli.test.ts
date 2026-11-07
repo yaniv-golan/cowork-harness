@@ -30,6 +30,8 @@ afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
 function cli(args: string[], extraEnv: Record<string, string> = {}): string {
   const env: NodeJS.ProcessEnv = { ...process.env, COWORK_HARNESS_FORBID_SPAWN: "1", COWORK_HARNESS_GITSET: "0" };
+  // A stand-in credential (never sent: the spawn is forbidden), so a protocol run passes the credential pre-flight.
+  env.CLAUDE_CODE_OAUTH_TOKEN = "stub-not-a-real-token";
   delete env.CI; // a CI runner sets it, and CI silences the notice
   delete env.COWORK_HARNESS_NO_LANE_NOTICE;
   Object.assign(env, { COWORK_HARNESS_RUNS_DIR: join(dir, "runs"), COWORK_HARNESS_MODEL: "claude-sonnet-5", ...extraEnv });

@@ -4,7 +4,6 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
-import { managedConfigMode, protocolConfigDirs } from "../src/runtime/protocol.js";
 
 /**
  * PROVE protocol-tier `--resume` continues the conversation: turn 1 is told a random token, turn 2 is a NEW host
@@ -68,12 +67,10 @@ describe.runIf(CAN || REQUIRE)("protocol --resume conversation continuity (bille
       const t1 = runSkill(folder, `Remember this codeword for later in our conversation: ${token}. Just say OK.`, sid, false, runsDir);
       expect(t1.result, t1.stderr).toBe("success");
 
-      // The agent persisted the session where the protocol agent reads its config: resolved by protocolConfigDirs,
-      // the same function spawnProtocol uses, never re-derived here.
+      // The agent persisted the session in the run's managed config dir — the only config dir a protocol agent reads.
       const dir = sessionDir(runsDir)!;
       const { agentSessionId } = JSON.parse(readFileSync(join(dir, "session.json"), "utf8"));
-      const { agentConfigDir } = protocolConfigDirs(join(dir, "claude-config"), managedConfigMode(process.env));
-      const projects = join(agentConfigDir, "projects");
+      const projects = join(dir, "claude-config", "projects");
       const stored = existsSync(projects) && readdirSync(projects).some((p) => existsSync(join(projects, p, `${agentSessionId}.jsonl`)));
       expect(stored, `turn 1's transcript is under ${projects}`).toBe(true);
 

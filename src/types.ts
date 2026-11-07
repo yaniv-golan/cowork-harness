@@ -1187,7 +1187,7 @@ export const Assertion = z.strictObject({
   hook_output_contains: hookOutputObject
     .optional()
     .describe(
-      "a COMMAND hook's output for this event contains a text: some `hook_response` frame for `event` carries `text` (a literal substring, case-sensitive) or `matches` (a regex, case-insensitive) in its `stdout`, its `stderr`, or either (`stream`, default `any`). Every frame for the event counts, blocking ones included; an event usually fires several times (each tool call for PreToolUse, each turn for Stop). `matches` is case-insensitive and has no multiline flag, so `^` / `$` anchor the whole stream, not a line. Fails when the hook never fired, with the same diagnosis as hook_event_fired; cannot-verify when the run has no context events. On a stream a redaction policy rewrote (a replayed cassette, a scrubbed run dir), a literal miss and any `matches` result are evidence-unavailable for either key, while a literal hit outside a token counts; a needle the policy rewrote is evidence-unavailable. A miss is also evidence-unavailable when a hook for the event started and never sent a response (an async or backgrounded hook, or one still running at the end), or when the agent truncated a frame's output. Content-class, so it grades on replay. Frames carry no plugin id, so a second staged plugin hooking the same event also counts, as does a plugin installed on the host when a `protocol` run reads the real config dir; the run warns when either applies. Recorded end-to-end for `Stop`",
+      "a COMMAND hook's output for this event contains a text: some `hook_response` frame for `event` carries `text` (a literal substring, case-sensitive) or `matches` (a regex, case-insensitive) in its `stdout`, its `stderr`, or either (`stream`, default `any`). Every frame for the event counts, blocking ones included; an event usually fires several times (each tool call for PreToolUse, each turn for Stop). `matches` is case-insensitive and has no multiline flag, so `^` / `$` anchor the whole stream, not a line. Fails when the hook never fired, with the same diagnosis as hook_event_fired; cannot-verify when the run has no context events. On a stream a redaction policy rewrote (a replayed cassette, a scrubbed run dir), a literal miss and any `matches` result are evidence-unavailable for either key, while a literal hit outside a token counts; a needle the policy rewrote is evidence-unavailable. A miss is also evidence-unavailable when a hook for the event started and never sent a response (an async or backgrounded hook, or one still running at the end), or when the agent truncated a frame's output. Content-class, so it grades on replay. Frames carry no plugin id, so a second staged plugin hooking the same event also counts; the run warns when it applies. Recorded end-to-end for `Stop`",
     ),
   hook_output_not_contains: hookOutputObject
     .optional()
@@ -1444,12 +1444,6 @@ export const Assertion = z.strictObject({
     .describe(
       '(verdict modifier) accept detected deletes in these mounts by NAME (e.g. ["reports"]) instead of failing/warning — the per-mount analogue of allow_outputs_delete, mirroring production\'s per-mount fileDeleteApprovedMounts. WAIVES the harness\'s post-hoc detection (which still runs and is still recorded); it does NOT model the live approval handshake. Listing "outputs" conflicts with no_delete_in_outputs',
     ),
-  allow_l0_host_config_contamination: z
-    .literal(true)
-    .optional()
-    .describe(
-      "(verdict modifier) suppress the default-fail when L0 (protocol) runs against the operator's REAL config dir, where their installed plugins/skills/MCP servers are visible and may answer instead of the thing under test — for tests that deliberately accept a contaminated L0 environment",
-    ),
   allow_missing_capability: z
     .literal(true)
     .optional()
@@ -1697,10 +1691,39 @@ export const GATE_ASSERT_KEYS = [
  *  same value, so the capture and the judge can never disagree about what "cut" means. */
 export const SKILL_RESULT_ASSERT_CAP = 32_768;
 
+/** Assertion keys a past release accepted and this one refuses, each with what replaced it: named in the load error
+ *  (scenario YAML and cassette alike) instead of Zod's bare "unrecognized key". */
+export const REMOVED_ASSERTION_KEYS: Readonly<Record<string, string>> = {
+  allow_l0_host_config_contamination:
+    "removed in 5.0.0: fidelity protocol always gives the agent a managed config dir, so it never reads your installed plugins, skills or MCP servers and there is nothing left to allow. Delete the line",
+};
+
+/** The removed assertion keys `asserts` (an `assert:` list as written) uses, or [] — a key at the top of any item. */
+export function removedAssertionKeysIn(asserts: unknown): string[] {
+  if (!Array.isArray(asserts)) return [];
+  const hits = new Set<string>();
+  for (const a of asserts)
+    if (typeof a === "object" && a !== null) for (const k of Object.keys(a)) if (Object.hasOwn(REMOVED_ASSERTION_KEYS, k)) hits.add(k);
+  return [...hits];
+}
+
+/** The refusal for a scenario document (single-prompt or `legs:`) that uses a removed assertion key, or undefined. */
+export function removedAssertionRefusal(doc: unknown): string | undefined {
+  if (typeof doc !== "object" || doc === null) return undefined;
+  const d = doc as { assert?: unknown; legs?: unknown };
+  const lists = [
+    d.assert,
+    ...(Array.isArray(d.legs)
+      ? d.legs.map((l) => (typeof l === "object" && l !== null ? (l as { assert?: unknown }).assert : undefined))
+      : []),
+  ];
+  const keys = [...new Set(lists.flatMap((l) => removedAssertionKeysIn(l)))];
+  return keys.length ? keys.map((k) => `\`${k}\` was ${REMOVED_ASSERTION_KEYS[k]}`).join("; ") : undefined;
+}
+
 export const VERDICT_MODIFIER_KEYS = [
   "allow_permissive_auto_allow",
   "allow_missing_capability",
-  "allow_l0_host_config_contamination",
   "allow_stall",
   "allow_max_turns",
   "allow_undelivered_deliverables",
@@ -3016,7 +3039,6 @@ export interface RunResult {
         | "host_path_leak"
         | "non_deterministic"
         | "model_fallback"
-        | "l0_host_config_contamination"
         | "missing_capability"
         | "infra_error"
         | "exec_infra_error"
@@ -3411,13 +3433,6 @@ export interface RunResult {
    *  a result.json written before the field existed — that form then fails evidence-unavailable. Holds
    *  the same inputs `events.jsonl` already carries, secret-scrubbed the same way. */
   toolCalls?: ToolCallRecord[];
-  /** true when L0 (protocol) ran with plugins that loaded via --settings/managed config instead of
-   *  the operator's REAL config dir, so their installed plugins/skills/MCP servers were visible
-   *  to the agent and may have answered instead of the thing under test. computeVerdict fails on this unless
-   *  allow_l0_host_config_contamination is asserted — a warn-only was insufficient since the run could still appear
-   *  green. (Pre-`--plugin-dir` this field meant "plugins were not delivered at L0"; delivery is fixed, the
-   *  contamination is what remains.) */
-  l0HostConfigContamination?: boolean;
   /** Capability families the agent image OMITS but the skill was observed USING (live lane only; the
    *  intersection of the image's probed `omitted` set and capability-usage detected in events.jsonl).
    *  computeVerdict default-fails on a non-empty list unless `allow_missing_capability` is asserted — a
