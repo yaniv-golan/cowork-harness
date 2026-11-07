@@ -64,6 +64,7 @@ import { parseScenarioFile, loadRunnableScenario } from "../run/execute.js";
 import type { Scenario } from "../types.js";
 import type { FlowSnapshot } from "./schema-check.js";
 
+import { rethrowIfExit } from "../run/exit.js";
 const CMD = "hillclimb";
 
 type JobFlags = { label?: string; ablateSkill?: boolean };
@@ -129,7 +130,8 @@ function assertSigScenarios(
     yaml = yamlOf(files && typeof files === "object" && !Array.isArray(files) ? Object.keys(files) : undefined);
     if (yaml.length) key = "harness_files";
     else yaml = listed;
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     // An unreadable _state.json is check's finding: nothing is recorded.
   }
   if (!yaml.length)
@@ -164,6 +166,7 @@ function assertSigScenarios(
       cases.push({ id, scenario: loadRunnableScenario(resolve(cwd, mine[0]!)) });
       fileOf.set(id, mine[0]!);
     } catch (e) {
+      rethrowIfExit(e);
       notes.push(
         `note: the flow's recorded scenario ${mine[0]} (_state.json ${key}) cannot be read (${(e as Error).message}) — ${pass} ${compare(id)}`,
       );
@@ -189,7 +192,8 @@ function assertSigScenarios(
                 hashedPaths({ cwd, listed: listedAll, derived: prepareCases(cs, { env: process.env, noAgentRun: true }).derivedPaths(cs) }),
               );
         loads.set(t, { files, ...(hashed ? { hashed } : {}) });
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         loads.set(t, undefined);
       }
     return loads.get(t);
@@ -267,6 +271,7 @@ export function stateTemplateFor(
   try {
     tracked = trackedSkill(prep.lever, opts.skill);
   } catch (e) {
+    rethrowIfExit(e);
     throw new UsageError((e as Error).message);
   }
   const assertions = cases.map((c) => ({ assertions: c.scenario.assert ?? [] }));
@@ -283,7 +288,8 @@ export function stateTemplateFor(
           try {
             const r = l.trim() ? (JSON.parse(l) as { prompt_id?: unknown; grade?: Record<string, unknown> }) : undefined;
             return r ? [{ variant, caseId: String(r.prompt_id), grade: r.grade }] : [];
-          } catch {
+          } catch (caught) {
+            rethrowIfExit(caught);
             return [];
           }
         }),
@@ -313,7 +319,8 @@ export function stateTemplateFor(
       try {
         const st = JSON.parse(loadFlowSnapshot(flowAbs).state ?? "{}");
         if (Array.isArray(st?.metrics)) declared = st.metrics;
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         // An unreadable _state.json is `check`'s finding, not this note's.
       }
       for (const m of declared) {
@@ -369,6 +376,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
     try {
       a = parseHillclimbRunArgs(rest);
     } catch (e) {
+      rethrowIfExit(e);
       return fail(`${CMD} run`, "usage", scrub((e as Error).message, secrets), undefined, json);
     }
     if (a.help) {
@@ -439,6 +447,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         }),
       );
     } catch (e) {
+      rethrowIfExit(e);
       return usage((e as Error).message, sub === "check" ? HILLCLIMB_CHECK_USAGE : HILLCLIMB_STATE_TEMPLATE_USAGE);
     }
     if (p.flags["--help"] === true) {
@@ -508,6 +517,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
       }
       return process.exit(0);
     } catch (e) {
+      rethrowIfExit(e);
       if (e instanceof UsageError) return usage(e.message, e.hint);
       if (e instanceof FsRefusal) return usage(e.message);
       throw e;
@@ -528,6 +538,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         }),
       );
     } catch (e) {
+      rethrowIfExit(e);
       return usage((e as Error).message, HILLCLIMB_REGRADE_USAGE);
     }
     if (p.flags["--help"] === true) {
@@ -596,6 +607,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         }),
       );
     } catch (e) {
+      rethrowIfExit(e);
       return usage((e as Error).message, HILLCLIMB_FREEZE_REF_USAGE);
     }
     if (p.flags["--help"] === true) {
@@ -624,6 +636,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
       }
       return process.exit(r.exitCode);
     } catch (e) {
+      rethrowIfExit(e);
       if (e instanceof UsageError) return usage(e.message, e.hint);
       if (e instanceof FsRefusal) return usage(e.message);
       throw e;

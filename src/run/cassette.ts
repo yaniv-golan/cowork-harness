@@ -198,6 +198,7 @@ import {
 } from "../scan.js";
 import { parse as parseYaml, YAMLParseError } from "yaml";
 
+import { rethrowIfExit } from "./exit.js";
 // Synchronous fd writes (match cli.ts): a `process.stdout.write` + `process.exit()` pair truncates the
 // machine envelope on a PIPE (fd 1 goes non-blocking once the stream is touched; the async tail is dropped
 // at exit past the ~64KB buffer). writeAllSync retries EAGAIN and loops on short writes (see src/io.ts) —
@@ -830,13 +831,15 @@ export function buildManifest(
     let abs: string;
     try {
       abs = containedPath(workRoot, path);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       return { path, bytes: 0, sha256: "", truncated: true, truncationReason: "unreadable" };
     }
     let buf: Buffer;
     try {
       buf = readFileSync(abs);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       return { path, bytes: 0, sha256: "", truncated: true, truncationReason: "unreadable" };
     }
     const bytes = buf.length;
@@ -1005,6 +1008,7 @@ export function workspaceFixtureStaleness(cassette: Cassette, cassetteDir: strin
   try {
     live = scanWorkspaceFixture(dir);
   } catch (e) {
+    rethrowIfExit(e);
     // The scan's refusal already names the fixture; keep only its reason.
     const msg = String((e as Error)?.message ?? e).split("\n")[0]!;
     const own = `workspace_fixture ${dir}: `;
@@ -1053,7 +1057,8 @@ function realOrSelf(p: string): string {
   }
   try {
     return join(realpathSync.native(head), ...tail);
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return resolve(p);
   }
 }
@@ -1139,6 +1144,7 @@ function skillSourceDirs(
     // silently never computed.
     cfg = resolveSessionPaths(loadSession(parseSessionFile(resolved)), baseDir);
   } catch (e) {
+    rethrowIfExit(e);
     // Previously a bare `return { dirs: [] }` — the swallowed throw is why skillHash was silently never
     // computed, per the comment above. Keep the same control flow; stop discarding the reason.
     return {
@@ -1189,7 +1195,8 @@ export function skillCommit(sessionPath: string, inlineSession?: SessionConfig):
       }).trim();
       if (!sha) return null;
       commits.add(sha);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       return null; // non-git dir, unborn HEAD, or git not on PATH
     }
   }
@@ -1260,7 +1267,8 @@ export function recordedGateLabels(controlOut: readonly (string | object)[] | un
       };
       for (const q of e?.response?.response?.updatedInput?.questions ?? [])
         for (const o of q?.options ?? []) if (typeof o?.label === "string" && o.label.trim()) labels.push(o.label);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       /* a malformed controlOut line is another check's finding */
     }
   }
@@ -1287,7 +1295,8 @@ export function stampLabelProvenance(labels: string[], dirs: string[]): Fingerpr
       let text: string;
       try {
         text = readFileSync(abs, "utf8");
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         continue; // unreadable prose is not a finding here; the hash path already reports read errors
       }
       // Order BY POSITION IN THE FILE, not by emission order — a catalog reorder changes this sequence
@@ -1313,7 +1322,8 @@ function walkProseFiles(dir: string, depth = 0): string[] {
   let entries: import("node:fs").Dirent[];
   try {
     entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return [];
   }
   const files: string[] = [];
@@ -1339,7 +1349,8 @@ export function checkLabelProvenance(stamp: Fingerprint["labelProvenance"], dirs
       try {
         text = readFileSync(join(dir, file), "utf8");
         break;
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         /* try the next mounted dir — `file` is dir-relative and dirs may overlap */
       }
     }
@@ -1511,7 +1522,8 @@ function sharedHashFor(dirs: string[], hashIgnore: string[], scopeSkills: string
   const allPluginRoots = dirs.every((d) => {
     try {
       return statSync(join(d, "skills")).isDirectory();
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       return false;
     }
   });
@@ -1531,7 +1543,8 @@ function withLabelProvenance(fp: Fingerprint, controlOut: readonly (string | obj
     const { dirs } = skillSourceDirs(sessionPath);
     const labelProvenance = stampLabelProvenance(labels, dirs);
     return labelProvenance ? { ...fp, labelProvenance } : fp;
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return fp;
   }
 }
@@ -1669,7 +1682,8 @@ export function buildSessionFingerprint(
     // session actually changed. The authored relative paths ARE the relocatable shape: a genuine config
     // edit (a swapped folder, an added plugin) still moves the hash; a bare relocation does not.
     cfg = loadSession(parseSessionFile(resolved));
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return undefined;
   }
   const agentEnv = agentEnvOverrides(cfg.agent_env);
@@ -1768,7 +1782,8 @@ function isCapabilityManifest(line: string): boolean {
   };
   try {
     m = JSON.parse(line);
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return false;
   }
   if (m?.type === "system" && m?.subtype === "init") return true;
@@ -1825,7 +1840,8 @@ export function scrubAccountModelMenu(cassette: Cassette): Cassette {
     let m: { type?: string; response?: { request_id?: string; response?: Record<string, unknown> } };
     try {
       m = JSON.parse(l);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       return l;
     }
     if (!isInitializeRegistryResponse(m)) return l;
@@ -1882,7 +1898,8 @@ function recordedBuiltinPlugins(events: readonly string[]): Set<string> {
     let e: { type?: string; subtype?: string; plugins?: unknown };
     try {
       e = JSON.parse(l);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       continue;
     }
     if (e?.type !== "system" || e.subtype !== "init" || !Array.isArray(e.plugins)) continue;
@@ -1986,7 +2003,8 @@ export function scrubRecordedAgentData(cassette: Cassette): { cassette: Cassette
     let e: unknown;
     try {
       e = JSON.parse(l);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       return l;
     }
     let next = e;
@@ -2047,6 +2065,7 @@ export async function verifiedRescrub(
     await scrubVerification.verify(cassette, scrub.cassette, cassetteDir);
     return scrub;
   } catch (e) {
+    rethrowIfExit(e);
     warn(
       `::warning:: ${where}: the recorder's scrub (${scrub.kinds.join(", ")}) could not be verified as verdict-preserving — ` +
         `${(e as Error).message.split("\n")[0]}. Its events are left UNSCRUBBED, so they still carry that data; do not commit ` +
@@ -2093,7 +2112,8 @@ export function collectDeclaredPlugins(events: string[] | undefined): string[] {
   for (const line of events ?? []) {
     try {
       visit(JSON.parse(line));
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       continue; // a non-JSON transcript line declares no plugins
     }
   }
@@ -2197,7 +2217,8 @@ export function scanCassette(cassette: ScannableCassette, allow: AllowInput[]): 
         let decoded: unknown;
         try {
           decoded = JSON.parse(l);
-        } catch {
+        } catch (caught) {
+          rethrowIfExit(caught);
           return; // a non-JSON transcript line has no name fields to read
         }
         findings.push(...scanHostInventory(decoded, `${key}[${i}]`, allow, declaredPlugins));
@@ -2328,6 +2349,7 @@ function debugSkillHashMismatch(
     // `--session` no longer resolves — an empty or wrong file list exactly when it is most needed.
     entries = explainSkillHash(cassette.scenario.session, cassetteDir, cassette.scenario.skills, sessionOverride);
   } catch (e) {
+    rethrowIfExit(e);
     process.stderr.write(`cowork-harness: skill-hash debug: could not enumerate files: ${String((e as Error)?.message ?? e)}\n`);
     return;
   }
@@ -2471,6 +2493,7 @@ function computeTierStaleness(cassette: Cassette): { findings: StalenessFinding[
   try {
     baseline = loadBaseline(baselineName);
   } catch (e) {
+    rethrowIfExit(e);
     return {
       findings: [
         {
@@ -2560,7 +2583,8 @@ function recordedInitTools(cassette: Cassette): string[] | undefined {
     let m: { type?: string; subtype?: string; tools?: unknown };
     try {
       m = JSON.parse(line);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       continue;
     }
     if (m?.type !== "system" || m?.subtype !== "init") continue;
@@ -2682,7 +2706,8 @@ export function computeAgentVersionNote(cassette: Cassette): string[] {
   let baseline: PlatformBaseline;
   try {
     baseline = loadBaseline(stem);
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return []; // no committed baseline by that name — nothing to compare against
   }
   const native = tier === "hostloop";
@@ -2723,7 +2748,8 @@ export function computeStaleness(
   let liveBaselineObj: PlatformBaseline | undefined;
   try {
     liveBaselineObj = loadBaseline("latest");
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     /* baseline not loadable */
   }
   const liveBaseline = liveBaselineObj?.appVersion;
@@ -2912,7 +2938,8 @@ export function computeStaleness(
     try {
       const { dirs } = skillSourceDirs(cassette.scenario.session, cassetteDir, undefined, sessionOverride);
       for (const d of checkLabelProvenance(fp.labelProvenance, dirs)) findings.push({ class: "skill", message: `${d} — re-record` });
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       /* an unresolvable session is already reported by the hash path above; don't double-report it here */
     }
   }
@@ -3045,7 +3072,8 @@ class CassetteAgentSession implements AgentSession {
       let msg: any;
       try {
         msg = JSON.parse(line);
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         // record the malformed line index so replayCassette can surface it as a
         // replay_protocol_error assertion failure — a malformed line could conceal a failed
         // assertion, so a silent skip risks a false-green.
@@ -3064,6 +3092,7 @@ class CassetteAgentSession implements AgentSession {
       try {
         parsed = parseMessage(msg);
       } catch (e) {
+        rethrowIfExit(e);
         const message = (e as Error)?.message ?? String(e);
         warn(
           `::warning:: [replay] cassette events line ${i} is a malformed control frame — recording as replay_protocol_fidelity failure: ${message}\n`,
@@ -3144,7 +3173,8 @@ function buildControlOutIndex(controlOut: string[]): {
     let m: any;
     try {
       m = JSON.parse(line);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       // a malformed controlOut line is cassette corruption, not a skippable nuisance. Track it so
       // replayCassette fails replay protocol fidelity unconditionally (a dropped non-decision envelope used
       // to let a corrupt cassette green if the line wasn't referenced).
@@ -3209,7 +3239,8 @@ function withPartlyScriptedFindings(inner: Decider, rules: Scenario["answers"] |
   let scripted: ScriptedDecider | undefined;
   try {
     scripted = rules?.length ? new ScriptedDecider(rules) : undefined;
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     scripted = undefined; // an uncompilable frozen pattern: the finding is report-only, never fail the replay on it
   }
   if (!scripted) return inner;
@@ -3237,7 +3268,8 @@ function frozenToolResults(events: string[]): Map<string, string> {
     let m: unknown;
     try {
       m = JSON.parse(l);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       continue;
     }
     const content = (m as { message?: { content?: unknown } })?.message?.content;
@@ -3267,7 +3299,8 @@ function frozenToolUses(
     let m: unknown;
     try {
       m = JSON.parse(l);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       continue;
     }
     const content = (m as { message?: { content?: unknown } })?.message?.content;
@@ -3388,7 +3421,8 @@ function frozenHookResponses(events: string[]): Array<Record<string, unknown> | 
     try {
       const m = JSON.parse(l) as Record<string, unknown> | null;
       return m && typeof m === "object" && m.type === "system" && m.subtype === "hook_response" ? m : undefined;
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       return undefined;
     }
   });
@@ -3628,7 +3662,8 @@ function modelVisibleText(events: string[]): string {
     let e: unknown;
     try {
       e = JSON.parse(line);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       continue;
     }
     if (typeof e !== "object" || e === null) continue;
@@ -3814,6 +3849,7 @@ export function discoverScenarios(dir: string): ScenarioDiscovery {
     try {
       raw = parseYaml(readFileSync(f, "utf8"));
     } catch (e) {
+      rethrowIfExit(e);
       // Collapsed for the same reason the schema branch is compact: the `yaml` package's message is a
       // CODE FRAME (~6 lines per file, two of them blank), not a sentence. A corpus broken by one bad
       // indent — the likeliest way a whole directory breaks at once — would otherwise stay a wall of
@@ -3838,6 +3874,7 @@ export function discoverScenarios(dir: string): ScenarioDiscovery {
       parseScenarioFile(f);
       out.scenarios.push(f);
     } catch (e) {
+      rethrowIfExit(e);
       out.broken.push({ file: f, error: (e as Error).message });
     }
   }
@@ -4064,6 +4101,7 @@ export function readCassetteForScan(path: string): { scannable: ScannableCassett
   try {
     raw = JSON.parse(readFileSync(path, "utf8"));
   } catch (e) {
+    rethrowIfExit(e);
     return { error: `unreadable / invalid cassette JSON: ${(e as Error).message}` };
   }
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return { error: "not a JSON object" };
@@ -4227,6 +4265,7 @@ export function readCassette(path: string): { cassette: Cassette } | { error: st
   try {
     raw = JSON.parse(readFileSync(path, "utf8"));
   } catch (e) {
+    rethrowIfExit(e);
     return { error: `unreadable / invalid cassette JSON: ${(e as Error).message}` };
   }
   // A multi-leg cassette (v18+) is its own form, read by replay and verify-cassettes. Every other reader refuses it by
@@ -4416,7 +4455,8 @@ export function resolvePreflightTier(scenario: Scenario): string {
   if (scenario.fidelity !== "cowork") return scenario.fidelity;
   try {
     return decideLoopFromBaseline(loadBaseline(scenario.baseline)) === "host" ? "hostloop" : "container";
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return "unresolvable";
   }
 }
@@ -4484,7 +4524,8 @@ function realish(p: string): string {
   }
   try {
     return join(realpathSync(dir), ...tail);
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return resolve(p);
   }
 }
@@ -4550,7 +4591,8 @@ export function cassettePortabilityPreflight(
     let session: string | undefined;
     try {
       session = expandUserPath(scenario.session);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       session = undefined;
     }
     if (session !== undefined) refs.push({ name: "session", path: realish(session) });
@@ -4996,6 +5038,7 @@ export async function cmdRecord(args: string[]) {
       }),
     );
   } catch (e) {
+    rethrowIfExit(e);
     const msg = (e as Error).message;
     return fail("record", "usage", msg, hostInventoryFlagHint("record", msg), asJson);
   }
@@ -5108,6 +5151,7 @@ export async function cmdRecord(args: string[]) {
           noRedact,
         });
       } catch (e) {
+        rethrowIfExit(e);
         if (e instanceof UsageError) return fail("record", "usage", e.message, undefined, asJson);
         throw e;
       }
@@ -5152,6 +5196,7 @@ export async function cmdRecord(args: string[]) {
       else log(`${sr.verdict.pass ? "✓" : "✗"} recorded ${sr.legs.length}-leg scenario → ${cassettePath}`);
       return process.exit(0);
     } catch (e) {
+      rethrowIfExit(e);
       if (e instanceof RecordPostRunRefusalError || e instanceof UsageError)
         return fail("record", e instanceof UsageError ? "usage" : "runtime", (e as Error).message, undefined, asJson);
       throw e;
@@ -5187,6 +5232,7 @@ export async function cmdRecord(args: string[]) {
     try {
       disc = selectDiscovered(all, caseSelectors);
     } catch (e) {
+      rethrowIfExit(e);
       if (e instanceof UsageError) return fail("record", "usage", `record: ${e.message}`, undefined, asJson);
       throw e;
     }
@@ -5203,7 +5249,8 @@ export async function cmdRecord(args: string[]) {
         try {
           const cp = defaultCassettePath(parseScenarioFile(f).name);
           byPath.set(cp, [...(byPath.get(cp) ?? []), f]);
-        } catch {
+        } catch (caught) {
+          rethrowIfExit(caught);
           /* classified broken by discovery */
         }
       }
@@ -5354,7 +5401,8 @@ export async function cmdRecord(args: string[]) {
         let sc;
         try {
           sc = parseScenarioFile(f);
-        } catch {
+        } catch (caught) {
+          rethrowIfExit(caught);
           continue; // already classified as `broken` by discoverScenarios
         }
         parsedNames.push(sc.name);
@@ -5520,6 +5568,7 @@ export async function cmdRecord(args: string[]) {
     try {
       scenario = loadRunnableScenario(target);
     } catch (e) {
+      rethrowIfExit(e);
       // Forward the HINT: the message is now compact, and `error.hint` is where the full Zod issue
       // array lives for anyone who wants it. Passing `undefined` here would drop it on the floor and
       // make "nothing is lost, it only moved" false for this path.
@@ -5648,7 +5697,8 @@ export async function cmdRecord(args: string[]) {
     try {
       mkdirSync(deciderDir, { recursive: true });
       process.on("exit", () => writeDoneMarker(deciderDir));
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       /* a dir we cannot create is the channel's problem to report, not a reason to fail early here */
     }
   }
@@ -5661,6 +5711,7 @@ export async function cmdRecord(args: string[]) {
     try {
       scenario = loadRunnableScenario(target);
     } catch (e) {
+      rethrowIfExit(e);
       return fail("record", "usage", `record: cannot parse scenario: ${(e as Error).message}`, (e as UsageError).hint, asJson);
     }
   }
@@ -5722,7 +5773,8 @@ export async function cmdRecord(args: string[]) {
       if (src.path) {
         try {
           sc = parseScenarioFile(src.path);
-        } catch {
+        } catch (caught) {
+          rethrowIfExit(caught);
           continue;
         }
       } else if (fromEmbedded) {
@@ -5793,6 +5845,7 @@ export async function cmdRecord(args: string[]) {
           staleItems[i] = { cassette: cp, status: "recorded" };
           return true;
         } catch (e) {
+          rethrowIfExit(e);
           log(`  ✗ ${tag} ${cp}: ${(e as Error).message}`);
           staleItems[i] = { cassette: cp, status: "failed", error: (e as Error).message };
           return false;
@@ -5858,6 +5911,7 @@ export async function cmdRecord(args: string[]) {
         staleItems[i] = recordedItem({ cassette: cp }, r.result, cp);
         return true;
       } catch (e) {
+        rethrowIfExit(e);
         // A source without `fidelity:` gets the remedy worded for THIS cassette: add the tier it recorded.
         // The generic remedy leads with `container`, which on a hostloop/protocol cassette would switch the
         // tier on the next record — a recording-shaping change nobody chose.
@@ -5927,7 +5981,8 @@ export async function cmdRecord(args: string[]) {
     const unpinned = disc.scenarios.filter((f) => {
       try {
         return unresolvedModelPreflight(parseScenarioFile(f), modelOverride) !== undefined;
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         return false;
       }
     });
@@ -5941,7 +5996,8 @@ export async function cmdRecord(args: string[]) {
       for (const f of disc.scenarios) {
         try {
           names.push(parseScenarioFile(f).name);
-        } catch {
+        } catch (caught) {
+          rethrowIfExit(caught);
           /* unparseable → classified `broken`; the record path reports it */
         }
       }
@@ -5961,7 +6017,8 @@ export async function cmdRecord(args: string[]) {
         try {
           const sc = parseScenarioFile(f);
           preflightItems.push({ scenario: sc, policyDirs: [process.cwd(), dirname(f), dirname(defaultCassettePath(sc.name))] });
-        } catch {
+        } catch (caught) {
+          rethrowIfExit(caught);
           /* unparseable → the record path reports it below */
         }
       }
@@ -6002,6 +6059,7 @@ export async function cmdRecord(args: string[]) {
         batchItems[i] = recordedItem({ file: f }, r.result, r.cassettePath);
         return true;
       } catch (e) {
+        rethrowIfExit(e);
         const why = recordErrorText(e);
         log(`  ✗ ${tag} ${why}`);
         if (e instanceof RecordPostRunRefusalError) batchBudget.add(budgetFields(e.result).costUsd);
@@ -6082,6 +6140,7 @@ export async function cmdRecord(args: string[]) {
       if (r.delta) log(`  vs the cassette it replaced: ${r.delta}`);
     }
   } catch (e) {
+    rethrowIfExit(e);
     // A scenario naming no baseline is a usage mistake like any other entry point's: exit 2 with the
     // valid baselines as the hint, not record's general exit 1.
     // A baseline FILE that exists but does not load is a refusal of a scenario that loaded: exit 1, as it was
@@ -6170,7 +6229,8 @@ function duplicateCassetteTargets(files: string[]): string[] {
     let cp: string;
     try {
       cp = defaultCassettePath(parseScenarioFile(f).name);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       continue; // unparseable here would have been classified `broken`; let the record path report it
     }
     const prev = targets.get(cp);
@@ -6230,7 +6290,8 @@ export function preSpendVerdicts(
     let mounts: string[] = [];
     try {
       mounts = sessionOriginSources(loadSessionFromFile(scenario.session), "(inline)", scenario.workspace_fixture);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       /* the session's own load error is reported by the real path */
     }
     const pw = pairwiseRefsRefusal(scenario, scenarioPairwiseSetup(scenario), mounts);
@@ -6263,7 +6324,8 @@ export function preSpendVerdicts(
             `refusing to overwrite ${cassettePath}: it belongs to scenario "${existingName}", but this record is "${scenario.name}" ` +
             `(their names slugify to the same default path — pass --out <file> to disambiguate, or --force to overwrite).`,
         });
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       /* an unreadable/malformed existing cassette is not a collision signal — let the write proceed */
     }
   }
@@ -6339,6 +6401,7 @@ async function recordScenarioObject(
   try {
     return await freezeRecordedRun(scenario, opts, extraPolicyDirs, result);
   } catch (e) {
+    rethrowIfExit(e);
     if (e instanceof RecordPostRunRefusalError) throw e;
     throw new RecordPostRunRefusalError((e as Error).message ?? String(e), result, { cause: e });
   }
@@ -6532,7 +6595,8 @@ export async function freezeRecordedRun(
   try {
     const baseline = loadBaseline(result.baseline);
     agentBinaryFormat = baseline.agentBinary.format;
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     // Baseline failed to load — proceed without agentBinaryFormat (it's optional).
   }
   // The STAMPED version — the minimum a reader needs to interpret THIS scenario, not the build's max
@@ -6621,6 +6685,7 @@ export async function freezeRecordedRun(
       await scrubVerification.verify(base, scrub.cassette, dirname(cassettePath));
       menuScrubbed = scrub.cassette;
     } catch (e) {
+      rethrowIfExit(e);
       warn(
         `::warning:: record: the recorder's account-data scrub (${scrub.kinds.join(", ")}) could not be verified as ` +
           `verdict-preserving — ${(e as Error).message.split("\n")[0]}. The cassette is written UNSCRUBBED so this paid run ` +
@@ -6728,7 +6793,8 @@ export function behaviourSummary(cassette: Pick<Cassette, "controlOut" | "events
       const e = typeof raw === "string" ? JSON.parse(raw) : raw;
       const qs = e?.response?.response?.updatedInput?.questions;
       if (Array.isArray(qs) && qs.length) gates += 1;
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       /* a malformed controlOut line is another check's finding, not this one's */
     }
   }
@@ -6738,7 +6804,8 @@ export function behaviourSummary(cassette: Pick<Cassette, "controlOut" | "events
       const e = typeof raw === "string" ? JSON.parse(raw) : raw;
       const blocks = e?.message?.content;
       if (Array.isArray(blocks)) for (const b of blocks) if (b?.type === "tool_use") toolCalls += 1;
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       /* ditto */
     }
   }
@@ -6748,7 +6815,8 @@ export function behaviourSummary(cassette: Pick<Cassette, "controlOut" | "events
 function behaviourSummaryOfFile(path: string): BehaviourSummary | undefined {
   try {
     return behaviourSummary(JSON.parse(readFileSync(path, "utf8")) as Cassette);
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return undefined; // unreadable prior ⇒ no delta; never fail a successful record over a reporting extra
   }
 }
@@ -6993,6 +7061,7 @@ export function scenarioContentDrift(
     try {
       onDisk = parseScenarioFile(src.path);
     } catch (e) {
+      rethrowIfExit(e);
       // The loader REJECTED the recorded source — a schema violation (e.g. no `fidelity:`, required since
       // 4.0.0), a malformed assertion regex, a reserved value. None of those is transient: until the file
       // is fixed, an edited-but-not-re-recorded prompt goes undetected on every run of this gate. "Cannot
@@ -7035,6 +7104,7 @@ export function scenarioContentDrift(
       };
     return { verifiable: true, drifted };
   } catch (e) {
+    rethrowIfExit(e);
     // Defense-in-depth: any resolution error (e.g. a lenient cassette missing scenario.name, which
     // `_findScenarioOnDisk` would slug) degrades to "can't check" — NEVER aborts the verify-cassettes batch.
     return { verifiable: false, reason: `scenario-drift check skipped (${(e as Error).message})` };
@@ -7464,6 +7534,7 @@ export async function cmdReplay(args: string[]) {
       }),
     );
   } catch (e) {
+    rethrowIfExit(e);
     const msg = String((e as Error).message);
     return fail("replay", "usage", msg, hostInventoryFlagHint("replay", msg), asJson);
   }
@@ -7739,6 +7810,7 @@ export async function cmdReplay(args: string[]) {
         try {
           onDisk = parseScenarioFile(srcPath);
         } catch (e) {
+          rethrowIfExit(e);
           if (e instanceof FidelityMissingError)
             throw new Error(`--assert-from: ${srcPath} does not load: ${fidelityMissingForCassette(e, rc.cassette.scenario)}`);
           throw new Error(`--assert-from: failed to parse ${srcPath}: ${compactSchemaError((e as Error).message)}`);
@@ -7809,6 +7881,7 @@ export async function cmdReplay(args: string[]) {
             try {
               onDisk = parseScenarioFile(src.path);
             } catch (e) {
+              rethrowIfExit(e);
               if (e instanceof FidelityMissingError)
                 warn(
                   `::notice:: [replay] ${src.path} does not load: ${fidelityMissingForCassette(e, rc.cassette.scenario)} — replay used the scenario frozen in the cassette and is unaffected.\n`,
@@ -7841,7 +7914,8 @@ export async function cmdReplay(args: string[]) {
                 );
             }
           }
-        } catch {
+        } catch (caught) {
+          rethrowIfExit(caught);
           /* on-disk file is decoration on the default lane — a parse/read failure must not affect the run */
         }
       }
@@ -7859,6 +7933,7 @@ export async function cmdReplay(args: string[]) {
         notesSink: (ns: string[]) => collectNotes(f, ns),
       });
     } catch (e) {
+      rethrowIfExit(e);
       log(`replay: ${f}: ${(e as Error)?.message ?? String(e)}`);
       results.push(replayErrorResult(f)); // turns the envelope's ok false (no false green)
       worst = Math.max(worst, 2);
@@ -7893,6 +7968,7 @@ export async function cmdReplay(args: string[]) {
       try {
         await writeReassertedAssertBlock(f, rc.cassette, reassertWriteCtx.onDisk, reassertWriteCtx.srcPath, verdict, allowFailing);
       } catch (e) {
+        rethrowIfExit(e);
         log(`replay --write: ${f}: ${(e as Error)?.message ?? String(e)}`);
         worst = Math.max(worst, 2);
       }
@@ -8135,6 +8211,7 @@ export async function cmdVerifyCassettes(args: string[]) {
       }),
     );
   } catch (e) {
+    rethrowIfExit(e);
     const msg = String((e as Error).message);
     return fail("verify-cassettes", "usage", msg, hostInventoryFlagHint("verify-cassettes", msg), asJson);
   }
@@ -8171,7 +8248,8 @@ export async function cmdVerifyCassettes(args: string[]) {
   const addAllow = (src: string, cls: string | undefined, flag: string): void => {
     try {
       allow.push({ cls, re: new RegExp(src, "i") });
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       return fail("verify-cassettes", "usage", `${flag}: invalid regex: ${src}`, undefined, asJson);
     }
   };
@@ -8186,6 +8264,7 @@ export async function cmdVerifyCassettes(args: string[]) {
     try {
       body = readFileSync(file, "utf8");
     } catch (e) {
+      rethrowIfExit(e);
       return fail("verify-cassettes", "usage", `--allow-patterns-file: cannot read ${file}: ${(e as Error).message}`, undefined, asJson);
     }
     for (const raw of body.split("\n")) {
@@ -8290,6 +8369,7 @@ export async function cmdVerifyCassettes(args: string[]) {
     try {
       return isMultiLegCassetteFile(f) ? verifyOneMultiLeg(f) : verifyOneCassette(f);
     } catch (e) {
+      rethrowIfExit(e);
       // A per-file crash must be TALLIED as that file's error, never abort the batch (results:[] reads
       // as "nothing to report" — a false-green by abort). Mirrors cmdReplay's per-file catch. A crash
       // is a bug to report, not staleness — it lands in `error` (exit 3, "could not verify"), never in
@@ -8502,6 +8582,7 @@ export async function cmdVerifyCassettes(args: string[]) {
         const rows = await computeCassetteMargins(rc.cassette, dirname(f), vcSessionOverride);
         if (rows.length) margins.push({ file: f, rows });
       } catch (e) {
+        rethrowIfExit(e);
         margins.push({ file: f, rows: [], error: (e as Error)?.message ?? String(e) }); // a diagnostic failure must not red the gate
       }
     }
@@ -8621,6 +8702,7 @@ export async function cmdRehash(args: string[]): Promise<void> {
       }),
     );
   } catch (e) {
+    rethrowIfExit(e);
     return fail("rehash", "usage", (e as Error).message, undefined, asJson);
   }
   applyParsedCommandGlobals("rehash", p, asJson);
@@ -8657,6 +8739,7 @@ export async function cmdRehash(args: string[]): Promise<void> {
   try {
     liveBaseline = loadBaseline("latest").appVersion;
   } catch (e) {
+    rethrowIfExit(e);
     return fail("rehash", "runtime", `rehash: cannot load latest baseline — ${(e as Error).message}`, undefined, asJson, 1);
   }
 
@@ -8994,7 +9077,8 @@ function loadCassetteSessionFolders(sessionPath: string, cassetteDir?: string): 
   if (!existsSync(resolved)) return [];
   try {
     return resolveSessionPaths(loadSession(parseSessionFile(resolved)), dirname(resolved)).folders;
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return [];
   }
 }
@@ -9286,7 +9370,8 @@ export async function replayCassette(
             `the value was never consulted; verdict/exit code unaffected by this notice)\n`,
         );
       }
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       // Defense-in-depth only — never let a reporting failure abort replay.
     }
   }
@@ -9384,7 +9469,8 @@ export async function replayCassette(
       let m: any;
       try {
         m = JSON.parse(line);
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         continue;
       }
       if (m?.type !== "control_request" || m?.request?.subtype !== "hook_callback") continue;
@@ -9424,7 +9510,8 @@ export async function replayCassette(
       let m: any;
       try {
         m = JSON.parse(line);
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         continue;
       }
       if (m?.type !== "control_request") continue;
@@ -9454,7 +9541,8 @@ export async function replayCassette(
         let req: DecisionRequest | null;
         try {
           req = toDecisionRequest(m);
-        } catch {
+        } catch (caught) {
+          rethrowIfExit(caught);
           continue; // malformed frame — already surfaced elsewhere as a replay_protocol_fidelity failure
         }
         if (!req || req.kind !== "permission" || !FILE_ATTEMPT_TOOLS.has(req.tool)) continue;
@@ -9793,7 +9881,8 @@ export async function replayCassette(
         let original: string;
         try {
           original = readFileSync(abs, "utf8");
-        } catch {
+        } catch (caught) {
+          rethrowIfExit(caught);
           continue; // not materialized (out of a user-visible root) — nothing to perturb
         }
         try {
@@ -10191,6 +10280,7 @@ function safeLines(path: string): string[] {
       .split("\n")
       .filter((l) => l.trim());
   } catch (err: unknown) {
+    rethrowIfExit(err);
     // File-not-found is normal (e.g. no control-out.jsonl on legacy cassettes) — stay quiet.
     // Any other error (permissions, corrupted inode, etc.) is unexpected and must be loud.
     const code = (err as NodeJS.ErrnoException).code;

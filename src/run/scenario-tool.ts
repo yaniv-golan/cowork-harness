@@ -8,6 +8,7 @@ import { writeAllSync } from "../io.js";
 import { LINT_VALUE_FLAGS, lintPrepass, type LintFinding } from "./lint-load.js";
 import { stripCommandGlobals } from "./command-globals.js";
 
+import { rethrowIfExit } from "./exit.js";
 // Synchronous fd write (match envelope.ts/cli.ts/doctor.ts): writeAllSync retries EAGAIN and loops on
 // short writes so the whole payload lands before process.exit on a pipe (see src/io.ts).
 const out = (s: string) => writeAllSync(1, s + "\n");
@@ -118,6 +119,7 @@ function runLintLike(subcommand: "lint" | "lint-skill", args: string[], prepass:
   try {
     parseOutputFormat(args);
   } catch (e) {
+    rethrowIfExit(e);
     fail(subcommand, "usage", String((e as Error).message), undefined, isJsonOutput(args));
   }
   // --dotenv / --run-dir after the subcommand: applied here (python knows neither), then not forwarded.
@@ -142,6 +144,7 @@ function runLintLike(subcommand: "lint" | "lint-skill", args: string[], prepass:
         writeFileSync(file, JSON.stringify(findings));
         pyEnv[EXTRA_FINDINGS_ENV] = file;
       } catch (e) {
+        rethrowIfExit(e);
         // Never fall through to a findings-less python run: that would report a scenario the loader
         // rejects as clean, the false green this pre-pass exists to remove.
         cleanup(handoffDir);
@@ -189,7 +192,8 @@ function runLintLike(subcommand: "lint" | "lint-skill", args: string[], prepass:
   let findings: unknown;
   try {
     findings = JSON.parse(String(r.stdout ?? ""));
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     // stdio's stderr slot is "inherit" (see the spawnSync call above), so python's usage text already
     // reached the step log directly — r.stderr is always null here, there's no tail to surface as a hint.
     // A non-zero exit with no JSON is python refusing the arguments (argparse): a usage error, python's code.
@@ -231,7 +235,8 @@ function cleanup(dir: string | undefined): void {
   if (!dir) return;
   try {
     rmSync(dir, { recursive: true, force: true });
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     /* best effort: a leftover temp file must not change lint's verdict */
   }
 }
@@ -294,6 +299,7 @@ export function cmdScaffoldFlagBuilt(args: string[]): never {
   try {
     parseOutputFormat(args);
   } catch (e) {
+    rethrowIfExit(e);
     return fail("scaffold", "usage", String((e as Error).message), undefined, isJsonOutput(args));
   }
   // isJsonOutput, not the flag alone: COWORK_HARNESS_OUTPUT_FORMAT=json asks for json the same way the flag

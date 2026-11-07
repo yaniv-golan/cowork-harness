@@ -49,6 +49,53 @@ describe("pMapBounded — bounded-concurrency async map", () => {
       }),
     ).rejects.toThrow("boom");
   });
+
+  it("a throw DRAINS the pool: no new item starts, the in-flight one settles first, then the first error rejects", async () => {
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const started: number[] = [];
+    const settled: number[] = [];
+    const stops: number[] = [];
+    let rejectedAfter: number[] | undefined;
+    const p = pMapBounded(
+      [1, 2, 3, 4, 5, 6],
+      2,
+      async (x) => {
+        started.push(x);
+        if (x === 1) await sleep(5);
+        if (x === 2) {
+          await sleep(30);
+          throw new Error(`item ${x} failed`);
+        }
+        if (x === 3) await sleep(120);
+        settled.push(x);
+        return x;
+      },
+      { onStop: (n) => stops.push(n) },
+    ).catch((e: Error) => {
+      rejectedAfter = [...settled];
+      throw e;
+    });
+    await expect(p).rejects.toThrow("item 2 failed");
+    expect(started).toEqual([1, 2, 3]); // 4, 5 and 6 never start
+    expect(rejectedAfter).toEqual([1, 3]); // item 3 was in flight at the throw and settled before the rejection
+    expect(stops).toEqual([1]); // called once, with the one other item in flight
+  });
+
+  it("a second throw while draining does not replace the first error or call onStop again", async () => {
+    const stops: number[] = [];
+    await expect(
+      pMapBounded(
+        [1, 2],
+        2,
+        async (x) => {
+          await new Promise((r) => setTimeout(r, x === 1 ? 5 : 30));
+          throw new Error(`item ${x} failed`);
+        },
+        { onStop: (n) => stops.push(n) },
+      ),
+    ).rejects.toThrow("item 1 failed");
+    expect(stops).toEqual([1]);
+  });
 });
 
 const CLI = resolve("dist/cli.js");

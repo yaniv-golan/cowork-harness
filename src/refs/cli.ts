@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { FsRefusal, lexists } from "../hillclimb/fs.js";
 import { REF_EXTS, addRefDocs, freezeRef, verifyStore, type RefSource } from "./store.js";
 
+import { rethrowIfExit } from "../run/exit.js";
 /** One kept run, composed for freezing. `live` compares the recomposed document with the fingerprint the live
  *  judge recorded: `match`, `differs`, or `unknown` (no fingerprint: a run recorded before the assert existed). */
 export interface ComposedForFreeze {
@@ -170,6 +171,7 @@ export function freezeFromRun(opts: FreezeOptions, deps: FreezeDeps): FreezeOutc
       added,
     };
   } catch (e) {
+    rethrowIfExit(e);
     if (e instanceof FsRefusal) return refuse(`ref freeze: ${e.message}`, caseId);
     throw e;
   }
@@ -203,6 +205,7 @@ export async function cmdRef(args: string[]): Promise<never> {
       }),
     );
   } catch (e) {
+    rethrowIfExit(e);
     return fail(CMD, "usage", scrub((e as Error).message, collectSecrets()), undefined, json);
   }
   applyParsedCommandGlobals(CMD, p, json);

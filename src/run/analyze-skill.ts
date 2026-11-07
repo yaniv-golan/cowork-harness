@@ -8,6 +8,7 @@ import { analyzeArtifacts } from "./analyze-artifact.js";
 import { confirmArtifactRuntime, type RuntimeVerdict } from "./analyze-artifact-runtime.js";
 import { writeAllSync } from "../io.js";
 
+import { rethrowIfExit } from "./exit.js";
 /** Extensions an author plausibly points `analyze-skill` at expecting an artifact/write-back scan, that the
  *  artifact analyzer deliberately does NOT parse: the in-process acorn parser reads neither TypeScript
  *  annotations nor JSX (`src/run/analyze-artifact.ts`'s `CODE_EXTS` comment — advertising them produced
@@ -874,6 +875,7 @@ function walkMarkdownDeep(dir: string, visited: Set<string> = new Set(), failure
   try {
     real = realpathSync(dir);
   } catch (e) {
+    rethrowIfExit(e);
     // A realpath failure that is NOT plain-missing (e.g. EACCES on a path component) means the subtree
     // exists but could not be resolved — an evidence gap, not a silent empty.
     if (!isMissingErr(e)) failures.push({ path: dir, stage: "select", reason: `cannot resolve directory: ${(e as Error).message}` });
@@ -886,6 +888,7 @@ function walkMarkdownDeep(dir: string, visited: Set<string> = new Set(), failure
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch (e) {
+    rethrowIfExit(e);
     // An unreadable contract subtree (EACCES/EIO/…) must surface as could-not-verify, never vanish into
     // a false clean. A plain-missing dir was already handled by `existsSync` above.
     if (!isMissingErr(e)) failures.push({ path: dir, stage: "select", reason: `cannot read directory: ${(e as Error).message}` });
@@ -905,6 +908,7 @@ function walkMarkdownDeep(dir: string, visited: Set<string> = new Set(), failure
       try {
         st = statSync(full); // follows the link — resolves to the TARGET's type
       } catch (se) {
+        rethrowIfExit(se);
         // A dangling symlink (ENOENT) is a legitimate skip; any other stat failure on a real target is a gap.
         if (!isMissingErr(se))
           failures.push({ path: full, stage: "select", reason: `cannot stat symlink target: ${(se as Error).message}` });
@@ -943,6 +947,7 @@ function listSubdirs(dir: string, failures: AnalysisFailure[] = []): string[] {
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch (e) {
+    rethrowIfExit(e);
     // An unreadable skills/ directory (EACCES/EIO/…) must NOT read as "no nested skills" — that would be a
     // false clean over only the remaining contract files. A plain-missing dir was already handled above; anything else is
     // an evidence gap that surfaces as could-not-verify.
@@ -960,6 +965,7 @@ function listSubdirs(dir: string, failures: AnalysisFailure[] = []): string[] {
       try {
         st = statSync(join(dir, e.name));
       } catch (se) {
+        rethrowIfExit(se);
         if (!isMissingErr(se))
           failures.push({ path: join(dir, e.name), stage: "select", reason: `cannot stat skills entry: ${(se as Error).message}` });
         continue; // dangling symlink
@@ -1139,6 +1145,7 @@ function expandGlob(pattern: string): { files: string[]; failures: AnalysisFailu
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch (e) {
+    rethrowIfExit(e);
     if (!isMissingErr(e)) failures.push({ path: dir, stage: "select", reason: `cannot read glob directory: ${(e as Error).message}` });
     return { files: [], failures };
   }
@@ -1154,7 +1161,8 @@ function expandGlob(pattern: string): { files: string[]; failures: AnalysisFailu
       let st;
       try {
         st = statSync(full); // follows the link — resolves to the TARGET's type
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         continue; // dangling symlink
       }
       if (st.isFile()) files.push(resolve(full));
@@ -1202,6 +1210,7 @@ export async function cmdAnalyzeSkill(args: string[]): Promise<void> {
       }),
     );
   } catch (e) {
+    rethrowIfExit(e);
     return fail("analyze-skill", "usage", String((e as Error).message), undefined, asJson);
   }
   applyParsedCommandGlobals("analyze-skill", p, asJson);
@@ -1321,6 +1330,7 @@ export async function cmdAnalyzeSkill(args: string[]): Promise<void> {
     try {
       text = readFileSync(file, "utf8");
     } catch (e) {
+      rethrowIfExit(e);
       return fail("analyze-skill", "usage", `analyze-skill: cannot read ${file}: ${(e as Error).message}`, undefined, asJson);
     }
     const suppressed = hasIgnoreMarker(text);
@@ -1372,14 +1382,16 @@ export async function cmdAnalyzeSkill(args: string[]): Promise<void> {
       let st;
       try {
         st = statSync(file);
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         continue; // a stat/read failure is already surfaced as an analysisFailure by Tier A
       }
       if (st.size > STATIC_BYTE_CAP) continue; // over-cap: already surfaced by Tier A; do NOT execute
       let html: string;
       try {
         html = readFileSync(file, "utf8");
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         continue; // a read failure is already surfaced as an analysisFailure by Tier A
       }
       runtimeConfirmations.push({ path: file, ...(await confirmArtifactRuntime(file, html)) });

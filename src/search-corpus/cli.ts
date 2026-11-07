@@ -17,6 +17,7 @@ import {
 } from "./pool.js";
 import { DEFAULT_RETRIEVAL } from "./retrieval.js";
 
+import { rethrowIfExit } from "../run/exit.js";
 const CMD = "search-pool";
 
 export const SEARCH_POOL_USAGE =
@@ -80,6 +81,7 @@ export async function cmdSearchPool(args: string[]): Promise<never> {
       }),
     );
   } catch (e) {
+    rethrowIfExit(e);
     return fail(CMD, "usage", scrub((e as Error).message, collectSecrets()), undefined, json);
   }
   applyParsedCommandGlobals(CMD, p, json);
@@ -157,6 +159,7 @@ export async function cmdSearchPool(args: string[]): Promise<never> {
     }
     return usage(sub ? `unknown search-pool subcommand: ${sub}` : "search-pool needs a subcommand");
   } catch (e) {
+    rethrowIfExit(e);
     // A pool or export that cannot be read (missing, not JSON) is a runtime refusal, like a failed check.
     const code = (e as NodeJS.ErrnoException).code;
     if (

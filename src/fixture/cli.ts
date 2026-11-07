@@ -8,6 +8,7 @@ import { collectSecrets, scrub } from "../secrets.js";
 import { exportFixture, type ExportOutcome } from "./export.js";
 import { FIXTURE_BOOLEAN_FLAGS, FIXTURE_REPEATED_FLAGS, FIXTURE_USAGE, FIXTURE_VALUE_FLAGS } from "./usage.js";
 
+import { rethrowIfExit } from "../run/exit.js";
 const CMD = "fixture";
 
 function textReport(o: ExportOutcome): string[] {
@@ -41,6 +42,7 @@ export async function cmdFixture(args: string[]): Promise<never> {
       }),
     );
   } catch (e) {
+    rethrowIfExit(e);
     return fail(CMD, "usage", scrub((e as Error).message, collectSecrets()), undefined, json);
   }
   applyParsedCommandGlobals(CMD, p, json);

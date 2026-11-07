@@ -8,6 +8,7 @@ import { deriveOutcome } from "./outcome.js";
 import { writeAllSync } from "../io.js";
 import { budgetStatus, type BudgetStatus } from "./budget-status.js";
 
+import { rethrowIfExit } from "./exit.js";
 /** The `--max-budget-usd` marker as a frame fragment: `{budget}` when a pre-flight recorded a status, `{}`
  *  otherwise — so a command payload that ever carries its own `budget` key is not overwritten with
  *  `undefined` on an invocation that passed no cap. Spread AFTER a payload: when a status exists it is a
@@ -26,7 +27,8 @@ const log = (s: string) => writeAllSync(2, s + "\n");
 export function pkgVersion(): string {
   try {
     return JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version ?? "0.0.0";
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return "0.0.0";
   }
 }

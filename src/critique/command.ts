@@ -324,7 +324,8 @@ export function childForcesHostLoop(dotenvPath: string | undefined): boolean {
   if (dotenvPath === undefined) return false;
   try {
     return parseDotenv(readFileSync(dotenvPath, "utf8")).get("CLAUDE_FORCE_HOST_LOOP") === "1";
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return false;
   }
 }
@@ -348,6 +349,7 @@ export function resolveCoworkTier(
   try {
     baseline = load();
   } catch (e) {
+    rethrowIfExit(e);
     throw new Error(
       `--fidelity cowork could not be resolved: no readable platform baseline (${e instanceof Error ? e.message : String(e)}). ` +
         `cowork means "whichever tier real Cowork would use here", which is read from the baseline's loop gate — ` +
@@ -774,7 +776,8 @@ export function resolveCritiquedSkillDir(skillFolder: string, skillSelector: str
   let stat;
   try {
     stat = statSync(skillFolder);
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     throw new Error(`skill folder not found: ${tildeify(skillFolder)}`);
   }
   if (!stat.isDirectory()) throw new Error(`not a directory: ${tildeify(skillFolder)}`);
@@ -793,7 +796,8 @@ export function resolveCritiquedSkillDir(skillFolder: string, skillSelector: str
         .filter((e) => e.isDirectory() && existsSync(join(skillFolder, "skills", e.name, "SKILL.md")))
         .map((e) => e.name)
         .sort();
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       return [];
     }
   };
@@ -905,7 +909,8 @@ function killAllOutstandingChildGroups(): void {
   for (const pid of outstandingChildPids) {
     try {
       process.kill(-pid, "SIGKILL");
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       /* already gone */
     }
   }
@@ -997,7 +1002,8 @@ function parseEnvelope(stdout: string): SkillEnvelope | null {
   if (!line) return null;
   try {
     return JSON.parse(line) as SkillEnvelope;
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return null;
   }
 }
@@ -1989,7 +1995,8 @@ export function writeGradedAliases(outDir: string): void {
       // `trace.graded.json` for the one active consumer, rather than failing loud.
       const src = turnArtifactPath(outDir, 1, artifact);
       if (existsSync(src)) copyFileSync(src, gradedAliasPath(outDir, artifact));
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       /* best-effort convenience copy — never fail the run for it */
     }
   }
@@ -2003,6 +2010,7 @@ function writeRunArtifact(outDir: string, name: string, content: CritiqueFileCon
   try {
     writeFileSync(join(outDir, name), critiqueFileText(content));
   } catch (e) {
+    rethrowIfExit(e);
     process.stderr.write(`critique: could not write ${name} under ${tildeify(outDir)}: ${String(e)}\n`);
   }
 }
@@ -2064,6 +2072,7 @@ export function writeOutFile(outPath: string, state: ReportState, outputFormat: 
   try {
     writeFileSync(outPath, content);
   } catch (e) {
+    rethrowIfExit(e);
     process.stderr.write(`critique: --out ${tildeify(outPath)} could not be written: ${String(e)}\n`);
   }
 }
@@ -2257,6 +2266,7 @@ function runCorpusPreview(
     try {
       writeFileSync(opts.out, fileContent);
     } catch (e) {
+      rethrowIfExit(e);
       process.stderr.write(`critique: --out ${tildeify(opts.out)} could not be written: ${String(e)}\n`);
     }
   }
@@ -2313,7 +2323,8 @@ export function skillIdSharedFor(gradedSkillName: string | undefined, pluginRoot
   const id = sanitizeSkillName(gradedSkillName);
   try {
     return registeredSkills(pluginRoot).filter((s) => s.id === id).length > 1;
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return false;
   }
 }
@@ -2334,7 +2345,8 @@ export function computeSkillInvocationVerdict(args: {
   const eventsText = (() => {
     try {
       return readTurn1Slice(outDir, "events.jsonl", boundary);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       return undefined; // unreadable = unobservable, never "no sub-agent ran a skill"
     }
   })();
@@ -2443,6 +2455,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         ...(cluster !== undefined ? { cluster: cluster as ClusterMode } : {}),
       });
     } catch (e) {
+      rethrowIfExit(e);
       if (e instanceof CompareRefusal) return refuse("usage", `critique --compare: ${e.message}`);
       throw e;
     }
@@ -2456,6 +2469,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       try {
         writeFileSync(out, content);
       } catch (e) {
+        rethrowIfExit(e);
         process.stderr.write(`critique: --out ${tildeify(out)} could not be written: ${String(e)}\n`);
       }
     process.exit(0);
@@ -2465,6 +2479,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   try {
     opts = prepareCritique(argv);
   } catch (e) {
+    rethrowIfExit(e);
     return refuse("usage", (e as Error).message);
   }
   json = opts.outputFormat === "json";
@@ -2493,6 +2508,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       removeSnapshot = staged.cleanup;
       onRefuse = staged.discard;
     } catch (e) {
+      rethrowIfExit(e);
       return refuse("usage", (e as Error).message);
     }
   }
@@ -2506,6 +2522,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     resolvedSkill = resolveCritiquedSkillDir(opts.skillFolder, opts.skillSelector);
     if (targetSource.kind === "git") resolvedSkill = { ...resolvedSkill, hashBasis: "git-commit" };
   } catch (e) {
+    rethrowIfExit(e);
     removeSnapshot();
     return refuse("usage", (e as Error).message);
   }
@@ -2763,7 +2780,8 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       try {
         const r2 = JSON.parse(readFileSync(turnArtifactPath(outDir, 2, "result.json"), "utf8")) as Record<string, unknown>;
         reflectionTurnUsd = sumCostUsd(r2.modelUsage);
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         /* unpriced */
       }
       // F38: `selfReport` is `undefined` (never a placeholder string) when the reflection turn produced no
@@ -2862,6 +2880,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
           },
         });
       } catch (e) {
+        rethrowIfExit(e);
         evaluatorError = (e as Error).message;
       }
     }
@@ -2908,6 +2927,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         skillHash: gradedSkillHash,
       });
     } catch (err) {
+      rethrowIfExit(err);
       warn(
         `::warning:: [critique] could not append the cost roll-up row to the run index: ${err instanceof Error ? err.message : String(err)}\n`,
       );
@@ -2974,6 +2994,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     // false in practice even after the other three were routed.
     if (state.infraFailure || state.evaluatorError) process.exit(EXIT_INSTRUMENT_FAILURE);
   } catch (e) {
+    rethrowIfExit(e);
     process.stderr.write(`critique: unexpected failure: ${(e as Error).stack ?? String(e)}\n`);
     process.exit(EXIT_INSTRUMENT_FAILURE); // an unexpected throw means no critique was produced
   }
@@ -2990,6 +3011,7 @@ export async function cmdCritique(argv: string[]): Promise<void> {
 }
 
 import { pathToFileURL } from "node:url";
+import { rethrowIfExit } from "../run/exit.js";
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   installOrphanCleanupHandlers();
   void main();

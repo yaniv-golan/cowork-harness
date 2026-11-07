@@ -9,13 +9,15 @@ import { MIGRATION_JOURNAL_DIR } from "./migrate-run-dir.js";
 import { evalIdOfLabel, isHillclimbLabel, isSymlink, readSmallJson, runLabelOf } from "./run-labels.js";
 import { isStatusStale, isValidRunStatus } from "./run-status.js";
 
+import { rethrowIfExit } from "./exit.js";
 const log = (s: string) => process.stderr.write(s + "\n");
 
 /** How many interrupted migrations are recorded for this scenario. */
 function liveJournalsFor(runsRoot: string, scenarioSlug: string): number {
   try {
     return readdirSync(join(runsRoot, MIGRATION_JOURNAL_DIR, scenarioSlug)).filter((f) => f.endsWith(".json")).length;
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return 0; // no journal dir for this scenario — the ordinary case
   }
 }
@@ -34,6 +36,7 @@ function pidAlive(pid: unknown): boolean {
     process.kill(pid, 0);
     return true;
   } catch (e) {
+    rethrowIfExit(e);
     return (e as NodeJS.ErrnoException).code === "EPERM";
   }
 }
@@ -88,14 +91,16 @@ export const PINNED_RUN_ID_RE = /^sess-[A-Za-z0-9_-]+$/;
 function isFile(p: string): boolean {
   try {
     return statSync(p).isFile();
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return false;
   }
 }
 function isDir(p: string): boolean {
   try {
     return statSync(p).isDirectory();
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return false;
   }
 }
@@ -120,7 +125,8 @@ export interface RunDirEvidence {
 function anyLegEvents(dir: string): boolean {
   try {
     return readdirSync(join(dir, "legs")).some((id) => isFile(join(dir, "legs", id, "events.jsonl")));
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return false;
   }
 }
@@ -208,7 +214,8 @@ function dirChildren(dir: string): string[] {
   let entries: Dirent[];
   try {
     entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return [];
   }
   const out = entries
@@ -227,7 +234,8 @@ function runIdNamed(dir: string): boolean {
   let names: string[];
   try {
     names = readdirSync(dir).filter((n) => !n.startsWith("."));
-  } catch {
+  } catch (caught) {
+    rethrowIfExit(caught);
     return false;
   }
   return names.length > 0 && names.every((n) => LOCAL_RUN_ID_RE.test(n) || PINNED_RUN_ID_RE.test(n));
@@ -425,6 +433,7 @@ export function cmdRunsGc(args: string[]): void {
       }),
     );
   } catch (e) {
+    rethrowIfExit(e);
     log((e as Error).message);
     return process.exit(2);
   }
@@ -482,7 +491,8 @@ export function cmdRunsGc(args: string[]): void {
   const readNames = (dir: string): string[] | undefined => {
     try {
       return readdirSync(dir);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       unreadable.push(dir);
       return undefined;
     }
@@ -523,7 +533,8 @@ export function cmdRunsGc(args: string[]): void {
     let st: ReturnType<typeof statSync>;
     try {
       st = statSync(scenarioDir);
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       continue;
     }
     if (!st.isDirectory()) continue;
@@ -553,7 +564,8 @@ export function cmdRunsGc(args: string[]): void {
     let entries: Dirent[];
     try {
       entries = readdirSync(scenarioDir, { withFileTypes: true });
-    } catch {
+    } catch (caught) {
+      rethrowIfExit(caught);
       unreadable.push(scenarioDir);
       continue;
     }
@@ -587,12 +599,14 @@ export function cmdRunsGc(args: string[]): void {
           bMtime = 0;
         try {
           aMtime = statSync(a.path).mtimeMs;
-        } catch {
+        } catch (caught) {
+          rethrowIfExit(caught);
           /* deleted between filter and sort — treat as oldest */
         }
         try {
           bMtime = statSync(b.path).mtimeMs;
-        } catch {
+        } catch (caught) {
+          rethrowIfExit(caught);
           /* deleted between filter and sort — treat as oldest */
         }
         const mtimeDiff = bMtime - aMtime;
@@ -623,7 +637,8 @@ export function cmdRunsGc(args: string[]): void {
       let mtime = now;
       try {
         mtime = statSync(d.path).mtimeMs;
-      } catch {
+      } catch (caught) {
+        rethrowIfExit(caught);
         /* deleted between filter and loop — treat as fresh (kept) */
       }
       if (pinnedOlderThanMs !== undefined && now - mtime > pinnedOlderThanMs) {
