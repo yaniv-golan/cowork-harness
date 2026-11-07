@@ -16,7 +16,7 @@ import type { FidelityTier, RunResult, Scenario } from "../types.js";
 import type { DoctorCheck } from "../run/doctor.js";
 import type { SessionConfig } from "../session.js";
 import { BoundaryError, UsageError } from "../errors.js";
-import { applySessionOverrides, expandHome } from "../session.js";
+import { applySessionOverrides, expandHome, configDirSingleRunRefusal } from "../session.js";
 import { loadBaseline } from "../baseline.js";
 import {
   parseScenarioFile,
@@ -836,6 +836,18 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
           ` (the same check as \`cowork-harness doctor --tier ${tier}\`)`,
         c.remedy,
       );
+  }
+  // A pinned config_dir belongs to one run; every rep of both arms is its own run.
+  for (const s of scenarios) {
+    let configDir: string | null | undefined;
+    try {
+      configDir = loadSessionFromFile(s.scenario.session).plugins.config_dir;
+    } catch (e) {
+      rethrowIfExit(e);
+      continue; // the arm reports a session that does not load itself
+    }
+    const singleRun = configDirSingleRunRefusal(`scenario "${s.scenario.name}"`, configDir, 2 * args.reps);
+    if (singleRun) throw new UsageError(singleRun);
   }
 
   // The judge and the LLM decider run the host `claude` isolated and tool-less, which needs a CLI that accepts the

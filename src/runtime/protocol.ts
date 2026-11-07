@@ -2,11 +2,10 @@ import { warn } from "../io.js";
 import { artifactsRootEnv, permissionPromptArgs } from "../answer-channel.js";
 import { spawn } from "node:child_process";
 import { mkdirSync, cpSync, existsSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import type { LaunchPlan } from "../session.js";
-import { SCRUBBED_AGENT_ENV_KEYS, workBaseOf } from "../session.js";
+import { SCRUBBED_AGENT_ENV_KEYS, workBaseOf, assertProtocolConfigSealed } from "../session.js";
 import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
 import { containedRealPath } from "../boundary-paths.js";
 import { BoundaryError, UsageError } from "../errors.js";
@@ -63,31 +62,6 @@ export function protocolOperatorEnv(plan: Pick<LaunchPlan, "baseEnv" | "agentEnv
   // only ADDS, and it rewrites TZ, which would give L0 normalized timezones.
   if (!env.ANTHROPIC_API_KEY && process.env.CLAUDE_CODE_OAUTH_TOKEN) env.CLAUDE_CODE_OAUTH_TOKEN = process.env.CLAUDE_CODE_OAUTH_TOKEN;
   return env;
-}
-
-/** The L0 agent always reads the run's managed config dir (`plan.configDir`), never the operator's own: their
- *  installed plugins, skills, hooks and MCP servers would otherwise be live beside the thing under test, and the
- *  agent's session transcripts would land among their own. Throws a `BoundaryError` when the two are the same dir
- *  (a pinned `plugins.config_dir` that names the operator's config dir). Both sides realpath'd, so a symlinked HOME
- *  cannot fake a difference. User-level config only: machine-level managed settings are outside any config dir. */
-export function assertProtocolConfigSealed(configDir: string): void {
-  const operatorConfigDir = realpathIfPossible(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"));
-  const agentConfigDir = realpathIfPossible(configDir);
-  if (agentConfigDir === operatorConfigDir)
-    throw new BoundaryError(
-      `cowork-harness: the protocol agent's config dir (${agentConfigDir}) is your own config dir — the agent would read ` +
-        `your installed plugins, skills, hooks and MCP servers and write its transcripts there. Unpin plugins.config_dir.`,
-    );
-}
-
-/** realpath when the path exists, else the path itself — a config dir that does not exist yet is still
- *  comparable by spelling, and a symlinked HOME (macOS /tmp, /var) must not read as a different dir. */
-function realpathIfPossible(p: string): string {
-  try {
-    return realpathSync(p);
-  } catch {
-    return p;
-  }
 }
 
 /**

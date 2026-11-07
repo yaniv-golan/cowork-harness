@@ -482,11 +482,9 @@ function readOriginMarker(path: string): OriginMarker | null {
  *      `mntHost`), NOT `outDir/work/session/mnt` — root is `join(VM_WORK_HOST, sessionId, "mnt",
  *      ".claude")`. Using the container root here would glob an empty (non-existent) dir and silently
  *      leave `reasoning` undefined on every microvm run.
- *    - protocol spawns the HOST `claude`, which writes child transcripts too — but where depends on the
- *      config branch `spawnProtocol` picked. Under managed config it sets `CLAUDE_CONFIG_DIR=plan.configDir`;
- *      off it, the agent uses the operator's REAL config dir, which must never be walked (it holds every
- *      other session the operator ever ran). So the root is whatever `spawnProtocol` returned as its
- *      `subagentConfigRoot` (the managed dir, or undefined) — decided by the runtime, never re-derived here.
+ *    - protocol spawns the HOST `claude`, which writes child transcripts under the run's managed config dir
+ *      (`CLAUDE_CONFIG_DIR=plan.configDir`). The root is whatever `spawnProtocol` returned as its
+ *      `subagentConfigRoot` — decided by the runtime, never re-derived here.
  *  Any other tier returns `undefined`, and the caller skips the capture entirely. */
 export function resolveSubagentConfigRoot(
   effectiveFidelity: string,
@@ -1396,8 +1394,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let searchCorpusError: string | null = null; // the frozen-promise check's verdict, folded into record.infraErrors below
   let deviceBridge: ReturnType<typeof startDeviceBridge> | undefined; // device_bridge's second container: removed after the agent's, before the network
   let deregisterHostLoopSidecarReap: (() => void) | undefined; // the hostloop sidecar's own Ctrl-C reap (spawnHostLoop)
-  // Where the protocol agent's child transcripts land — the managed config dir, or undefined when it read the
-  // operator's real one (see resolveSubagentConfigRoot). Set by spawnProtocol, never re-derived.
+  // Where the protocol agent's child transcripts land: the run's managed config dir (see resolveSubagentConfigRoot).
+  // Set by spawnProtocol, never re-derived.
   let protocolSubagentConfigRoot: string | undefined;
   let promptFidelityWarnings: string[] | undefined; // structured prompt warnings collected by renderPrompts
   // web_fetch provenance is gate-driven (coworkWebFetchViaApi) and host-loop only. The ref is

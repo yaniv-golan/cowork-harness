@@ -86,18 +86,23 @@ All notable changes to this project are documented here. The format is based on
   servers can no longer answer in place of the one under test, and its session transcripts stay in the run dir. A
   fresh config dir holds no login, so a run needs `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`),
   `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` in the environment or a `.env`; a Keychain or `/login` session is not
-  used. Without one, `run` (a file, a directory or a `--matrix`), `eval` and `hillclimb run` refuse before any run
-  starts (`run` exits 2, naming every such scenario), `skill` and `chat` refuse before the agent starts (`record`
-  already refused without a credential in the environment), and `doctor --tier protocol` reports the token as missing
-  (`✗`) instead of the former warning. Machine-level managed settings are outside any config dir and still reach the
+  used. Without one, `run` (a file, a directory, a `--matrix` or a `legs:` file), `eval` and `hillclimb run` refuse
+  before any run starts (`run` exits 2, naming every such scenario), `skill` and `chat` refuse before the agent
+  starts, and `doctor --tier protocol` reports the token as missing (`✗`) instead of the former warning. `critique`
+  (which runs at `container` or `hostloop`) now runs doctor's credential check for its tier before its task turn,
+  where a run with no usable credential used to reach the agent and end at "Not logged in".
+  `record`'s existing refusal without a credential in the environment (at every tier) now also covers a `legs:`
+  file, which used to reach its first leg. Machine-level managed settings are outside any config dir and still reach the
   agent.
 - **`ANTHROPIC_AUTH_TOKEN` reaches the protocol agent under its own name only.** It was also copied into
   `CLAUDE_CODE_OAUTH_TOKEN`; the agent sent the original anyway, so nothing billed differently. A rejected
-  `ANTHROPIC_AUTH_TOKEN` is not reported as an auth error at `protocol` or `hostloop`: the agent retries it until the
-  run's timeout, so the run ends as a timeout. `doctor` says so when it is your only credential.
+  `ANTHROPIC_AUTH_TOKEN` is not reported as an auth error at `protocol`: the agent retries it until the run's timeout,
+  so the run ends as a timeout. `hostloop`, whose agent gets the token the same way, is expected to behave alike (not
+  measured). `doctor` says so when it is your only credential.
 - **Breaking: a pinned `plugins.config_dir` is single-run.** The harness creates it (the path must not exist yet),
   marks it, and reuses it only for the same run's later legs and `--resume` turns. An existing directory the harness
-  did not create for this run is refused, so a real Claude config is never written to.
+  did not create for this run is refused, so a real Claude config is never written to. `run --repeat` (above 1),
+  `run --matrix`, `eval` and `hillclimb` refuse a pinned `config_dir` before the first run.
 - **Breaking: `--resume` refuses a session manifest without its identity stamps** (`sessionId` and `fidelity`), where
   it used to let one through with a warning. Start a fresh session, or delete the run dir and re-run with
   `--session-id`.

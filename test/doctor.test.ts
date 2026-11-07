@@ -632,7 +632,8 @@ describe("doctor — tokenCheck is the token row runDoctorChecks reports", () =>
 });
 
 // A rejected ANTHROPIC_AUTH_TOKEN where it reaches the agent (protocol; hostloop with no OAuth token) is retried by the
-// agent until the run's timeout — measured against a local 401 server — so the `ok` row says so. Status unchanged.
+// agent until the run's timeout — measured at protocol against a local 401 server, inferred at hostloop — so the `ok`
+// row says so. Status unchanged.
 describe("doctor — the ANTHROPIC_AUTH_TOKEN-only caveat", () => {
   const authOnly = probe({ hasToken: () => true, authTokenOnly: () => true });
   it.each(["protocol", "hostloop"] as const)("at %s: ok, with the timeout caveat", (tier) => {

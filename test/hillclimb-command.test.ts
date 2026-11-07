@@ -24,6 +24,15 @@ beforeEach(() => {
 afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
 describe("prepareCases", () => {
+  it("a selected case whose session pins plugins.config_dir is refused before any run: that dir is single-run", () => {
+    session("_session.yaml", `model: claude-sonnet-5\nplugins:\n  config_dir: ./pinned\n  local_plugins:\n    - ${SKILL}\n`);
+    scenario("a.yaml");
+    const { cases } = loadCases(join(dir, "a.yaml"));
+    expect(() => prepareCases(cases, { env: {} })).toThrow(
+      "plugins.config_dir is single-run; this command runs it once per slot, every round",
+    );
+  });
+
   it("the repo's own eval scenarios: one lever (the companion skill), a concrete pin per case", () => {
     const { cases } = loadCases(join(EVALS, "eval-14-subagent-dispatch-and-declared-unused.yaml"));
     const p = prepareCases(cases, { env: {} });

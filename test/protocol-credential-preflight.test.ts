@@ -1,6 +1,7 @@
 // A protocol scenario with no credential in the environment is refused before anything runs, on every lane that
-// drives the agent: `run` (file, directory, matrix), `skill`, and `record` (whose own guard refuses ANY tier with no
-// credential in the environment, before its other checks; for protocol that is the same predicate). A batch names every
+// drives the agent: `run` (file, directory, matrix, `legs:`), `skill`, and `record` (whose own guard refuses ANY tier with no
+// credential in the environment, before its other checks; for protocol that is the same predicate), and `chat`.
+// `critique`, which never runs at protocol, gets doctor's check for its own tier. A batch names every
 // protocol scenario in one refusal and none of the others. The check runs LAST among the pre-spend refusals, so a
 // missing model is still reported as that, and `--dry-run` (which spends nothing) is not refused.
 //
@@ -110,6 +111,58 @@ describe.skipIf(!can)("protocol credential pre-flight", () => {
     expect(r.all).not.toMatch(SPAWN_GUARD);
     const dry = cli(["skill", "sk", "hi", "--fidelity", "protocol", "--model", "claude-sonnet-5", "--dry-run"], d);
     expect(dry.code, dry.all).toBe(0);
+  });
+
+  it("run <legs.yaml>: refused before the scenario root or any status.json exists", () => {
+    const d = work({});
+    writeFileSync(
+      join(d, "sc", "legs.yaml"),
+      "name: legs\nfidelity: protocol\nsession: ../session.yaml\nlegs:\n  - id: a\n    prompt: one\n  - id: b\n    prompt: two\n",
+    );
+    const r = cli(["run", "sc/legs.yaml"], d);
+    expect(r.code, r.all).toBe(2);
+    expect(r.all).toContain(`scenario "legs": ${REFUSAL}`);
+    expect(r.all).not.toMatch(SPAWN_GUARD);
+    expect(existsSync(join(d, ".runs"))).toBe(false);
+  });
+
+  it("record <legs.yaml>: the all-tier guard refuses before any leg runs, at every tier", () => {
+    for (const fidelity of ["protocol", "container"]) {
+      const d = work({});
+      writeFileSync(
+        join(d, "sc", "legs.yaml"),
+        `name: legs\nfidelity: ${fidelity}\nsession: ../session.yaml\nlegs:\n  - id: a\n    prompt: one\n  - id: b\n    prompt: two\n`,
+      );
+      const r = cli(["record", "sc/legs.yaml"], d);
+      expect(r.code, `${fidelity}: ${r.all}`).toBe(2);
+      expect(r.all).toContain("record: no model credentials");
+      expect(r.all).not.toMatch(SPAWN_GUARD);
+      expect(existsSync(join(d, ".runs")), fidelity).toBe(false);
+      const dry = cli(["record", "sc/legs.yaml", "--dry-run"], d);
+      expect(dry.all, fidelity).not.toContain("no model credentials");
+    }
+  });
+
+  it("chat --fidelity protocol: refused (exit 2) before the run dir exists, and the agent never starts", () => {
+    const d = work({});
+    mkdirSync(join(d, "sk"));
+    writeFileSync(join(d, "sk", "SKILL.md"), "---\nname: sk\ndescription: a stub skill\n---\nbody\n");
+    const r = cli(["chat", "sk", "--fidelity", "protocol", "--model", "claude-sonnet-5"], d);
+    expect(r.code, r.all).toBe(2);
+    expect(r.all).toContain(`this \`chat\` session: ${REFUSAL}`);
+    expect(r.all).not.toMatch(SPAWN_GUARD);
+    expect(existsSync(join(d, ".runs"))).toBe(false);
+  });
+
+  it("critique (container, its default): doctor's check for its tier refuses (exit 2) before the task turn", () => {
+    const d = work({});
+    mkdirSync(join(d, "sk"));
+    writeFileSync(join(d, "sk", "SKILL.md"), "---\nname: sk\ndescription: a stub skill\n---\nbody\n");
+    const r = cli(["critique", "sk", "--prompt", "do the thing", "--model", "claude-sonnet-5"], d);
+    expect(r.code, r.all).toBe(2);
+    expect(r.all).toContain("critique: no usable agent credential for fidelity container");
+    expect(r.all).not.toMatch(SPAWN_GUARD);
+    expect(existsSync(join(d, ".runs"))).toBe(false);
   });
 
   it("record: its all-tier guard refuses first (exit 2, nothing spawned); --dry-run is not refused", () => {

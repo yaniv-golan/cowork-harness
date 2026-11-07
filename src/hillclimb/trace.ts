@@ -372,12 +372,12 @@ export interface KeptRun {
 
 /** The agent's config root in a KEPT run dir, by the same per-tier rule the live capture uses
  *  (`resolveSubagentConfigRoot`, src/run/execute.ts), mapped onto the kept copy:
- *  - hostloop, and protocol with a managed config dir → the session's pinned `plugins.config_dir` when it pins one,
- *    else `<outDir>/claude-config` (the plan's `configDir`, `buildLaunchPlan`);
+ *  - hostloop and protocol → the session's pinned `plugins.config_dir` when it pins one, else
+ *    `<outDir>/claude-config` (the plan's `configDir`, `buildLaunchPlan`);
  *  - container → `<workDir>/.claude` (the bind-mounted session mnt, kept in place);
  *  - microvm → `<workDir>/.claude` (the snapshot of the VM session root, `snapshotMicroVmWorkspace`).
- *  Unmanaged protocol keeps none. `shared` when the root is a pinned dir: it may hold other runs' sessions, so a
- *  reader picks by the run's session id only. Opened without following a link. */
+ *  `shared` when the root is a pinned dir: one a run before 5.0.0 pinned may hold other runs' sessions (a pinned
+ *  dir is single-run since), so a reader picks by the run's session id only. Opened without following a link. */
 function keptConfigRoot(run: KeptRun): { root: NoFollowRoot | undefined; path: string; shared: boolean } | undefined {
   const hostTier = run.fidelity === "hostloop" || run.fidelity === "protocol";
   const path = hostTier

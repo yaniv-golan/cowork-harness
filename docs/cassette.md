@@ -1196,10 +1196,10 @@ counts). Uploads and `mode:r` connected folders are hash-only, and a file over t
   fields**. So this check reads specific name fields of the decoded events and flags: an `mcp_servers[].name`
   outside the harness's own servers, a `mcp__<server>__…` tool naming a foreign server, `account.email` /
   `.organization` / `.subscriptionType`, an `agents[]` entry outside the built-in roster, and a `skills[]`
-  entry outside the agent's own built-ins. The skills axis is not theoretical: at `protocol` with local
-  OAuth the harness keeps the operator's **real `CLAUDE_CONFIG_DIR`** (a fresh one breaks OAuth), so the
-  personal skills installed there are discoverable, and a skill name says what you have installed exactly
-  as an MCP server name does. Suppress with
+  entry outside the agent's own built-ins. The skills axis is not theoretical: before 5.0.0, `protocol`
+  could run the agent on your **real `CLAUDE_CONFIG_DIR`**, so a recording made then can carry the
+  personal skills installed there, and a skill name says what you have installed exactly as an MCP server
+  name does. Suppress with
   `--allow-host-inventory <regex>`; if the flagged name is a genuine Cowork server, add it to
   `KNOWN_COWORK_SERVERS` instead of allowing it.
   **A plugin the scenario mounted is not host inventory.** Its agents join the roster — at `hostloop`,

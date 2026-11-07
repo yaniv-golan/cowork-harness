@@ -514,9 +514,10 @@ export function tokenCheck(tier: Tier, probe: DoctorProbe = realProbe): DoctorCh
   // .env doesn't apply. Point at it via --dotenv. (Keychain takes precedence — it's the "you have a token,
   // just unreadable in-Docker" case.)
   const worktreeEnv = !token && !keychainOnly ? probe.worktreeEnv() : null;
-  // A rejected ANTHROPIC_AUTH_TOKEN is not reported as an auth error where it reaches the agent (protocol, and
-  // hostloop with no OAuth token): the agent sends it as a plain bearer and retries the 401 until the run's
-  // timeout. Measured against a local 401 server, so the caveat rides on the `ok` row.
+  // A rejected ANTHROPIC_AUTH_TOKEN is not reported as an auth error where it reaches the agent: the agent sends it
+  // as a plain bearer and retries the 401 until the run's timeout. Measured at protocol against a local 401 server;
+  // at hostloop (with no OAuth token) the agent gets it the same way, so the same is inferred, not measured. The
+  // caveat rides on the `ok` row.
   const authTokenCaveat =
     token && (tier === "protocol" || tier === "hostloop") && probe.authTokenOnly?.()
       ? " — ANTHROPIC_AUTH_TOKEN only: if the agent rejects it, the run ends as a timeout, not as an auth error"

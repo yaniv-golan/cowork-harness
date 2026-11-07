@@ -21,6 +21,8 @@ vi.mock("node:child_process", async (orig) => {
 beforeEach(() => {
   spawned.length = 0;
   process.env.COWORK_HARNESS_FORBID_SPAWN = "1";
+  // A stand-in credential (never sent), so chat's protocol credential pre-flight does not answer before the guard.
+  vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "stub-not-a-real-token");
 });
 
 describe("the spawn guard covers every model launch", () => {

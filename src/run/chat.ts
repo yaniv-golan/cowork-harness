@@ -12,7 +12,8 @@ import { loadBaseline, resolveAgentBinary } from "../baseline.js";
 import { loadSession, buildLaunchPlan, resolveLaunchSources, userVisibleRootsFromPlan, readonlyFolderRootsFromPlan } from "../session.js";
 import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop, WORKSPACE_TOOL_ALIASES } from "../runtime/hostloop.js";
-import { spawnProtocol } from "../runtime/protocol.js";
+import { spawnProtocol, protocolCredentialRefusal } from "../runtime/protocol.js";
+import { tokenCheck } from "./doctor.js";
 import { renderPrompts } from "../prompt.js";
 import { makeDisplayTranslator, vmPathContextFromPlan, linkifyForTerminal, shouldLinkify } from "./display-translate.js";
 import { writeVmPathContextFile } from "./vm-path-ctx-file.js";
@@ -271,6 +272,15 @@ export async function cmdChat(args: string[]) {
     const hookRoots = [folder, ...localPlugins];
     checkHostHookConsent(hookRoots, allowHostHooks);
     logHostHookNotice(hookRoots, warn);
+  }
+  // protocol's agent gets only an environment credential (a managed config dir holds no login): refused here, before
+  // the run dir exists, with the same predicate spawnProtocol's backstop uses.
+  if (fidelity === "protocol") {
+    const cred = tokenCheck("protocol");
+    if (cred.status === "fail") {
+      log(`chat: ${protocolCredentialRefusal("this `chat` session", cred)}\n`);
+      exitWith(2);
+    }
   }
   const baseline = loadBaseline("latest");
   // Every declared source (the skill folder, plugins, uploads, folders) is resolved and checked HERE,

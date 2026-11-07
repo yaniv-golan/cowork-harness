@@ -13,9 +13,9 @@ import type { PlatformBaseline } from "../src/types.js";
  * never constructs `settings.autoMode`". That is true but it is NOT the mechanism that makes the rubric
  * unreachable, and the weaker reading has a hole worth naming: the agent's
  * `AUTO_MODE_TRUSTED_SOURCES` is `["userSettings","flagSettings","policySettings"]` — **userSettings is
- * trusted** — and the harness passes `--setting-sources user`. So an operator's own settings ARE a
- * trusted source for auto-mode's allow/soft_deny/hard_deny/environment rules, and at protocol/hostloop
- * under OAuth the agent reads the operator's REAL config dir.
+ * trusted** — and the harness passes `--setting-sources user`. So user settings ARE a trusted source for
+ * auto-mode's allow/soft_deny/hard_deny/environment rules. Every tier gives the agent the run's own
+ * config dir, so those user settings are the ones the harness writes, never the operator's.
  *
  * What actually closes it (binary-verified, agent 2.1.237): auto-mode is entered on
  * `permissionMode === "auto"` alone —

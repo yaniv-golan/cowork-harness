@@ -57,6 +57,8 @@ Plugins are bind-mounted at the Cowork paths; the MCP config is passed via `--mc
 A pinned `plugins.config_dir` is **single-run**: the harness creates it (it must not exist yet), marks it with
 `.cowork-harness-config-dir`, and reuses it only for the same run's later legs and `--resume` turns. An existing
 directory it did not create — a real Claude config, or another run's — is refused, so the harness never writes into it.
+A command that runs the scenario more than once (`run --repeat` above 1, `run --matrix`, `eval`, `hillclimb`) refuses
+a pinned `config_dir` before the first run, rather than spending one run and refusing the next.
 
 ## What the model actually sees — and how to verify it
 

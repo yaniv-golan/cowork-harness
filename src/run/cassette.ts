@@ -4905,6 +4905,24 @@ function recordBatchEnvelope(
   return jsonPayloadEnvelope("record", ok, payload);
 }
 
+/** True when the environment (or a loaded .env) holds a model credential: the only source any tier's agent gets. */
+function hasEnvCredential(): boolean {
+  return !!(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
+}
+
+/** `record`'s refusal with no model credential. In-Docker containers cannot read the macOS Keychain, and protocol never
+ *  uses one; without it the failure would surface as result:"error" + empty stderr after the agent spawns. */
+function failNoRecordCredential(asJson: boolean) {
+  return fail(
+    "record",
+    "runtime",
+    "record: no model credentials — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN " +
+      "(in-Docker the macOS Keychain is not accessible; run `cowork-harness doctor` for full diagnostics)",
+    undefined,
+    asJson,
+  );
+}
+
 export async function cmdRecord(args: string[]) {
   // Computed up front (isJsonOutput, not a bare p.options read) so every error path — including a
   // parseArgs throw before options are known — emits the shared JSON error envelope in JSON mode.
@@ -5077,6 +5095,8 @@ export async function cmdRecord(args: string[]) {
         );
       return exitWith(0);
     }
+    // The same all-tier credential guard the single-scenario and directory paths run, before any leg's run dir.
+    if (!hasEnvCredential()) return failNoRecordCredential(asJson);
     try {
       const { outcome, cassettePath } = await recordMultiLeg(target, {
         ...(p.options["--out"] !== undefined ? { cassettePath: p.options["--out"] } : {}),
@@ -5629,20 +5649,9 @@ export async function cmdRecord(args: string[]) {
     }
   }
 
-  // Auth guard: fail with a clear message if no model token is present.
-  // In-Docker containers cannot read the macOS Keychain; the error would otherwise
-  // surface as result:"error" + empty stderr after the agent spawns.
+  // Auth guard (shared with the multi-leg branch above): no model token, no recording.
   // Note: --dry-run bypasses this guard (dry-run branch exits before reaching here).
-  if (!(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN)) {
-    return fail(
-      "record",
-      "runtime",
-      "record: no model credentials — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN " +
-        "(in-Docker the macOS Keychain is not accessible; run `cowork-harness doctor` for full diagnostics)",
-      undefined,
-      asJson,
-    );
-  }
+  if (!hasEnvCredential()) return failNoRecordCredential(asJson);
 
   // Shared live-decider opts for the dir-batch and single-scenario record paths. (--rerecord-stale is
   // excluded above, so it never sees these.) A plain `record` leaves every field undefined → no behavior change.

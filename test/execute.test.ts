@@ -57,8 +57,8 @@ describe("resolveSubagentConfigRoot — per-tier config-dir root", () => {
   });
 
   it("protocol uses only the root spawnProtocol reported — never configDir on its own", () => {
-    // Off managed config the host agent reads the operator's REAL config dir; spawnProtocol then reports no
-    // root, and nothing here may substitute one.
+    // spawnProtocol reports the root it gave the agent; without that report nothing here may substitute
+    // configDir on its own.
     expect(resolveSubagentConfigRoot("protocol", { configDir, workRoot, sessionId })).toBeUndefined();
     expect(resolveSubagentConfigRoot("protocol", { configDir, workRoot, sessionId, protocolConfigRoot: "/managed" })).toBe("/managed");
   });

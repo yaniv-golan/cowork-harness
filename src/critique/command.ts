@@ -59,6 +59,7 @@ import { parseDotenv } from "../dotenv.js";
 import { unresolvedModelRefusal, envModelDefault } from "../run/model-provenance.js";
 import type { CritiqueItem } from "./evidence.js";
 import { critiqueFileText, scrubCritiqueJson, type CritiqueFileContent } from "./scrub-artifacts.js";
+import { tokenCheck } from "../run/doctor.js";
 
 const REFLECTION_PROMPT_VERSION = 2;
 
@@ -2582,6 +2583,17 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     exitWith(1);
   }
   if (iso) return refuse("usage", `critique: ${iso}`);
+  // The credential, last among the refusals and before the task turn spends: doctor's own check for the tier the
+  // turns run at (eval's pre-flight). Without it a run with no usable credential pays the reflection setup and ends
+  // at the agent's "Not logged in".
+  const cred = tokenCheck(opts.fidelity);
+  if (cred.status === "fail")
+    return refuse(
+      "usage",
+      `critique: no usable agent credential for fidelity ${opts.fidelity}: ${cred.detail}` +
+        (cred.remedy ? `. Fix: ${cred.remedy}` : "") +
+        ` (the same check as \`cowork-harness doctor --tier ${opts.fidelity}\`)`,
+    );
   // Past this point a turn WILL run. parseArgs guarantees a probe on every non-corpus-only line; the
   // narrowing is for the type, not a second validation.
   const prompt = opts.prompt;

@@ -325,11 +325,10 @@ export function scanHostInventory(
     // false-negative for the false-positive. That is the right trade — this check exists to catch a
     // FOREIGN machine's inventory, and an agent the scenario mounted is by construction not that.
     //
-    // A5 — a SKILL outside the agent's built-ins, same two exemptions. This axis matters because at
-    // `protocol` with local OAuth the harness keeps the operator's REAL CLAUDE_CONFIG_DIR (a fresh one
-    // breaks OAuth — see src/runtime/protocol.ts), so the personal skills installed there are
-    // discoverable and would be frozen into a committed fixture. A skill name is inventory in exactly
-    // the way an MCP server name is: it says what the operator has installed.
+    // A5 — a SKILL outside the agent's built-ins, same two exemptions. Every tier now gives the agent its
+    // own config dir, but a recording made before 5.0.0 at `protocol` read the operator's real one, so
+    // the personal skills installed there were discoverable and could be frozen into a fixture. A skill
+    // name is inventory in exactly the way an MCP server name is: it says what the operator has installed.
     if (Array.isArray(o.agents) || Array.isArray(o.skills)) {
       // Plugins declared by THIS payload, plus any harvested from elsewhere in the stream.
       const local = new Set(declared);

@@ -41,7 +41,14 @@ import { createHash } from "node:crypto";
 import { searchAnchorsForSync, searchAnchorsRefusal, stagedForAnchors } from "./sync/search-anchors.js";
 import { hostLoopPermissionKeyFlags } from "./sync/hostloop-fence.js";
 import { checkCaptureOrg, LOCAL_ORG_RECORD, readLocalOrg, recordCaptureOrg } from "./sync/capture-org.js";
-import { loadSession, resolveSessionPaths, applySessionOverrides, resolveLaunchSources, expandHome } from "./session.js";
+import {
+  loadSession,
+  resolveSessionPaths,
+  applySessionOverrides,
+  resolveLaunchSources,
+  expandHome,
+  configDirSingleRunRefusal,
+} from "./session.js";
 import {
   executeScenario,
   isMultiLegFile,
@@ -2096,6 +2103,12 @@ async function cmdRun(rawArgs: string[]) {
     // without this the cap would be SILENTLY ignored on the single most expensive invocation shape the flag
     // exists to bound (N paid cells of one scenario). With --repeat the cumulative cap in runRepeatBatch
     // already applies per cell.
+    const singleRun = configDirSingleRunRefusal(
+      `scenario "${scenario.name}"`,
+      baseSession.plugins.config_dir,
+      cells.length * (repeatN ?? 1),
+    );
+    if (singleRun) fail("run", "usage", singleRun, undefined, o.json);
     if (maxBudgetUsd !== undefined && repeatN === undefined) preflightBudget("run", scenario.name, maxBudgetUsd, o.json);
     // Last, as on the per-file arm: without it every protocol cell would fail at its own spawn as a "cell error".
     const noCredential = protocolCredentialPreflight([scenario]);
@@ -2274,6 +2287,19 @@ async function cmdRun(rawArgs: string[]) {
         o.json,
       );
   }
+  // A pinned config_dir belongs to one run: --repeat would spend run 1 and have the marker refuse run 2.
+  if (repeatN !== undefined && repeatN > 1)
+    for (const scenario of loaded) {
+      let configDir: string | null | undefined;
+      try {
+        configDir = loadSessionFromFile(scenario.session).plugins.config_dir;
+      } catch (e) {
+        rethrowIfExit(e);
+        continue; // the run reports a session that does not load itself
+      }
+      const singleRun = configDirSingleRunRefusal(`scenario "${scenario.name}"`, configDir, repeatN);
+      if (singleRun) fail("run", "usage", singleRun, undefined, o.json);
+    }
   if (maxBudgetUsd !== undefined && repeatN === undefined)
     for (const scenario of loaded) preflightBudget("run", scenario.name, maxBudgetUsd, o.json);
   // Last: a protocol scenario with no credential in the environment, named with every other one, before any runs.

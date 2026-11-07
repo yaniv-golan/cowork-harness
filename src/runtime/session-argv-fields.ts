@@ -50,7 +50,7 @@ export const SESSION_ARGV_FIELDS = {
   lane: { argv: false, why: "the declared Cowork lane: decides which tools the harness serves (remote withholds present_files)" },
   configDir: {
     argv: false,
-    why: "staged config; reaches the agent as CLAUDE_CONFIG_DIR, or on protocol's unmanaged branch as --settings <configDir>/settings.json",
+    why: "staged config; reaches the agent as CLAUDE_CONFIG_DIR at every tier",
   },
   stagedSkills: { argv: false, why: "staged into the config dir" },
   agentEnv: { argv: false, why: "spawn env" },

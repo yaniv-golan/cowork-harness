@@ -310,9 +310,9 @@ a note and the sent-effort check below decides.
 - `meta.model_requested` and `meta.effort`: the requested model pin and effort.
 - `model` and `meta.effort_sent`: the model that served the main loop, and the effort its calls went out with. The
   agent writes that effort into its own session transcript for every main-loop call, after its own overrides,
-  caps and clamps, and the run dir keeps the transcript (on hostloop and protocol, a session that pins
-  `plugins.config_dir` keeps it there instead, and it is read by the run's own session id); `meta.effort_sent` is
-  read from there. When no transcript is found, the error row names where it looked.
+  caps and clamps, and the run dir keeps the transcript; `meta.effort_sent` is read from there. (A session that pins
+  `plugins.config_dir` is refused by the loop: that dir belongs to one run.) When no transcript is found, the error
+  row names where it looked.
 
 A row whose agent did not send the requested effort is an `errors.jsonl` row (`serving_substitution`,
 `meta.failure_rule: "effort_not_sent"`), with one exception: an agent that failed before any main-loop assistant

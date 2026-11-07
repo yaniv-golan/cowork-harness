@@ -517,6 +517,17 @@ describe("eval: end to end over a fake runner", () => {
   });
 });
 
+describe("eval: a pinned plugins.config_dir", () => {
+  it("is refused before any run: every rep of both arms is its own run, and the dir is single-run", async () => {
+    const { scen, a, b } = setup({ extraSessionYaml: "  config_dir: ./pinned\n" });
+    const calls: EvalJobSpec[] = [];
+    const p = runEval(args(scen, a, b), deps(fakeRunner(undefined, calls)));
+    await expect(p).rejects.toThrow(/scenario "csv-metrics": plugins\.config_dir is single-run; this command runs \d+ times/);
+    expect(calls).toHaveLength(0);
+    expect(existsSync(join(root, "eval"))).toBe(false);
+  });
+});
+
 describe("eval: credential preflight (doctor's token check, before any run)", () => {
   // The consumer's machine: no env / .env token, a Claude Code login in the Keychain. Doctor's own check over
   // a probe saying exactly that — not a stand-in verdict.

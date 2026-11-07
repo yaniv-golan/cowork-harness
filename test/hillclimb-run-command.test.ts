@@ -2106,7 +2106,7 @@ describe("a variant runs one requested model and effort per case: the resume gua
 });
 
 describe("a session that pins plugins.config_dir", () => {
-  it("hostloop with a fresh pinned config dir: rows are scored with the effort read from that dir", async () => {
+  it("is refused before any run (exit 2): the dir is single-run, and the loop runs the case once per slot", async () => {
     const cfg = join(mkdtempSync(join(tmpdir(), "hc-rc-cfg-")), "fresh-config");
     writeFileSync(
       join(cwd, "evals", "_session.yaml"),
@@ -2114,10 +2114,10 @@ describe("a session that pins plugins.config_dir", () => {
     );
     writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO.replace("fidelity: container", "fidelity: hostloop"));
     try {
-      await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps());
       const r = await runHillclimbCommand(args("--effort", "high"), deps());
-      expect(r.exitCode, err.join("\n")).toBe(0);
-      expect(rows()[0].meta).toMatchObject({ effort: "high", effort_sent: "high" });
+      expect(r.exitCode).toBe(2);
+      expect(err.join("\n")).toContain("case alpha: plugins.config_dir is single-run; this command runs it once per slot, every round");
+      expect(existsSync(cfg)).toBe(false);
     } finally {
       rmSync(join(cfg, ".."), { recursive: true, force: true });
     }

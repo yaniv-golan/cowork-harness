@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, readFileSync, mkdirSync, writeFileSync, symlinkSync, readdirSync, realpathSync } from "node:fs";
+import { mkdtempSync, readFileSync, mkdirSync, writeFileSync, symlinkSync, readdirSync, realpathSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, basename } from "node:path";
 import { loadBaseline } from "../src/baseline.js";
@@ -18,6 +18,7 @@ import {
 import { parseSessionFile } from "../src/run/execute.js";
 import { agentArgs } from "../src/runtime/argv.js";
 import { Scenario } from "../src/types.js";
+import { BoundaryError } from "../src/errors.js";
 
 const baseline = loadBaseline("desktop-1.11847.5");
 
@@ -787,6 +788,44 @@ describe("plugins.config_dir: the single-run marker", () => {
     expect(() => runPlan(dir, run, true)).not.toThrow(); // a --resume turn
     // reuse does not re-mark: the marker is the creating run's
     expect(JSON.parse(readFileSync(join(dir, CONFIG_DIR_MARKER), "utf8"))).toEqual(marker);
+  });
+
+  it("a caller that names no run root (chat, hillclimb) is refused an existing marked dir: it cannot show the dir is its own", () => {
+    const dir = join(mkdtempSync(join(tmpdir(), "pin-")), "cfg");
+    const run = mkdtempSync(join(tmpdir(), "run-"));
+    runPlan(dir, run);
+    expect(() => resolveLaunchSources(session(dir), baseline, "hostloop", false, {})).toThrow(
+      `it belongs to the run at ${realpathSync(run)}`,
+    );
+  });
+
+  it("protocol: a pinned dir that IS the operator's config dir is a BoundaryError at resolve time, before anything is written", () => {
+    const operator = mkdtempSync(join(tmpdir(), "operator-claude-"));
+    writeFileSync(join(operator, "settings.json"), '{"mine":true}');
+    const before = tree(operator);
+    const saved = process.env.CLAUDE_CONFIG_DIR;
+    process.env.CLAUDE_CONFIG_DIR = operator;
+    try {
+      expect(() =>
+        resolveLaunchSources(session(operator), baseline, "protocol", false, { runRoot: mkdtempSync(join(tmpdir(), "run-")) }),
+      ).toThrow(BoundaryError);
+    } finally {
+      if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+      else process.env.CLAUDE_CONFIG_DIR = saved;
+    }
+    expect(tree(operator)).toEqual(before);
+  });
+
+  it("the leaf is created exclusively: a dir that appears after the check is refused, not marked as this run's", () => {
+    const dir = join(mkdtempSync(join(tmpdir(), "pin-")), "cfg");
+    const run = mkdtempSync(join(tmpdir(), "run-"));
+    const s = session(dir);
+    const sources = resolveLaunchSources(s, baseline, "hostloop", false, { runRoot: run });
+    mkdirSync(dir); // someone else's, between the check and the creation
+    expect(() => buildLaunchPlan(s, baseline, run, "hostloop", false, "local", sources, { runRoot: run })).toThrow(
+      /appeared after the run checked it, so this run did not create it/,
+    );
+    expect(existsSync(join(dir, CONFIG_DIR_MARKER))).toBe(false);
   });
 
   it("another run's dir is refused, naming the run it belongs to", () => {
