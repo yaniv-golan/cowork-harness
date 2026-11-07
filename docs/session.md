@@ -199,9 +199,9 @@ Keys not listed here are staging, the spawn environment, or harness policy, not 
 | `permission_mode` | `--permission-mode` | yes | yes | protocol passes it only when set; the sandbox tiers always pass it, falling back to the baseline's value |
 <!-- session-argv-fields:end -->
 
-At `protocol`, off the managed config branch (a local login with no token), the agent reads and writes your real
-config dir. Its session transcripts land in your own `~/.claude/projects/`, and `skill --resume` continues the
-session from there.
+At `protocol`, as on every tier, the agent reads and writes the run's own config dir (`<run>/claude-config`, or a
+pinned `plugins.config_dir`). Its session transcripts land in that dir's `projects/`, and `skill --resume` continues
+the session from there; your own `~/.claude` is never read.
 
 ### Agent-env knob (tier-uniform)
 
@@ -323,7 +323,6 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 ## Tips
 
 - Keep **one session per realistic setup** (e.g. `sessions/sales.yaml`, `sessions/clinical.yaml`) and point many scenarios at each.
-- To reproduce a *specific* real Cowork setup, pin `plugins.config_dir` to a copy of that `~/.claude` instead of letting the harness build a clean one.
 - **Pin `model`.** A run must resolve one: from `--model`, a matrix `models:` axis, this key, or `COWORK_HARNESS_MODEL` (which fills in only when none of the others does). A run that resolves none is refused before it spends — without one the agent binary would pick its own default, which can move under a baseline bump with nothing in your session changing. Set it here for anything you re-run or compare: a `--repeat` batch, a before/after across a fix, or a with/without comparison needs the same model in every arm, and the env var is a property of the machine, not of the scenario. Either way, read `result.json`'s `models` back before believing a cross-run result — it records what actually served the run. When you do, **ignore any entry wrapped in angle brackets** (`<synthetic>`): that is the agent marking a turn it fabricated locally, not a model, so two runs of the same pinned model can differ on this array purely by whether such a turn occurred.
   On the ad-hoc `skill` lane there is no session file, so `--model <id>` (or `COWORK_HARNESS_MODEL`) is the *only* way to pin it; without one that run is refused too. `run`, `record` and `probe-dispatch` take the same flag, which overrides the session's own `model:` for that invocation.
   The result records what came of it: `modelSource` (`user_setting` when something pinned the model; `unresolved` appears only where no agent ran, such as a replay, or on a result recorded before 4.0.0), `modelPinHonored` (`true`/`false`, and **absent when unverifiable** — nothing pinned, or no model evidence in the run; a run whose main loop reported only the `<synthetic>` marker, such as a `/plugin:skill` prompt, is judged from the session's billed models when those point unambiguously at one answer), and `modelFallbacks` when the agent switched off the requested model mid-run.

@@ -122,7 +122,6 @@ describe("verdict-signal code set ↔ its five hand-maintained copies", () => {
     "permissive_auto_allow", // covered by the permission/decider sections
     "outputs_delete", // covered by the assertion docs (no_delete_in_outputs)
     "non_deterministic", // covered by the decider/reproducibility sections
-    "l0_host_config_contamination", // L0/protocol-tier specific; covered by the fidelity sections
     "infra_error", // a dead supervisor — nothing an author can do but re-run
     "stalled", // covered at length by the gate/answer-scripting sections
     "search_corpus_refused", // --search-corpus only; covered in docs/cli.md and the scenario signal list

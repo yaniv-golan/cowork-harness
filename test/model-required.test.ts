@@ -28,6 +28,9 @@ import { executeScenario } from "../src/run/execute.js";
 import { CASSETTE_VERSION } from "../src/run/cassette.js";
 
 const CLI = resolve("dist/cli.js");
+/** A stand-in credential for a protocol run that must reach the spawn (refused there by COWORK_HARNESS_FORBID_SPAWN, so
+ *  the value is never sent): without one the protocol credential pre-flight answers first. */
+const STUB_CREDENTIAL = { CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" };
 const can = existsSync(CLI);
 
 const SPAWN_GUARD = /COWORK_HARNESS_FORBID_SPAWN is set/;
@@ -137,7 +140,7 @@ describe.skipIf(!can)("run", () => {
       [["run", "s.yaml"], { COWORK_HARNESS_MODEL: "claude-sonnet-5" }],
       [["run", "p.yaml"], {}],
     ] as [string[], Record<string, string>][]) {
-      const r = cli(args, d, env);
+      const r = cli(args, d, { ...STUB_CREDENTIAL, ...env });
       expect(r.all, args.join(" ")).toMatch(SPAWN_GUARD);
       expect(r.all, args.join(" ")).not.toMatch(/no model/i);
     }
@@ -163,7 +166,7 @@ describe.skipIf(!can)("run", () => {
     const d = work();
     writeFileSync(join(d, "s.yaml"), UNPINNED("s"));
     writeFileSync(join(d, "with-models.yaml"), "models: [claude-sonnet-5]\n");
-    const ok = cli(["run", "s.yaml", "--matrix", "with-models.yaml"], d);
+    const ok = cli(["run", "s.yaml", "--matrix", "with-models.yaml"], d, STUB_CREDENTIAL);
     expect(ok.all).not.toMatch(/no model/i);
     expect(ok.all, "the cell ran as far as the spawn guard").toMatch(SPAWN_GUARD);
 

@@ -19,6 +19,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const CLI = resolve("dist/cli.js");
+/** A stand-in credential for a protocol run that must reach the spawn (refused there by COWORK_HARNESS_FORBID_SPAWN, so
+ *  the value is never sent): without one the protocol credential pre-flight answers first. */
+const STUB_CREDENTIAL = { CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" };
 const can = existsSync(CLI);
 
 const SPAWN_GUARD = /COWORK_HARNESS_FORBID_SPAWN is set/;
@@ -163,7 +166,7 @@ describe.skipIf(!can)("run <dir/> checks every scenario's input paths before the
     // it stays 1.
     const d = fixture();
     writeFileSync(join(d, "sc", "s.yaml"), SCENARIO("s", "../no-skill.yaml"));
-    const r = cli(["run", "sc/s.yaml"], d, { COWORK_HARNESS_SOFT_MISSING: "1" });
+    const r = cli(["run", "sc/s.yaml"], d, { ...STUB_CREDENTIAL, COWORK_HARNESS_SOFT_MISSING: "1" });
     expect(r.all).toMatch(SPAWN_GUARD);
     const upToGuard = r.stderr.slice(0, r.stderr.search(SPAWN_GUARD));
     expect(upToGuard.match(/missing source excluded/g) ?? []).toHaveLength(1);
@@ -174,14 +177,14 @@ describe.skipIf(!can)("run <dir/> checks every scenario's input paths before the
     // never checked. The pre-check must ablate the same way, or it refuses a run that would have proceeded.
     const d = fixture();
     writeFileSync(join(d, "sc", "p.yaml"), SCENARIO("p", "../no-plugin.yaml"));
-    const r = cli(["run", "sc/", "--ablate-skill"], d);
+    const r = cli(["run", "sc/", "--ablate-skill"], d, STUB_CREDENTIAL);
     expect(r.all).toMatch(SPAWN_GUARD);
   });
 
   it("--ablate-skill still refuses a missing folder (ablation removes skill discovery only)", () => {
     const d = fixture();
     writeFileSync(join(d, "sc", "b.yaml"), SCENARIO("b", "../no-folder.yaml"));
-    const r = cli(["run", "sc/", "--ablate-skill", "--output-format", "json"], d);
+    const r = cli(["run", "sc/", "--ablate-skill", "--output-format", "json"], d, STUB_CREDENTIAL);
     expect(r.code, r.all).toBe(2);
     expect(envelope(r.stdout).error?.message).toMatch(MISSING_MOUNT);
     expect(runDirsUnder(r.runs)).toEqual([]);
@@ -341,7 +344,7 @@ describe.skipIf(!can)("input pre-checks: baselines, --repeat, hints and the budg
     // scenario in its rollup (stoppedEarly "error") rather than refusing up front.
     const d = fixture();
     writeFileSync(join(d, "sc", "b.yaml"), SCENARIO("b", "../no-folder.yaml"));
-    const r = cli(["run", "sc/b.yaml", "--repeat", "2", "--output-format", "json"], d);
+    const r = cli(["run", "sc/b.yaml", "--repeat", "2", "--output-format", "json"], d, STUB_CREDENTIAL);
     expect(r.code, r.all).toBe(1);
     const doc = JSON.parse(r.stdout) as { rollups?: { stoppedEarly?: string }[]; error: unknown };
     expect(doc.error).toBeNull();
@@ -562,7 +565,7 @@ describe.skipIf(!can)("a missing session file is an input error on every lane", 
     const d = fixture();
     writeFileSync(join(d, "home-session.yaml"), MODEL);
     writeFileSync(join(d, "sc", "t.yaml"), SCENARIO("t", "~/home-session.yaml"));
-    const r = cli(["run", "sc/t.yaml", "--output-format", "json"], d, { HOME: d });
+    const r = cli(["run", "sc/t.yaml", "--output-format", "json"], d, { ...STUB_CREDENTIAL, HOME: d });
     expect(r.all).toMatch(SPAWN_GUARD);
     expect(r.all).not.toMatch(/ENOENT|session file not found/);
   });

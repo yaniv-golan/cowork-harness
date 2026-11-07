@@ -92,8 +92,7 @@ rewrite the eval's `runs.jsonl` or report. Pruned run dirs are listed as not re-
 - `--fail-on confirmed` when no family (pass rows or metric rows, in any section) could reach `confirmed` at this
   `--reps`; when only some can, the start-up line names the families the gate can fire on;
 - no usable agent credential for a scenario's tier — the same check as `doctor --tier <tier>`'s `token` row,
-  with its fix. A Keychain login or a `.credentials.json` in the config dir, without an env/.env token,
-  passes only at `protocol`;
+  with its fix;
 - a session whose plugin is declared only under `plugins.remote_plugins` (the session must declare exactly
   one `local_plugins` entry). Workaround: eval a copy of the session that declares the same directory under
   `local_plugins`, and check the `remote_plugins` path handling with an ordinary `run`.

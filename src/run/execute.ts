@@ -45,7 +45,7 @@ import { homedir } from "node:os";
 import { join, dirname, resolve, basename, isAbsolute, sep } from "node:path";
 import { parse as parseYaml } from "yaml";
 import { MultiLegScenario, REFUSED_TOP_LEVEL, hostActionAsserts, promptLegAsserts, type Leg } from "./multi-leg-scenario.js";
-import { Scenario, negativeToolCall } from "../types.js";
+import { Scenario, negativeToolCall, removedAssertionRefusal } from "../types.js";
 import type { RunResult, InfraErrorSource, Assertion, OutputsFsDiff, PlatformBaseline, DeviceBridgeRecord } from "../types.js";
 import {
   deviceBridgeFolderAssertRefusal,
@@ -95,7 +95,8 @@ import {
   type LaunchPlan,
   type LegStage,
 } from "../session.js";
-import { spawnProtocol, protocolAgentConfigDir, protocolReadsOperatorConfig } from "../runtime/protocol.js";
+import { spawnProtocol, protocolCredentialRefusal } from "../runtime/protocol.js";
+import { tokenCheck, type DoctorCheck } from "./doctor.js";
 import {
   hookFailureBlocksForAgent,
   hostManagedSettingsDirs,
@@ -215,6 +216,8 @@ const RUN_RESULT_SCHEMA_URL = "https://raw.githubusercontent.com/yaniv-golan/cow
  *  `legStage`, its agent session id is fresh and never resumed, and it appends no index row (the scenario appends one). */
 export interface LegRunContext {
   outDir: string;
+  /** The multi-leg run's scenario root: a pinned config_dir created by one leg is reusable by the others. */
+  runRoot: string;
   sessionId: string;
   workBase: string;
   legStage?: LegStage;
@@ -538,11 +541,7 @@ export async function captureSubagentReasoningThenJudge(args: {
   if (wantsSubagentText && args.ctx.subagents?.length && args.ctx.subagents.every((s) => s.reasoning === undefined)) {
     const why = args.subagentConfigRoot
       ? `no child transcript under ${args.subagentConfigRoot} matched any of the ${args.ctx.subagents.length} dispatch(es)`
-      : args.effectiveFidelity === "protocol"
-        ? `protocol runs without managed config (or whose config dir is the operator's own) read the operator's ` +
-          `real config dir, which the harness does not walk (set COWORK_MANAGED_CONFIG=1 with a token, or use a ` +
-          `sandboxed tier)`
-        : `the ${args.effectiveFidelity} tier has no child transcripts the harness can read`;
+      : `the ${args.effectiveFidelity} tier has no child transcripts the harness can read`;
     warn(
       `::warning:: [semantic_matches] include_subagent_text: true, but the judged document has NO sub-agent text — ` +
         `no sub-agent reasoning was captured: ${why}. The grade covers the main agent's text only.\n`,
@@ -607,30 +606,13 @@ const CONTRADICTION_GROUPS: {
   },
 ];
 
-/** The plan-level wiring of warnAmbiguousHookOutput: the plugin mounts it scans, and whether the agent can see
- *  hooks the operator installed. That is the case at `protocol` off the sealed config dir — the agent reads the
- *  operator's real config, so a host-installed plugin's hooks run and stream their frames too. Asked of the same
- *  function spawnProtocol uses (protocolReadsOperatorConfig), never re-derived; a bad COWORK_MANAGED_CONFIG
- *  is left for the spawn to refuse. Exported for tests. */
-export function warnAmbiguousHookOutputForPlan(
-  plan: Pick<LaunchPlan, "mounts"> & Partial<LaunchPlan>,
-  tier: string,
-  asserts: Assertion[],
-  warn: (msg: string) => void,
-): void {
-  let operatorHooksVisible = false;
-  if (tier === "protocol")
-    try {
-      operatorHooksVisible = protocolReadsOperatorConfig(plan as LaunchPlan);
-    } catch {
-      operatorHooksVisible = false;
-    }
+/** The plan-level wiring of warnAmbiguousHookOutput: the plugin mounts it scans. Exported for tests. */
+export function warnAmbiguousHookOutputForPlan(plan: Pick<LaunchPlan, "mounts">, asserts: Assertion[], warn: (msg: string) => void): void {
   warnAmbiguousHookOutput(
     plan.mounts
       .filter((mt) => mt.kind === "local-plugin" || mt.kind === "remote-plugin" || mt.kind === "marketplace-plugin")
       .map((mt) => mt.hostPath),
     asserts,
-    operatorHooksVisible,
     warn,
   );
 }
@@ -835,12 +817,13 @@ function scanRunHookSources(plan: LaunchPlan, tier: string, workRoot: string, se
   const hostNative = tier === "hostloop" || tier === "protocol";
   // The config dir the agent ran with: the materialized one (hostloop's CLAUDE_CONFIG_DIR, and the source of the
   // sandbox tiers' copy), the copy the sandbox tiers bind at mnt/.claude (the run dir's for container, the VM work
-  // dir's for microvm, which is never copied back), and protocol's (the operator's real one off managed config).
-  const configDirs =
-    tier === "protocol"
-      ? // its work dir's .claude is a project dir there, read here for its frontmatter too (over-including is safe)
-        [plan.configDir, protocolAgentConfigDir(plan), join(workRoot, ".claude")]
-      : [plan.configDir, join(workRoot, ".claude"), ...(tier === "microvm" ? [join(VM_WORK_HOST, sessionId, "mnt", ".claude")] : [])];
+  // dir's for microvm, which is never copied back). At protocol the work dir's .claude is a project dir, read here for
+  // its frontmatter too (over-including is safe).
+  const configDirs = [
+    plan.configDir,
+    join(workRoot, ".claude"),
+    ...(tier === "microvm" ? [join(VM_WORK_HOST, sessionId, "mnt", ".claude")] : []),
+  ];
   const plugins = plan.mounts.filter((m) => m.kind === "local-plugin" || m.kind === "remote-plugin" || m.kind === "marketplace-plugin");
   return scanHookFailureBlocks({
     pluginRoots: plugins.filter((m) => m.kind !== "remote-plugin").map((m) => m.hostPath),
@@ -1012,8 +995,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // Every declared source (plugins, skills, uploads, folders, marketplaces) is resolved and checked HERE,
   // before the run directory exists: a path that does not exist is a UsageError, and a run refused for it
   // leaves no run dir, status.json or index row behind. buildLaunchPlan stages from this same resolution.
+  const runRoot = opts.leg?.runRoot ?? outDir;
   const launchSources = resolveLaunchSources(session, baseline, effectiveFidelity, !!opts.resume, {
     ...(scenario.workspace_fixture !== undefined ? { workspaceFixture: scenario.workspace_fixture } : {}),
+    runRoot,
   });
   // A presence/body assertion on a file the fixture provides passes on the fixture alone — refused here, before
   // the run dir exists, unless it states `authored:`.
@@ -1220,6 +1205,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
 
   const plan = buildLaunchPlan(session, baseline, outDir, effectiveFidelity, !!opts.resume, scenario.lane, launchSources, {
     deviceBridge: scenario.device_bridge === true,
+    runRoot,
     ...(opts.leg ? { workBase: opts.leg.workBase, ...(opts.leg.legStage ? { legStage: opts.leg.legStage } : {}) } : {}),
   });
   // A leg is a NEW agent session (its own id, never --resume): the next task, not the next turn of this one.
@@ -1283,7 +1269,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     );
   // hook_output_* grades every frame for its event, and frames carry no plugin id: say when the output may not be
   // the plugin under test's. Not gated on --compact (it qualifies a verdict; see warnAmbiguousHookOutput).
-  warnAmbiguousHookOutputForPlan(plan, effectiveFidelity, scenario.assert, warn);
+  warnAmbiguousHookOutputForPlan(plan, scenario.assert, warn);
   // Pre-run baseline capture (the full manifest): only when something will consume it — the scenario
   // asserts one of the keys scenarioArmsPreRunManifest lists, or this is a recording (cassettes always carry
   // the baseline so a later assert-add stays replayable without re-record), or a hillclimb attempt (a metric or
@@ -1410,7 +1396,6 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   let searchCorpusError: string | null = null; // the frozen-promise check's verdict, folded into record.infraErrors below
   let deviceBridge: ReturnType<typeof startDeviceBridge> | undefined; // device_bridge's second container: removed after the agent's, before the network
   let deregisterHostLoopSidecarReap: (() => void) | undefined; // the hostloop sidecar's own Ctrl-C reap (spawnHostLoop)
-  let l0HostConfigContamination = false; // set when protocol mode runs with plugins (failing fidelity signal)
   // Where the protocol agent's child transcripts land — the managed config dir, or undefined when it read the
   // operator's real one (see resolveSubagentConfigRoot). Set by spawnProtocol, never re-derived.
   let protocolSubagentConfigRoot: string | undefined;
@@ -1678,7 +1663,6 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         signalAgent = vm.agent;
       } else {
         // pass systemPromptAppend so L0 records carry Cowork framing (matches container/microvm/host-loop).
-        // capture l0HostConfigContamination so computeVerdict can fail the run when plugins are configured.
         const proto = spawnProtocol(scenario, baseline, plan, outDir, { systemPromptAppend: prompts.systemPromptAppend, runTag: runToken });
         child = proto.child;
         signalAgent = treeAgent = agentTreeAgent(proto.child, {
@@ -1686,7 +1670,6 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           runStartMs: agentSpawnedAtMs,
           workDir: proto.workDir,
         });
-        l0HostConfigContamination = proto.l0HostConfigContamination;
         protocolSubagentConfigRoot = proto.subagentConfigRoot;
         if (scenario.assert.some((a) => a.transcript_no_host_path === true) && !opts.compact)
           warn(
@@ -2636,7 +2619,6 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       outputsMountMode,
       effectiveFidelity, // The tier actually used — differs from fidelity when fidelity:"cowork"
       fidelityWarnings: promptFidelityWarnings, // structured prompt warnings visible to JSON callers
-      l0HostConfigContamination: l0HostConfigContamination || undefined, // failing fidelity signal for protocol+plugins
       missingCapabilityUse, // capability fidelity: omitted-capability families the skill used (live built-image tiers) — computeVerdict fails unless allow_missing_capability
       capabilityProbe, // probe outcome (definitive | unverified | skipped) for the guard roster
       requiresCapabilityUnmet, // declared requires_capabilities the tier couldn't satisfy → computeVerdict fails unless allow_missing_capability
@@ -2869,6 +2851,8 @@ export function loadScenarioPure(path: string): Scenario {
     // reachable. SPEC.md explicitly disclaims grep-stability of error prose, so the compact form is
     // free to be the message.
     if (e instanceof ZodError) {
+      const removed = removedAssertionRefusal(rawDoc);
+      if (removed) throw new UsageError(`invalid scenario ${path}: ${removed}`);
       // A missing `fidelity:` gets its own remedy — but only on a document that is positively a scenario
       // (it has `prompt:`, the same signal `discoverScenarios` classifies on). A session or matrix YAML in a
       // linted set must fall through to the generic refusal and lint's "not a scenario" remedy, not be told
@@ -2935,6 +2919,8 @@ export function loadMultiLegScenario(path: string): MultiLegScenario {
       if (k in (rawDoc as Record<string, unknown>))
         throw new UsageError(`invalid scenario ${path}: \`${k}\` is refused with \`legs:\`: ${why}`);
   const r = MultiLegScenario.safeParse(rawDoc);
+  const removed = r.success ? undefined : removedAssertionRefusal(rawDoc);
+  if (removed) throw new UsageError(`invalid scenario ${path}: ${removed}`);
   if (!r.success)
     throw new UsageError(`invalid scenario ${path}: ${compactSchemaError(r.error.issues)}`, JSON.stringify(r.error.issues, null, 2));
   const s = r.data as MultiLegScenario;
@@ -3358,6 +3344,22 @@ export function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadS
  *  session — the input check does ({@link launchSourcesPreflight}: an unreadable file, a schema the session
  *  rejects), and so does the real run — and a dry run over files whose session paths do not exist on this
  *  machine must not start failing on a model question it cannot answer. */
+/** A batch's protocol credential refusal, or undefined: every scenario at `fidelity: protocol` needs a credential in
+ *  the environment (doctor's `tokenCheck("protocol")` — the one predicate), and one refusal names them all, before any
+ *  run dir exists. Run LAST among the pre-flights (after dry-run, model and budget), so a scenario refused for those
+ *  reasons gets that reason. `spawnProtocol` refuses the same way as the backstop for a path without this pre-flight. */
+export function protocolCredentialPreflight(
+  scenarios: ReadonlyArray<{ name: string; fidelity: string }>,
+  check: () => DoctorCheck = () => tokenCheck("protocol"),
+): string | undefined {
+  const names = scenarios.filter((s) => s.fidelity === "protocol").map((s) => s.name);
+  if (!names.length) return undefined;
+  const c = check();
+  return c.status === "fail"
+    ? protocolCredentialRefusal(names.length === 1 ? `scenario "${names[0]}"` : `scenarios ${names.join(", ")}`, c)
+    : undefined;
+}
+
 export function unresolvedModelPreflight(scenario: Scenario, explicit: string | undefined): string | undefined {
   if (explicit !== undefined || envModelDefault() !== undefined) return undefined;
   let sessionModel: string | undefined;
@@ -3800,7 +3802,6 @@ export function buildPartialResult(args: {
     fsDiff: args.fsDiff,
     outputsMountMode: args.outputsMountMode,
     fidelityWarnings: undefined,
-    l0HostConfigContamination: undefined,
     missingCapabilityUse: undefined,
     staleness: undefined,
     mutation: undefined, // replay --mutate only
@@ -5088,31 +5089,30 @@ export function readSessionManifest(path: string, sessionId: string, expectedFid
   } catch {
     throw new Error(`corrupt manifest at ${path}: not valid JSON`);
   }
-  // if the manifest records a sessionId, verify it matches the requested one so a copied or
-  // stale manifest cannot resume the wrong native agent conversation. Legacy manifests without a
-  // sessionId field are allowed through for backward compatibility.
-  if (parsed?.sessionId !== undefined && sessionId && parsed.sessionId !== sessionId) {
+  // Both identity stamps are required, whatever the caller passes: the session id (so a copied or stale manifest cannot
+  // resume the wrong native agent conversation) and the tier (the agent's conversation store is tier-LOCAL — container
+  // persists it under the work tree, hostloop under the host config dir, microvm inside the guest — so a resume at a
+  // different tier hands the agent a `--resume <uuid>` for a conversation its store has never seen). A manifest
+  // without either predates the stamps and cannot be checked: refused, never let through.
+  const missing = [
+    typeof parsed?.sessionId === "string" && parsed.sessionId !== "" ? undefined : "sessionId",
+    typeof parsed?.fidelity === "string" && parsed.fidelity !== "" ? undefined : "fidelity",
+  ].filter((k): k is string => k !== undefined);
+  if (missing.length)
+    throw new UsageError(
+      `cannot resume "${sessionId}": session manifest at ${path} has no ${missing.join(" or ")} (written before ` +
+        `cowork-harness stamped them), so the resume cannot be checked against it — start a fresh session (drop --resume), ` +
+        `or delete the run dir and re-run with --session-id to recreate it`,
+    );
+  if (!sessionId) throw new Error("readSessionManifest: no session id to check the manifest against");
+  if (parsed.sessionId !== sessionId) {
     throw new Error(`cowork-harness: manifest session ID mismatch: manifest has ${parsed.sessionId}, expected ${sessionId}`);
   }
-  // Verify the fidelity tier matches. The agent's native conversation store is tier-LOCAL — container
-  // persists it under the work tree, hostloop under the host config dir, microvm inside the guest — so a
-  // resume at a different tier hands the agent a `--resume <uuid>` for a conversation its store has never
-  // seen (it would error late in the spawn, or silently mint fresh history). Fail closed, up front, with
-  // an actionable message. Legacy manifests written before the stamp have no `fidelity` field and are let
-  // through (mirrors the sessionId tolerance above) with a warning — every manifest written from now on
-  // carries the stamp, so this hole self-closes.
-  if (parsed?.fidelity !== undefined) {
-    if (expectedFidelity && parsed.fidelity !== expectedFidelity) {
-      throw new Error(
-        `cannot resume "${sessionId}": session was created at fidelity "${parsed.fidelity}" but this resume is ` +
-          `"${expectedFidelity}" — the agent's conversation store is tier-local; re-run at --fidelity ${parsed.fidelity}, ` +
-          `or start a fresh session`,
-      );
-    }
-  } else {
-    process.stderr.write(
-      `::warning:: [resume] session manifest at ${path} predates the fidelity stamp — ` +
-        `a cross-tier resume cannot be checked for this pre-existing session\n`,
+  if (expectedFidelity && parsed.fidelity !== expectedFidelity) {
+    throw new Error(
+      `cannot resume "${sessionId}": session was created at fidelity "${parsed.fidelity}" but this resume is ` +
+        `"${expectedFidelity}" — the agent's conversation store is tier-local; re-run at --fidelity ${parsed.fidelity}, ` +
+        `or start a fresh session`,
     );
   }
   const id = parsed?.agentSessionId;

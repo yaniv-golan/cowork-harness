@@ -48,7 +48,7 @@ const STUB = [
 
 // A filesystem assert and a judged one, so both the verify path and the semantic path read the work dir.
 const SCENARIO =
-  `baseline: latest\nfidelity: protocol\nprompt: write the insights\nassert:\n  - allow_l0_host_config_contamination: true\n` +
+  `baseline: latest\nfidelity: protocol\nprompt: write the insights\nassert:\n` +
   `  - file_exists: outputs/insights.md\n` +
   `  - semantic_matches:\n      rubric: ["the insights name the risk"]\n      evidence_files: ["outputs/insights.md"]\n`;
 

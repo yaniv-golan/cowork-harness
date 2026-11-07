@@ -226,37 +226,24 @@ describe("doctor — runDoctorChecks", () => {
   // at all). It also must not claim doctor "does not read your Keychain": doctor DOES read it (that is
   // what hasKeychainToken is), and the detail line one row above says so. The claim is scoped to what
   // the harness passes to the AGENT, which is true at every tier.
-  // protocol keeps the user's REAL CLAUDE_CONFIG_DIR when no API key is present (protocol.ts:88-97),
-  // because a fresh one breaks OAuth — so a Keychain-only macOS user genuinely CAN run this tier and
-  // must not be told "not ready". Measured live 2026-07-25: scrubbed env + default config dir
-  // authenticates; scrubbed env + fresh managed config dir prints "Not logged in". Every other tier
-  // passes a managed config dir, so the token really is required there.
-  it("protocol + Keychain-only is a non-blocking WARN, not a fail", () => {
-    const tok = get(runDoctorChecks("protocol", probe({ hasToken: () => false, hasKeychainToken: () => true })), "token");
-    expect(tok.status).toBe("warn");
-    expect(tok.required).toBe(true); // still reported; readiness gates on status === "fail"
-    expect(tok.detail).toMatch(/real CLAUDE_CONFIG_DIR/i);
-    expect(tok.remedy).toMatch(/likely fine as-is/i);
-  });
-
-  it.each(["container", "hostloop", "microvm"] as const)(
-    "%s + Keychain-only still FAILS — those tiers use a managed config dir, which severs self-sourcing",
+  // Every tier, protocol included, gives the agent a managed config dir — a Keychain or /login session lives in the
+  // operator's own config dir, which the agent never reads — so the env token is required everywhere.
+  it.each(["protocol", "container", "hostloop", "microvm"] as const)(
+    "%s + Keychain-only FAILS — every tier uses a managed config dir, which severs self-sourcing",
     (tier) => {
       const tok = get(runDoctorChecks(tier, probe({ hasToken: () => false, hasKeychainToken: () => true })), "token");
       expect(tok.status).toBe("fail");
     },
   );
 
-  it("protocol with NO token and NO Keychain still fails (the relaxation is Keychain-gated)", () => {
-    const tok = get(runDoctorChecks("protocol", probe({ hasToken: () => false, hasKeychainToken: () => false })), "token");
-    expect(tok.status).toBe("fail");
-  });
-
-  it.each(["container", "hostloop", "microvm"] as const)("the Keychain remedy names no tier-specific actor and is true at %s", (tier) => {
-    const tok = get(runDoctorChecks(tier, probe({ hasToken: () => false, hasKeychainToken: () => true })), "token");
-    expect(tok.detail).toMatch(/does not pass a Keychain credential to the agent/i);
-    expect(tok.remedy).toMatch(/injects only env \/ \.env into the agent, at every tier/i);
-  });
+  it.each(["protocol", "container", "hostloop", "microvm"] as const)(
+    "the Keychain remedy names no tier-specific actor and is true at %s",
+    (tier) => {
+      const tok = get(runDoctorChecks(tier, probe({ hasToken: () => false, hasKeychainToken: () => true })), "token");
+      expect(tok.detail).toMatch(/does not pass a Keychain credential to the agent/i);
+      expect(tok.remedy).toMatch(/injects only env \/ \.env into the agent, at every tier/i);
+    },
+  );
 
   // The original defect — "the in-Docker agent" emitted at EVERY tier because the branch never consulted
   // `tier` — must stay dead on all four, including protocol's own separate message.
@@ -638,49 +625,40 @@ describe("doctor — tokenCheck is the token row runDoctorChecks reports", () =>
   it.each(tiers)("at %s, for every token situation", (tier) => {
     for (const over of probes) expect(tokenCheck(tier, probe(over))).toEqual(get(runDoctorChecks(tier, probe(over)), "token"));
   });
-  it("the consumer's case — Keychain only, no env token — fails at hostloop and cowork and only warns at protocol", () => {
+  it("the consumer's case — Keychain only, no env token — fails at every tier, protocol included", () => {
     const kc = probe({ hasToken: () => false, hasKeychainToken: () => true });
-    expect(tokenCheck("hostloop", kc).status).toBe("fail");
-    expect(tokenCheck("cowork", kc).status).toBe("fail");
-    expect(tokenCheck("protocol", kc).status).toBe("warn");
+    for (const tier of tiers) expect(tokenCheck(tier, kc).status).toBe("fail");
   });
 });
 
-// Claude Code on Linux (and wherever it has no Keychain) keeps its login in `<config dir>/.credentials.json`.
-// protocol keeps the operator's real config dir, so the agent signs itself in from that file, exactly as it
-// does from the macOS Keychain; every other tier gives it a managed dir, where the file is not seen.
-describe("doctor — a signed-in config dir (.credentials.json) counts at protocol only", () => {
-  const credsFile = (path: string | null) => ({ hasToken: () => false, configCredentialsFile: () => path });
-  it.each(["linux", "darwin"])("on %s: warn at protocol, naming the file, never reading it", (plat) => {
-    const tok = tokenCheck("protocol", probe({ ...credsFile("/home/u/.claude/.credentials.json"), platform: () => plat }));
-    expect(tok.status).toBe("warn");
-    expect(tok.detail).toMatch(/\/home\/u\/\.claude\/\.credentials\.json/);
-    expect(tok.remedy).toMatch(/setup-token/);
-  });
-  it.each(["container", "microvm", "hostloop", "cowork"] as const)("still fails at %s", (tier) => {
-    expect(tokenCheck(tier, probe({ ...credsFile("/home/u/.claude/.credentials.json"), platform: () => "linux" })).status).toBe("fail");
-  });
-  it("no file (and no Keychain, no token) still fails at protocol", () => {
-    expect(tokenCheck("protocol", probe({ ...credsFile(null), platform: () => "linux" })).status).toBe("fail");
-  });
-  it("an env token still wins, and the file is not consulted", () => {
-    let asked = false;
-    const tok = tokenCheck("protocol", probe({ configCredentialsFile: () => ((asked = true), "/x/.credentials.json") }));
+// A rejected ANTHROPIC_AUTH_TOKEN where it reaches the agent (protocol; hostloop with no OAuth token) is retried by the
+// agent until the run's timeout — measured against a local 401 server — so the `ok` row says so. Status unchanged.
+describe("doctor — the ANTHROPIC_AUTH_TOKEN-only caveat", () => {
+  const authOnly = probe({ hasToken: () => true, authTokenOnly: () => true });
+  it.each(["protocol", "hostloop"] as const)("at %s: ok, with the timeout caveat", (tier) => {
+    const tok = tokenCheck(tier, authOnly);
     expect(tok.status).toBe("ok");
-    expect(asked).toBe(false);
+    expect(tok.detail).toBe(
+      "found (env / .env) — ANTHROPIC_AUTH_TOKEN only: if the agent rejects it, the run ends as a timeout, not as an auth error",
+    );
   });
-  it("the real probe looks in CLAUDE_CONFIG_DIR when set, else ~/.claude, by existence only", () => {
-    const dir = mkdtempSync(join(tmpdir(), "doctor-creds-"));
-    const saved = process.env.CLAUDE_CONFIG_DIR;
+  it.each(["container", "microvm"] as const)("at %s (where it never reaches the agent): no caveat", (tier) => {
+    expect(tokenCheck(tier, authOnly).detail).toBe("found (env / .env)");
+  });
+  it("another credential set: no caveat", () => {
+    expect(tokenCheck("protocol", probe({ hasToken: () => true, authTokenOnly: () => false })).detail).toBe("found (env / .env)");
+  });
+  it("the real probe reads the three names", () => {
+    const keys = ["ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"] as const;
+    const saved = keys.map((k) => process.env[k]);
     try {
-      process.env.CLAUDE_CONFIG_DIR = dir;
-      expect(realProbe.configCredentialsFile!()).toBeNull();
-      writeFileSync(join(dir, ".credentials.json"), "not json — never parsed");
-      expect(realProbe.configCredentialsFile!()).toBe(join(dir, ".credentials.json"));
+      for (const k of keys) delete process.env[k];
+      process.env.ANTHROPIC_AUTH_TOKEN = "x";
+      expect(realProbe.authTokenOnly!()).toBe(true);
+      process.env.ANTHROPIC_API_KEY = "y";
+      expect(realProbe.authTokenOnly!()).toBe(false);
     } finally {
-      if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR;
-      else process.env.CLAUDE_CONFIG_DIR = saved;
-      rmSync(dir, { recursive: true, force: true });
+      keys.forEach((k, i) => (saved[i] === undefined ? delete process.env[k] : (process.env[k] = saved[i])));
     }
   });
 });

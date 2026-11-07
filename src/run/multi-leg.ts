@@ -223,13 +223,24 @@ async function executeHostAction(p: {
   session: SessionConfig;
   sessionId: string;
   workBase: string;
+  runRoot: string;
 }): Promise<{ pass: boolean; verdict: ScenarioVerdict; egress?: ActionRecord["egress"] }> {
-  const { leg, legDir, tier, baseline, session, sessionId, workBase } = p;
+  const { leg, legDir, tier, baseline, session, sessionId, workBase, runRoot } = p;
   const ha = leg.host_action!;
   const secrets = collectSecrets();
-  const plan = buildLaunchPlan(session, baseline, legDir, tier, false, "local", resolveLaunchSources(session, baseline, tier, false), {
-    workBase,
-  });
+  const plan = buildLaunchPlan(
+    session,
+    baseline,
+    legDir,
+    tier,
+    false,
+    "local",
+    resolveLaunchSources(session, baseline, tier, false, { runRoot }),
+    {
+      workBase,
+      runRoot,
+    },
+  );
   const paths = actionPaths(tier, baseline, sessionId, workBase);
   const empty = { sha256: "", bytes: 0, head: "" };
   const finish = (raw: Omit<ActionRecord, "pass">): { pass: boolean; verdict: ScenarioVerdict; egress?: ActionRecord["egress"] } => {
@@ -448,6 +459,7 @@ export async function executeMultiLeg(
           session: prevSession ?? baseSession,
           sessionId: prevSessionId!,
           workBase: prevWorkBase!,
+          runRoot: root,
         });
         legEntries.push({ id: leg.id, kind, status: action.pass ? "passed" : "failed", verdict: action.verdict });
         actionEgress.push(...(action.egress ?? []));
@@ -496,6 +508,7 @@ export async function executeMultiLeg(
           session,
           leg: {
             outDir: legDir,
+            runRoot: root,
             sessionId: legSessionId,
             workBase,
             ...(legStage ? { legStage } : {}),

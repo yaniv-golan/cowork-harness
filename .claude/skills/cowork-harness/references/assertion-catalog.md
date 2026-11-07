@@ -50,9 +50,9 @@ paraphrases (that re-records red). Structured JSON → assert it in YAML with **
 `path` + operator, or `schema:` for a whole value's shape); use the pytest lane (`assert_artifact_json`) only for
 predicates neither can express.
 
-**VerdictSignals in `result.verdict.signals`:** `computeVerdict` pushes signals into `result.verdict.signals`; twelve
+**VerdictSignals in `result.verdict.signals`:** `computeVerdict` pushes signals into `result.verdict.signals`; eleven
 are **fail**-severity (they flip the run's pass/exit code even though `result.result` itself stays
-`"success"`) and eighteen are **warn**-severity (informational, never flip pass/fail). All thirty signal
+`"success"`) and eighteen are **warn**-severity (informational, never flip pass/fail). All twenty-nine signal
 codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 
 | Code | Severity | Meaning |
@@ -70,7 +70,6 @@ codes (`VerdictSignal["code"]` in `src/run/verdict.ts`):
 | `device_delete_unconfirmed` | warn | `device_bridge`, on a filesystem that can give a new file a deleted file's identity (`rename-reads-as-delete`): files are gone from a connected folder deletion was never allowed in, either deleted past the device's refusal or renamed and then edited, which that filesystem cannot tell apart |
 | `device_audit_unreadable` | warn | `device_bridge`: the shim's delete log was replaced by the device shell (a link, a FIFO), so the number of refused deletes, and deletes of files the session made after a grant, are unknown (`deviceBridge.auditUnreadable`; `refusedDeletes` is left out). The before-and-after comparison of the folders still ran |
 | `host_path_leak` | fail | A host path leaked into model-visible text (opt out: author `transcript_no_host_path`). A path copied verbatim from the scenario's own uploads, connected folders, prompt, or declared plugins' or local skills' files is not a leak |
-| `l0_host_config_contamination` | fail | `protocol` ran against the operator's REAL config dir, so host-installed plugins/skills/MCP servers may have answered instead of the thing under test — the run did not necessarily measure it (opt out: `allow_l0_host_config_contamination`). Name predates the meaning: delivery at L0 works, contamination is what this reports |
 | `missing_capability` | fail | A `requires_capabilities` need was unmet, or the skill used a capability the image omits (opt out: `allow_missing_capability`, or `skill --allow-missing-capability` on an open-ended run) |
 | `infra_error` | fail | A supervising process died mid-run (the VM/egress sidecar, or the `device_bridge` container) — the run's evidence is contaminated, not author-suppressible |
 | `stalled` | fail | The run ended asking for input with no tool work after the last gate. "Asking" = the final turn's closing sentence ends in `?`; or, once an `AskUserQuestion` gate has fired, it ends in `?` after trailing bold/quotes/`)`/emoji, is a `?` followed only by a `For example: …`/parenthetical aside, or is a request that says the input comes back to the agent (`Please share/provide/upload… so I can…`/`…here`, `Let me know which… you'd like me to use`, `Once you share… I'll…`, `I need X to proceed`, `Once I have the file, I'll…` after a sentence asking for it). Polite closers and hand-offs (`Let me know if…`, `Feel free…`, `with your`/`to your`, `before sending`, `If you…`) and a closing code block or blockquote never count. Hand-offs to a named third party (`with the team`, `to the founders`, `with the CFO`) never count either; `here` is a cue only after share/paste/upload/drop/reply/type/send or as the last word. English-only. Opt out with `allow_stall` (on `run`, `replay` and `eval`); without it, under `eval` a stalled rep is `errored_agent` and fails every row |

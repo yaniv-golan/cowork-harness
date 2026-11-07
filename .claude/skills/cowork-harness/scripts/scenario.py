@@ -264,7 +264,6 @@ LANE_REMOTE_AUTHORED_KEYS = ("file_exists",)
 # verdict modifiers — don't verify anything themselves (e.g. suppress a default-fail)
 VERDICT_MODIFIER_KEYS = {
     "allow_permissive_auto_allow",
-    "allow_l0_host_config_contamination",
     "allow_missing_capability",
     "allow_stall",
     "allow_max_turns",

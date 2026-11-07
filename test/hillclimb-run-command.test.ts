@@ -3,6 +3,7 @@
 // records what it was asked to run and returns a committed real excerpt (test/fixtures/eval-classify/
 // success-semantic.json) with the public csv-metrics run's init/result frames. Nothing spawns.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { realProbe, tokenCheck, type DoctorProbe } from "../src/run/doctor.js";
 import { InterruptedError } from "../src/termination.js";
 import {
   existsSync,
@@ -1581,30 +1582,15 @@ describe("credentials: refused before spend when no source resolves; an auth fai
     );
   });
 
-  it("protocol's own login (doctor warns, as it can serve an unmanaged protocol run) is refused: hillclimb's protocol runs use a managed config dir", async () => {
+  it("a protocol case with no env credential is refused on doctor's own row: no tier is exempt", async () => {
+    const keychainOnlyProbe: DoctorProbe = { ...realProbe, platform: () => "darwin", hasToken: () => false, hasKeychainToken: () => true };
     writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO.replace("fidelity: container", "fidelity: protocol"));
-    const warn = () => ({
-      id: "token",
-      title: "Auth token",
-      status: "warn" as const,
-      detail: "no env / .env token, but a Keychain entry exists",
-      required: true,
-    });
-    const saved = process.env.COWORK_MANAGED_CONFIG;
-    process.env.COWORK_MANAGED_CONFIG = "1";
-    try {
-      const r = await runHillclimbCommand(args("--dry-run"), deps({ tokenCheck: warn }));
-      expect(r.exitCode).toBe(2);
-      // Its own detail, never doctor's (which says protocol can authenticate from that login: true only unmanaged).
-      expect(r.error?.message).toContain(
-        "no usable agent credential for fidelity protocol (case alpha): no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN in the environment or a .env; the only login found is the one in your Claude config dir (Keychain or .credentials.json), which hillclimb's protocol runs do not read — they use a managed config dir",
-      );
-      expect(r.error?.message).not.toContain("a Keychain entry exists");
-      expect(r.error?.message).toContain("cowork-harness doctor --tier protocol");
-    } finally {
-      if (saved === undefined) delete process.env.COWORK_MANAGED_CONFIG;
-      else process.env.COWORK_MANAGED_CONFIG = saved;
-    }
+    const r = await runHillclimbCommand(args("--dry-run"), deps({ tokenCheck: (tier) => tokenCheck(tier, keychainOnlyProbe) }));
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toContain(
+      "no usable agent credential for fidelity protocol (case alpha): found a 'Claude Code-credentials' Keychain entry, but cowork-harness does not pass a Keychain credential to the agent",
+    );
+    expect(r.error?.message).toContain("cowork-harness doctor --tier protocol");
   });
 
   it("the dry run refuses the same way, before printing a plan", async () => {
@@ -2156,17 +2142,10 @@ describe("the billing basis follows the env the case's tier spawns the agent wit
 
   const protocolBasis = async (env: Record<string, string>): Promise<string> => {
     writeFileSync(join(cwd, "evals", "alpha.yaml"), SCENARIO.replace("fidelity: container", "fidelity: protocol"));
-    const saved = process.env.COWORK_MANAGED_CONFIG;
-    process.env.COWORK_MANAGED_CONFIG = "1";
-    try {
-      await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ env }));
-      const r = await runHillclimbCommand(args(), deps({ env }));
-      expect(r.exitCode, err.join("\n")).toBe(0);
-      return (rows()[0].meta as Record<string, any>).billing.basis;
-    } finally {
-      if (saved === undefined) delete process.env.COWORK_MANAGED_CONFIG;
-      else process.env.COWORK_MANAGED_CONFIG = saved;
-    }
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ env }));
+    const r = await runHillclimbCommand(args(), deps({ env }));
+    expect(r.exitCode, err.join("\n")).toBe(0);
+    return (rows()[0].meta as Record<string, any>).billing.basis;
   };
 
   it("protocol over an operator env with none of the precedence keys: api_key (the key wins)", async () => {

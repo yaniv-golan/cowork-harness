@@ -474,8 +474,7 @@ sourcing ≠ evaluation (replay warns when you edit one). `verify-run` is the on
 `skill_tool_used`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `tool_no_error`,
 `max_tool_errors`, `max_redundant_tool_calls`, `max_turns`, `compaction_occurred`, `hook_event_fired`, `hook_event_blocked`, `no_hook_event_blocked`, `hook_decision`, `hook_output_contains`, `hook_output_not_contains`, `all_tasks_completed`, `task_status`, `task_count_min`, `no_scratchpad_leak`, `present_files_called`, `result`
 (`max_cost_usd`/`max_tokens` assert the frozen recording's spend on replay, not fresh spend). The verdict
-modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_host_config_contamination` /
-`allow_stall` are also kept on replay, evaluated as no-op passes.
+modifiers `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_stall` are also kept on replay, evaluated as no-op passes.
 
 **Gate keys — graded on replay against the recorded `controlOut`:** `question_asked`, `question_options`, `question_context`, `question_option_count`, `questions_count_max`,
 `gate_answers_delivered`, `gate_answer_count_min`, `gates_all_scripted`, `hook_blocked`, `no_hook_blocked`, `vm_path_denied`,

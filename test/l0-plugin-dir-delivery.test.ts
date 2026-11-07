@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pluginDirArgs } from "../src/runtime/argv.js";
-import { buildProtocolEnv, managedConfigMode } from "../src/runtime/protocol.js";
+import { buildProtocolEnv } from "../src/runtime/protocol.js";
 import { checkHostHookConsent, pluginRootsWithRunnableHooks, warnUnservedHookEvents } from "../src/run/hook-events.js";
 import type { LaunchPlan } from "../src/session.js";
 import { loadBaseline } from "../src/baseline.js";
@@ -16,7 +16,6 @@ function tmp(): string {
 }
 afterEach(() => {
   for (const d of tmps.splice(0)) rmSync(d, { recursive: true, force: true });
-  delete process.env.COWORK_MANAGED_CONFIG;
   delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
   delete process.env.ANTHROPIC_AUTH_TOKEN;
 });
@@ -48,56 +47,23 @@ describe("pluginDirArgs — ONE derivation, two roots", () => {
   });
 });
 
-describe("managedConfigMode", () => {
-  const base = {} as NodeJS.ProcessEnv;
-
-  it("an API key takes the managed branch, and COWORK_MANAGED_CONFIG=0 does NOT revoke that CI promise", () => {
-    process.env.COWORK_MANAGED_CONFIG = "0";
-    expect(managedConfigMode({ ANTHROPIC_API_KEY: "k" })).toBe(true);
-  });
-
-  it("an OAuth token takes the managed branch", () => {
-    process.env.CLAUDE_CODE_OAUTH_TOKEN = "t";
-    expect(managedConfigMode(base)).toBe(true);
-  });
-
-  it("ANTHROPIC_AUTH_TOKEN counts too — doctor already treats it as a credential", () => {
-    process.env.ANTHROPIC_AUTH_TOKEN = "t";
-    expect(managedConfigMode(base)).toBe(true);
-  });
-
-  it("=0 suppresses the token-derived branch", () => {
-    process.env.CLAUDE_CODE_OAUTH_TOKEN = "t";
-    process.env.COWORK_MANAGED_CONFIG = "0";
-    expect(managedConfigMode(base)).toBe(false);
-  });
-
-  it("no credential at all stays on the operator's real config dir (OAuth would otherwise break)", () => {
-    expect(managedConfigMode(base)).toBe(false);
-  });
-
-  // The footgun this exists to close: a bare `=== "1"` test lets every other spelling fall through.
-  // `COWORK_MANAGED_CONFIG=false` reads as "off" and previously selected MANAGED — the opposite.
-  it("rejects an unrecognized value instead of silently picking a branch", () => {
-    process.env.COWORK_MANAGED_CONFIG = "false";
-    expect(() => managedConfigMode(base)).toThrow(/must be "0" or "1"/);
-  });
-});
-
 describe("buildProtocolEnv — auth injection is scoped", () => {
   const plan = (over: Partial<LaunchPlan> = {}) => ({ baseEnv: {}, agentEnv: undefined, ...over }) as LaunchPlan;
 
   // The token is stripped from plan.baseEnv by strippedEnv (it is bgEnvStrip.knownVars[0]), so it MUST
   // be read from process.env. Gating on the plan's copy would be a branch that can never be taken.
-  it("injects the token on the managed branch even though baseEnv has none", () => {
+  it("injects the token even though baseEnv has none", () => {
     process.env.CLAUDE_CODE_OAUTH_TOKEN = "tok";
     expect(buildProtocolEnv(plan(), loadBaseline("latest")).CLAUDE_CODE_OAUTH_TOKEN).toBe("tok");
   });
 
-  it("does NOT inject on the non-managed branch — that path keeps the real config dir and local login", () => {
-    process.env.CLAUDE_CODE_OAUTH_TOKEN = "tok";
-    process.env.COWORK_MANAGED_CONFIG = "0";
-    expect(buildProtocolEnv(plan(), loadBaseline("latest")).CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+  // The agent sends ANTHROPIC_AUTH_TOKEN as a plain bearer and prefers it over the OAuth variable; a copy under the OAuth
+  // name would add a second credential the operator never set. It reaches the agent under its own name only.
+  it("never copies ANTHROPIC_AUTH_TOKEN into CLAUDE_CODE_OAUTH_TOKEN", () => {
+    process.env.ANTHROPIC_AUTH_TOKEN = "bearer";
+    const env = buildProtocolEnv(plan({ baseEnv: { ANTHROPIC_AUTH_TOKEN: "bearer" } }), loadBaseline("latest"));
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(env.ANTHROPIC_AUTH_TOKEN).toBe("bearer");
   });
 
   // Merging runtimeAuthEnv() wholesale would put BOTH credentials in one child env on the CI path.

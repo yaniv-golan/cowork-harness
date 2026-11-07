@@ -55,6 +55,8 @@ import {
   VERDICT_MODIFIER_KEYS,
   FIDELITY_TIERS,
   isLiveModelId,
+  REMOVED_ASSERTION_KEYS,
+  removedAssertionKeysIn,
 } from "../types.js";
 import {
   executeScenario,
@@ -4207,6 +4209,14 @@ export function parseCassetteObject(raw: unknown): CassetteReadResult {
     }
   }
   const isFutureCassette = recordedVersion > CASSETTE_VERSION;
+  // A key a past release accepted and this one refuses: named, and re-recordable (the remedy is the re-record from a
+  // scenario without it — `rehash` checks only, and a hand edit would change the frozen scenario's hash).
+  const removedKeys = isFutureCassette ? [] : removedAssertionKeysIn(scn.assert);
+  if (removedKeys.length)
+    return {
+      error: `cassette's frozen scenario uses ${removedKeys.map((k) => `\`${k}\`, ${REMOVED_ASSERTION_KEYS[k]}`).join("; ")} from the scenario, then re-record it`,
+      rerecordable: true,
+    };
   const assertErrors: string[] = [];
   scn.assert.forEach((a, i) => {
     const r = AssertionSchema.safeParse(a);
@@ -6898,7 +6908,6 @@ function replayErrorResult(file: string): RunResult {
     mutation: undefined, // the protocol-error stub carries no mutation report
     skippedAssertions: undefined,
     toolResults: undefined,
-    l0HostConfigContamination: undefined,
     missingCapabilityUse: undefined,
     gateProvenance: undefined,
     skillsInvoked: undefined,
@@ -9308,7 +9317,7 @@ export async function replayCassette(
       ...MANIFEST_KEYS,
       ...LIVE_ONLY_KEYS, // single source of truth for the live-only bucket (stripped on replay)
       "replay_protocol_fidelity",
-      // (verdict modifiers allow_permissive_auto_allow / allow_missing_capability / allow_l0_host_config_contamination
+      // (verdict modifiers allow_permissive_auto_allow / allow_missing_capability
       //  arrive via ...alwaysContentKeys above — kept on replay as no-op passes.)
     ]);
     for (const key of Object.keys(AssertionSchema.shape) as (keyof Assertion)[]) {
@@ -9943,7 +9952,6 @@ export async function replayCassette(
       fsDiff: undefined, // the outputs filesystem diff is live-only, like scan
       outputsMountMode: undefined, // no live run here; absent reads as rw
       fidelityWarnings: undefined,
-      l0HostConfigContamination: undefined,
       missingCapabilityUse: undefined,
       gateProvenance: undefined,
       // F46: cassette.fingerprint is the record-time snapshot; frozenFingerprint (above) is it plus a

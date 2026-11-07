@@ -51,7 +51,6 @@ beforeEach(() => {
   setEnv("COWORK_HARNESS_MODEL", "claude-sonnet-5");
   setEnv("STUB_PID", f.stubPidFile);
   setEnv("STUB_ENV_DUMP", f.envDump);
-  setEnv("COWORK_MANAGED_CONFIG", "1");
   setEnv("CLAUDE_CODE_OAUTH_TOKEN", "stub-not-a-real-token");
   setEnv("COWORK_HARNESS_CLAUDE_BIN", oldCli);
   // The enterprise-MCP check looks at a path that never exists: these tests are about the CLI version.

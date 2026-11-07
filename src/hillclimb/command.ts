@@ -10,7 +10,6 @@ import { expandHome, resolveLaunchSources, type SessionConfig } from "../session
 import type { MountTier } from "../staging/mount-naming.js";
 import { loadSessionFromFile } from "../run/execute.js";
 import { loadBaseline } from "../baseline.js";
-import { managedConfigMode } from "../runtime/protocol.js";
 import { scenarioWorkspaceFixture } from "../fixture/workspace.js";
 import { resolveAgentPins, resolveJudgePins } from "../eval/pins.js";
 import type { PlatformBaseline } from "../types.js";
@@ -113,11 +112,6 @@ export function prepareCases(
     if (session !== undefined && session.plugins.local_plugins.length !== 1)
       throw new UsageError(
         `case ${c.id}: the session must declare exactly one plugins.local_plugins entry — the plugin the loop tunes (found ${session.plugins.local_plugins.length})`,
-      );
-    // A trace without its sub-agents' turns is incomplete: unmanaged protocol keeps no child transcripts.
-    if (!opts.noAgentRun && isSel && s.fidelity === "protocol" && !managedConfigMode(opts.env))
-      throw new UsageError(
-        `case ${c.id}: fidelity protocol without a managed config dir keeps no sub-agent transcripts, so its traces would be incomplete — set COWORK_MANAGED_CONFIG=1 or use another tier`,
       );
     baselines.set(c.id, loadBaseline(s.baseline));
   }

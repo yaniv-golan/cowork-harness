@@ -12,10 +12,9 @@
 # Deliberately a no-tool prompt: the assertion is about the DECLARED surface (system/init), not about
 # the model choosing to invoke anything.
 #
-# MUST run on the sealed branch (COWORK_MANAGED_CONFIG=1 + a token, or ANTHROPIC_API_KEY). Off it, the
-# operator's own installed plugins are in the inventory too, so a name collision could satisfy these
-# assertions with or without the flag — the test would be measuring the machine, not the argv. The
-# fixture name is deliberately obscure to make an accidental collision unlikely even so.
+# Every protocol run is sealed (the run's own config dir, never the operator's), so the operator's installed
+# plugins are not in the inventory and a name collision cannot satisfy these assertions without the flag.
+# The fixture name is deliberately obscure all the same.
 name: l0-plugin-delivery-probe
 baseline: latest
 session: ../sessions/l0-plugin-delivery.yaml

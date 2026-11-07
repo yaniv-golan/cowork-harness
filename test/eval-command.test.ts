@@ -543,12 +543,14 @@ describe("eval: credential preflight (doctor's token check, before any run)", ()
     expect(calls).toHaveLength(0);
     expect(existsSync(join(root, "eval"))).toBe(false);
   });
-  it("a tier doctor passes with a warning (protocol + Keychain) runs", async () => {
+  it("protocol + Keychain is refused too: protocol never uses a Keychain or /login session", async () => {
     const { scen, a, b } = setup();
     for (const f of readdirSync(scen))
       writeFileSync(join(scen, f), readFileSync(join(scen, f), "utf8").replace("fidelity: container", "fidelity: protocol"));
-    const out = await runEval(args(scen, a, b), { ...deps(fakeRunner()), tokenCheck: (tier) => tokenCheck(tier, keychainOnly) });
-    expect(out.report.arms.map((x) => x.buckets)).toEqual([{ valid: 5 }, { valid: 5 }]);
+    const calls: EvalJobSpec[] = [];
+    const p = runEval(args(scen, a, b), { ...deps(fakeRunner(undefined, calls)), tokenCheck: (tier) => tokenCheck(tier, keychainOnly) });
+    await expect(p).rejects.toThrow(/fidelity protocol.*Keychain entry.*setup-token/s);
+    expect(calls).toHaveLength(0);
   });
   it("asks once per distinct tier the scenarios declare", async () => {
     const { scen, a, b } = setup({ semantic: true });

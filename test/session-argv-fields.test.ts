@@ -22,7 +22,7 @@ const plan = (over: Partial<LaunchPlan> = {}): LaunchPlan => ({
   egressAllow: ["api.anthropic.com"],
   ...over,
 });
-const protocol = (p: LaunchPlan) => protocolAgentArgs(baseline, p, { discoveryArgs: [], workRoot: "/HOST/work" });
+const protocol = (p: LaunchPlan) => protocolAgentArgs(baseline, p, { workRoot: "/HOST/work" });
 const sandbox = (p: LaunchPlan) => baseAgentArgs(baseline, p, { mntRoot: "/sessions/x/mnt" });
 
 // Each flag-bearing field set to a value, and the argv tokens it must produce (flag then value, adjacent).

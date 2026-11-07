@@ -146,10 +146,9 @@ export interface DoctorProbe {
   // at EVERY tier, so doctor points the user at .env. (doctor itself DOES read the Keychain — that is what
   // this probe is for — so the message must not claim otherwise.)
   hasKeychainToken(): boolean;
-  // Path of `.credentials.json` in the config dir the protocol tier's agent reads (CLAUDE_CONFIG_DIR, else
-  // ~/.claude) when it exists, else null — existence only, never read. OPTIONAL: a probe without it (every
-  // test double) reports no file, so the check stays deterministic.
-  configCredentialsFile?(): string | null;
+  // Is ANTHROPIC_AUTH_TOKEN the only credential variable set? Names only, never a value. OPTIONAL: a probe without
+  // it (every test double) reports false. It changes no status, only the `ok` row's caveat (see tokenCheck).
+  authTokenOnly?(): boolean;
   // When cwd is a git WORKTREE with no local ./.env but the main checkout has one, returns that .env path —
   // the gitignored .env doesn't travel to a worktree, a common "no token" first-run trap. null otherwise.
   worktreeEnv(): string | null;
@@ -378,10 +377,7 @@ export const realProbe: DoctorProbe = {
     const r = spawnSync("security", ["find-generic-password", "-s", "Claude Code-credentials"], { stdio: "ignore" });
     return r.status === 0;
   },
-  configCredentialsFile: () => {
-    const f = join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), ".credentials.json");
-    return existsSync(f) ? f : null;
-  },
+  authTokenOnly: () => !!process.env.ANTHROPIC_AUTH_TOKEN && !process.env.CLAUDE_CODE_OAUTH_TOKEN && !process.env.ANTHROPIC_API_KEY,
   worktreeEnv: () => {
     if (existsSync(join(process.cwd(), ".env"))) return null; // a local .env exists → not the worktree trap
     const gitDir = spawnSync("git", ["rev-parse", "--git-dir"], { encoding: "utf8" });
@@ -503,8 +499,10 @@ export function graderCredentialCheck(tier: Tier, env: NodeJS.ProcessEnv = proce
 }
 
 /** The agent-credential check for one tier — the `token` row of `runDoctorChecks`, and the ONLY credential
- *  detector: `eval` refuses before its first run on exactly this decision, so the two can never disagree
- *  about a tier. Refuse on `status === "fail"`; `warn` (protocol with a Keychain login) is runnable. */
+ *  detector: `eval`, `hillclimb` and the run/skill/record pre-flight (`protocolCredentialPreflight`) refuse on exactly
+ *  this decision, so they can never disagree about a tier. Refuse on `status === "fail"`. Every tier needs a
+ *  credential in the environment (env / .env): each one gives the agent a managed config dir, so a Keychain or
+ *  `/login` session is never used. */
 export function tokenCheck(tier: Tier, probe: DoctorProbe = realProbe): DoctorCheck {
   const plat = probe.platform();
   const token = probe.hasToken();
@@ -516,46 +514,31 @@ export function tokenCheck(tier: Tier, probe: DoctorProbe = realProbe): DoctorCh
   // .env doesn't apply. Point at it via --dotenv. (Keychain takes precedence — it's the "you have a token,
   // just unreadable in-Docker" case.)
   const worktreeEnv = !token && !keychainOnly ? probe.worktreeEnv() : null;
-  // PROTOCOL ONLY: this tier deliberately keeps the user's REAL CLAUDE_CONFIG_DIR when no API key is
-  // present (protocol.ts:88-97) precisely because "a fresh CLAUDE_CONFIG_DIR breaks OAuth". So a
-  // Keychain-only macOS user CAN run protocol — the agent authenticates from local login state, and
-  // failing them here is a false negative on the one tier that needs no Docker and no staged agent.
-  // Measured live 2026-07-25 (agent 2.1.217, env scrubbed of all three token vars): default config dir
-  // => authenticated; fresh managed config dir => "Not logged in · Please run /login". EVERY other tier
-  // passes a managed configDir (argv.ts:179 host-native, :142 guest), which severs self-sourcing — so
-  // the token is genuinely required there and this relaxation must not spread.
-  // `warn`, not `ok`: the probe proves a Keychain credential EXISTS, not that the real config dir's
-  // login state is still valid. Non-blocking because readiness gates on `status === "fail"` (see the
-  // `blocking` filter), so `required: true` is preserved and the caveat still prints.
-  // The same self-sourcing from a FILE: where Claude Code keeps its login in `<config dir>/.credentials.json`
-  // (Linux, or any host without a Keychain), protocol's real config dir carries it too. Asked only at
-  // protocol, and an existence check — the file is never read.
-  const credsFile = !token && !keychainOnly && tier === "protocol" ? (probe.configCredentialsFile?.() ?? null) : null;
-  const protocolSelfSourced = tier === "protocol" && (keychainOnly || credsFile !== null);
+  // A rejected ANTHROPIC_AUTH_TOKEN is not reported as an auth error where it reaches the agent (protocol, and
+  // hostloop with no OAuth token): the agent sends it as a plain bearer and retries the 401 until the run's
+  // timeout. Measured against a local 401 server, so the caveat rides on the `ok` row.
+  const authTokenCaveat =
+    token && (tier === "protocol" || tier === "hostloop") && probe.authTokenOnly?.()
+      ? " — ANTHROPIC_AUTH_TOKEN only: if the agent rejects it, the run ends as a timeout, not as an auth error"
+      : "";
   return {
     id: "token",
     title: "Auth token",
-    status: token ? "ok" : protocolSelfSourced ? "warn" : "fail",
+    status: token ? "ok" : "fail",
     detail: token
-      ? "found (env / .env)"
-      : credsFile !== null
-        ? `no env / .env token, but ${credsFile} exists — protocol keeps your REAL CLAUDE_CONFIG_DIR (no API key present), so the agent can authenticate from that login`
-        : protocolSelfSourced
-          ? "no env / .env token, but a 'Claude Code-credentials' Keychain entry exists — protocol keeps your REAL CLAUDE_CONFIG_DIR (no API key present), so the agent can authenticate from local login state"
-          : keychainOnly
-            ? "found a 'Claude Code-credentials' Keychain entry, but cowork-harness does not pass a Keychain credential to the agent"
-            : worktreeEnv
-              ? "no token in this git worktree (its ./.env is gitignored, so it's absent here)"
-              : "no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN",
+      ? `found (env / .env)${authTokenCaveat}`
+      : keychainOnly
+        ? "found a 'Claude Code-credentials' Keychain entry, but cowork-harness does not pass a Keychain credential to the agent"
+        : worktreeEnv
+          ? "no token in this git worktree (its ./.env is gitignored, so it's absent here)"
+          : "no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN",
     remedy: token
       ? undefined
-      : protocolSelfSourced
-        ? "likely fine as-is at this tier — if a run fails with 'Not logged in', put the token in ./.env: echo CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) >> .env (required for container/microvm/hostloop, which use a managed CLAUDE_CONFIG_DIR)"
-        : keychainOnly
-          ? "copy your Keychain token into ./.env — cowork-harness injects only env / .env into the agent, at every tier: echo CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) >> .env — or, if the token is already in another file, point at it: cowork-harness --dotenv <path> <cmd> (doctor honors --dotenv too)"
-          : worktreeEnv
-            ? `the main checkout has a .env — point at it: cowork-harness --dotenv ${worktreeEnv} <cmd> (or set CLAUDE_CODE_OAUTH_TOKEN)`
-            : "export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) (or set ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN), put it in ./.env, or point at another file: cowork-harness --dotenv <path> <cmd>",
+      : keychainOnly
+        ? "copy your Keychain token into ./.env — cowork-harness injects only env / .env into the agent, at every tier: echo CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) >> .env — or, if the token is already in another file, point at it: cowork-harness --dotenv <path> <cmd> (doctor honors --dotenv too)"
+        : worktreeEnv
+          ? `the main checkout has a .env — point at it: cowork-harness --dotenv ${worktreeEnv} <cmd> (or set CLAUDE_CODE_OAUTH_TOKEN)`
+          : "export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) (or set ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN), put it in ./.env, or point at another file: cowork-harness --dotenv <path> <cmd>",
     required: true, // required for every tier doctor validates — each of those tiers calls a real model when actually run; only a committed-cassette replay needs none (and replay skips doctor)
   };
 }
@@ -568,13 +551,12 @@ export function authFailureHint(tier: Tier, check: DoctorCheck, env: NodeJS.Proc
   // container and microvm hand the agent only what runtimeAuthEnv (src/runtime/host-env.ts) picks: CLAUDE_CODE_OAUTH_TOKEN,
   // else ANTHROPIC_API_KEY. hostloop spawns it from the harness's own env: with the token set it gets the token alone
   // (buildHostLoopNativeEnv drops the other credential keys), and with no token ANTHROPIC_AUTH_TOKEN reaches it too.
-  // protocol spawns it from the harness's own env as well, and without a managed config dir also leaves it the login
-  // in the real config dir.
+  // protocol spawns it from the harness's own env as well, with a managed config dir (no login is read).
   const sealed = tier === "container" || tier === "microvm";
   const vars = sealed
     ? "CLAUDE_CODE_OAUTH_TOKEN, else ANTHROPIC_API_KEY"
     : tier === "protocol"
-      ? "CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN (else, without a managed config dir only, the Claude Code login in your config dir)"
+      ? "CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN (never a Keychain or /login session)"
       : tier === "hostloop"
         ? env.CLAUDE_CODE_OAUTH_TOKEN
           ? "CLAUDE_CODE_OAUTH_TOKEN alone while it is set (ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN do not reach the agent then)"

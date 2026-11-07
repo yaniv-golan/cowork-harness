@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
-import { readSessionManifest, hostPathLeaked, scanEvents, outputsRemovedByFsDiff } from "../src/run/execute.js";
+import { readSessionManifest, hostPathLeaked, scanEvents, outputsRemovedByFsDiff, executeScenario } from "../src/run/execute.js";
+import { ScenarioObject, type Scenario } from "../src/types.js";
 import { isHostFsSealed, boundaryAllowList } from "../src/boundary.js";
 import { loadBaseline } from "../src/baseline.js";
 import { clampTimeout } from "../src/hostloop/workspace-handler.js";
@@ -19,7 +20,7 @@ describe("execute — readSessionManifest", () => {
   };
 
   it("returns agentSessionId for a valid manifest", () => {
-    const f = write(JSON.stringify({ sessionId: "s1", agentSessionId: "uuid-123" }));
+    const f = write(JSON.stringify({ sessionId: "s1", agentSessionId: "uuid-123", fidelity: "container" }));
     expect(readSessionManifest(f, "s1", "container")).toBe("uuid-123");
   });
 
@@ -29,12 +30,12 @@ describe("execute — readSessionManifest", () => {
   });
 
   it("throws a clear error when agentSessionId is missing (resume path)", () => {
-    const f = write(JSON.stringify({ sessionId: "s1" }));
+    const f = write(JSON.stringify({ sessionId: "s1", fidelity: "container" }));
     expect(() => readSessionManifest(f, "s1", "container")).toThrow(/missing agentSessionId/);
   });
 
   it("throws when agentSessionId is present but not a string", () => {
-    const f = write(JSON.stringify({ sessionId: "s1", agentSessionId: 42 }));
+    const f = write(JSON.stringify({ sessionId: "s1", agentSessionId: 42, fidelity: "container" }));
     expect(() => readSessionManifest(f, "s1", "container")).toThrow(/missing agentSessionId/);
   });
 
@@ -51,9 +52,33 @@ describe("execute — readSessionManifest", () => {
     expect(() => readSessionManifest(f, "s1", "hostloop")).toThrow(/resume is "hostloop"/);
   });
 
-  it("allows through a legacy manifest with no fidelity field (backward compat)", () => {
-    const f = write(JSON.stringify({ sessionId: "s1", agentSessionId: "uuid-legacy" }));
-    expect(readSessionManifest(f, "s1", "hostloop")).toBe("uuid-legacy");
+  // A manifest without either identity stamp predates them and cannot be checked: refused, whatever the caller passes
+  // (an empty expected tier included — the old tolerance keyed on the caller's args).
+  it.each([
+    ["fidelity", { sessionId: "s1", agentSessionId: "uuid-legacy" }],
+    ["sessionId", { agentSessionId: "uuid-legacy", fidelity: "hostloop" }],
+    ["sessionId or fidelity", { agentSessionId: "uuid-legacy" }],
+    ["fidelity", { sessionId: "s1", agentSessionId: "uuid-legacy", fidelity: "" }],
+  ])("refuses a manifest with no %s", (missing, body) => {
+    const f = write(JSON.stringify(body));
+    for (const tier of ["hostloop", ""])
+      expect(() => readSessionManifest(f, "s1", tier)).toThrow(
+        `cannot resume "s1": session manifest at ${f} has no ${missing} (written before cowork-harness stamped them)`,
+      );
+  });
+
+  it("an empty expected session id is a caller bug, never a skipped comparison", () => {
+    const f = write(JSON.stringify({ sessionId: "s1", agentSessionId: "u", fidelity: "container" }));
+    expect(() => readSessionManifest(f, "", "container")).toThrow(/no session id to check the manifest against/);
+  });
+});
+
+// The manifest's sessionId comparison is unconditional because no caller can reach it without an id: --resume with no
+// --session-id is refused before the manifest is read, at the CLI (cli-json.test.ts) and here, for a library caller.
+describe("execute — --resume needs a session id before any manifest is read", () => {
+  it("executeScenario refuses resume without a sessionId", async () => {
+    const scenario = ScenarioObject.parse({ name: "resume-no-id", fidelity: "container", prompt: "hi" }) as unknown as Scenario;
+    await expect(executeScenario(scenario, { resume: true })).rejects.toThrow("resume requires sessionId (--session-id was not provided)");
   });
 });
 

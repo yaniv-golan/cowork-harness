@@ -417,12 +417,11 @@ grades none, and its exit code is unchanged. Re-run the eval to grade them.
 - **`--fail-on confirmed`** when no row could reach `confirmed` at this `--reps` and correction.
 - **The agent credential**, for every tier the scenarios run at, by the same check
   `cowork-harness doctor --tier <tier>` prints as its `token` row: a failing check refuses the eval with
-  doctor's message and fix. A token in the environment or `.env` passes at every tier. Without one, a
-  Claude Code login — in the macOS Keychain, or a `.credentials.json` in the config dir
-  (`CLAUDE_CONFIG_DIR`, else `~/.claude`; only its existence is checked) — is enough only at `protocol`,
-  which keeps your real config dir, so the agent signs itself in; doctor shows it as a warning. Every
-  other tier gives the agent a managed config dir, and there it is refused. The check cannot see a token that is present but expired — a rep
-  that then fails to authenticate is excluded as infrastructure (above).
+  doctor's message and fix. A token in the environment or `.env` is required at every tier: each one gives the
+  agent a managed config dir, so a Claude Code login in the macOS Keychain or your config dir is not used. The check
+  cannot see a token that is present but expired — a rep that then fails to authenticate is excluded as
+  infrastructure (above). At `protocol` and `hostloop`, a rejected `ANTHROPIC_AUTH_TOKEN` is not reported as an auth
+  failure: the agent retries it until the run's timeout, so the rep ends as a timeout.
 
 - **A frozen search corpus** (`--search-corpus`): the pool must load and verify; a mixed pool needs
   `--allow-mixed-pool`; each arm × scenario must pass the checks a `run --search-corpus` makes (hostloop, the

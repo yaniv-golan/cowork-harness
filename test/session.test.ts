@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtempSync, readFileSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs";
+import { mkdtempSync, readFileSync, mkdirSync, writeFileSync, symlinkSync, readdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, basename } from "node:path";
 import { loadBaseline } from "../src/baseline.js";
@@ -12,6 +12,8 @@ import {
   userVisibleRootsFromPlan,
   deleteDeniedRootsFromPlan,
   pluginSkillRootsFromPlan,
+  resolveLaunchSources,
+  CONFIG_DIR_MARKER,
 } from "../src/session.js";
 import { parseSessionFile } from "../src/run/execute.js";
 import { agentArgs } from "../src/runtime/argv.js";
@@ -51,22 +53,11 @@ describe("mount / path safety", () => {
       else process.env.COWORK_HARNESS_SOFT_MISSING = prev;
     }
   });
-  it("pinning config_dir to an EXISTING dir is rejected without the opt-in", () => {
-    const existing = mkdtempSync(join(tmpdir(), "cowork-cfg-"));
-    expect(() => plan({ plugins: { config_dir: existing } })).toThrow(/COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE/);
-  });
-  it("pinning config_dir to a FILE fails with a clear not-a-directory error (even with the write opt-in)", () => {
+  it("pinning config_dir to a FILE fails with a clear not-a-directory error, before the existing-dir check", () => {
     const dir = mkdtempSync(join(tmpdir(), "cowork-cfg-"));
     const file = join(dir, "not-a-dir");
     writeFileSync(file, "x");
-    const prev = process.env.COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE;
-    process.env.COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE = "1"; // past the existing-dir guard; must still reject a file
-    try {
-      expect(() => plan({ plugins: { config_dir: file } })).toThrow(/exists but is not a directory/);
-    } finally {
-      if (prev === undefined) delete process.env.COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE;
-      else process.env.COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE = prev;
-    }
+    expect(() => plan({ plugins: { config_dir: file } })).toThrow(/exists but is not a directory/);
   });
   it("extended_thinking is a real boolean, default ON", () => {
     expect(loadSession({}).extended_thinking).toBe(true);
@@ -746,5 +737,72 @@ describe("connected projects — .projects/<uuid>, read-only, never the cwd", ()
 
   it("a uuid cannot escape the mnt root", () => {
     expect(() => plan({ projects: [{ uuid: "../../etc", from: tmpdir() }] })).toThrow();
+  });
+});
+
+// A pinned config_dir is single-run: the harness creates it with a marker naming the run's root, the same run's later
+// legs and --resume turns reuse it, and every other existing dir — a real Claude config, another run's — is refused
+// before anything is written into it.
+describe("plugins.config_dir: the single-run marker", () => {
+  const session = (dir: string) => loadSession({ plugins: { config_dir: dir } });
+  /** The tree under `dir`, as relative path → content, so a refusal can be shown to leave it byte-identical. */
+  const tree = (dir: string, rel = ""): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const e of readdirSync(join(dir, rel), { withFileTypes: true })) {
+      const r = join(rel, e.name);
+      if (e.isDirectory()) Object.assign(out, tree(dir, r));
+      else out[r] = readFileSync(join(dir, r), "utf8");
+    }
+    return out;
+  };
+  /** Build a plan the way executeScenario does: resolve against the run root, then stage. */
+  const runPlan = (dir: string, runRoot: string, resume = false) => {
+    const s = session(dir);
+    const sources = resolveLaunchSources(s, baseline, "hostloop", resume, { runRoot });
+    return buildLaunchPlan(s, baseline, runRoot, "hostloop", resume, "local", sources, { runRoot });
+  };
+
+  it("an existing dir the harness did not create (no marker) is refused, and left byte-identical", () => {
+    const real = mkdtempSync(join(tmpdir(), "real-claude-"));
+    writeFileSync(join(real, "settings.json"), '{"mine":true}');
+    mkdirSync(join(real, "projects"));
+    writeFileSync(join(real, "projects", "s.jsonl"), "{}\n");
+    const before = tree(real);
+    expect(() => runPlan(real, mkdtempSync(join(tmpdir(), "run-")))).toThrow(
+      new RegExp(`it has no \\${CONFIG_DIR_MARKER} marker, so it may be a real Claude config`),
+    );
+    expect(() => plan({ plugins: { config_dir: real } })).toThrow(/single-run/);
+    expect(tree(real)).toEqual(before);
+  });
+
+  it("created by a run: marked with that run's root, and reused by the same run (a later leg, a --resume turn)", () => {
+    const dir = join(mkdtempSync(join(tmpdir(), "pin-")), "cfg");
+    const run = mkdtempSync(join(tmpdir(), "run-"));
+    runPlan(dir, run);
+    const marker = JSON.parse(readFileSync(join(dir, CONFIG_DIR_MARKER), "utf8"));
+    expect(marker.runDir).toBe(realpathSync(run));
+    expect(marker.runId).toBe(basename(realpathSync(run)));
+    expect(typeof marker.createdAt).toBe("string");
+    expect(() => runPlan(dir, run)).not.toThrow(); // a later leg of the same run
+    expect(() => runPlan(dir, run, true)).not.toThrow(); // a --resume turn
+    // reuse does not re-mark: the marker is the creating run's
+    expect(JSON.parse(readFileSync(join(dir, CONFIG_DIR_MARKER), "utf8"))).toEqual(marker);
+  });
+
+  it("another run's dir is refused, naming the run it belongs to", () => {
+    const dir = join(mkdtempSync(join(tmpdir(), "pin-")), "cfg");
+    const first = mkdtempSync(join(tmpdir(), "run-"));
+    runPlan(dir, first);
+    expect(() => runPlan(dir, mkdtempSync(join(tmpdir(), "run-")))).toThrow(`it belongs to the run at ${realpathSync(first)}`);
+  });
+
+  it("a marker that does not parse, or names no run, is refused", () => {
+    const run = mkdtempSync(join(tmpdir(), "run-"));
+    const garbled = mkdtempSync(join(tmpdir(), "cfg-"));
+    writeFileSync(join(garbled, CONFIG_DIR_MARKER), "{not json");
+    expect(() => runPlan(garbled, run)).toThrow(/marker does not read/);
+    const empty = mkdtempSync(join(tmpdir(), "cfg-"));
+    writeFileSync(join(empty, CONFIG_DIR_MARKER), JSON.stringify({ runId: "x" }));
+    expect(() => runPlan(empty, run)).toThrow(/marker names no run dir/);
   });
 });

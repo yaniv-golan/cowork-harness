@@ -186,8 +186,7 @@ The split is not just about tokens — it decides **where each lane can run**:
   Docker, no agent binary** — runs on a stock GitHub Actions runner. Evaluates **content** assertions —
   `transcript_*`, `tool_*`, `subagent_*`, `dispatch_count_max`, `skill_triggered`, `no_skill_triggered`,
   `max_cost_usd`, `max_tokens`, `tool_calls_max`, `result`, and the verdict modifiers
-  `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_l0_host_config_contamination` /
-  `allow_stall` (no-op passes); plus the gate keys `question_asked` / `question_options` /
+  `allow_permissive_auto_allow` / `allow_missing_capability` / `allow_stall` (no-op passes); plus the gate keys `question_asked` / `question_options` /
   `question_context` / `question_option_count` / `questions_count_max` / `gate_answers_delivered`, and the manifest keys
   (`file_exists` / `user_visible_artifact` / `artifact_json` / `artifact_text`) **if** it carries an artifact
   manifest. `file_absent` is in neither class — it is live/verify-run only.

@@ -221,23 +221,16 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
 
   // Credentials: doctor's own check for every tier the selected cases run at, before any snapshot, approval or spend —
   // eval's refusal. Without it a pass with no usable credential runs every slot to "Not logged in". Read-only and
-  // offline (env names, a Keychain presence probe, file existence). `warn` is protocol's own login in the real config
-  // dir, which hillclimb never reads: its protocol runs use a managed config dir (prepareCases refuses one without),
-  // so that login cannot authenticate them either.
+  // offline (env names, a Keychain presence probe).
   const byTier = new Map<FidelityTier, string[]>();
   for (const c of selected) byTier.set(c.scenario.fidelity, [...(byTier.get(c.scenario.fidelity) ?? []), c.id]);
   for (const [tier, ids] of byTier) {
     const t = deps.tokenCheck(tier);
-    const managedLogin = t.status === "warn" && tier === "protocol";
-    if (t.status === "fail" || managedLogin)
+    if (t.status === "fail")
       throw new UsageError(
-        // doctor's `warn` detail says protocol can use that login, which holds only for an unmanaged config dir: say
-        // what is true here instead.
         `no usable agent credential for fidelity ${tier} (case${ids.length > 1 ? "s" : ""} ${ids.join(", ")}): ` +
-          (managedLogin
-            ? "no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN in the environment or a .env; the only login found is the one in your Claude config dir (Keychain or .credentials.json), which hillclimb's protocol runs do not read — they use a managed config dir. Fix: echo CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) >> .env, or point at a file holding it: cowork-harness --dotenv <path> hillclimb run …"
-            : t.detail) +
-          (managedLogin ? "" : t.remedy ? `. Fix: ${t.remedy}` : "") +
+          t.detail +
+          (t.remedy ? `. Fix: ${t.remedy}` : "") +
           ` (the same check as \`cowork-harness doctor --tier ${tier}\`)`,
       );
   }

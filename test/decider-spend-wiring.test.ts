@@ -45,12 +45,7 @@ function stub(reply: string, preamble = ""): string {
 }
 
 function scenario(f: StubFixture, extra: string): void {
-  // The stub reads no config dir, so the L0 host-config guard is opted out (a verdict modifier): that keeps the exit code a
-  // real signal for this lane instead of a guaranteed 1.
-  writeFileSync(
-    f.scenario,
-    `baseline: latest\nfidelity: protocol\nprompt: say hi\n${extra}assert:\n  - result: success\n  - allow_l0_host_config_contamination: true\n`,
-  );
+  writeFileSync(f.scenario, `baseline: latest\nfidelity: protocol\nprompt: say hi\n${extra}assert:\n  - result: success\n`);
 }
 
 function result(f: StubFixture): any {

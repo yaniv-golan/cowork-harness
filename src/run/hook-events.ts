@@ -212,12 +212,9 @@ export function logHostHookNotice(pluginRoots: string[], warn: (m: string) => vo
  *  carries no plugin id — so the output or decision cannot be attributed to the plugin under test when another hook
  *  can answer the same event: another hook's text can satisfy `hook_output_contains` or fail
  *  `hook_output_not_contains`, and another hook's frame can satisfy `no_hook_event_blocked` (it shows a hook ran and
- *  did not block). The warning qualifies the verdict; it does not change it. Two such cases:
- *   - more than one staged plugin declares the asserted event;
- *   - `operatorHooksVisible`: the agent reads the operator's real config dir (at `protocol` without the sealed
- *     managed config), so a plugin installed on the host runs its hooks in the same session. Its SessionStart /
- *     Setup frames stream even without --include-hook-events, and with that flag every event's frames do.
- *  (`allow_host_hooks` is NOT such a case: it is consent for the staged plugin's own hooks to run as native host
+ *  did not block). The warning qualifies the verdict; it does not change it. The case: more than one staged plugin
+ *  declares the asserted event. (Every tier gives the agent a managed config dir, so no hook the operator installed
+ *  can answer.) (`allow_host_hooks` is NOT such a case: it is consent for the staged plugin's own hooks to run as native host
  *  processes at `protocol`, not a second source of hooks.) Emitted regardless of `--compact`: it qualifies what a
  *  verdict means, like the host-hook disclosure, rather than decorating the run. Never throws. */
 export function warnAmbiguousHookOutput(
@@ -229,11 +226,10 @@ export function warnAmbiguousHookOutput(
     no_hook_event_blocked?: true | { event: string };
     hook_decision?: { event: string };
   }>,
-  operatorHooksVisible: boolean,
   warn: (msg: string) => void,
 ): void {
   // event → the keys that read its frames. The unscoped `no_hook_event_blocked: true` reads every event's frames, so
-  // it takes every event a staged plugin declares (and, with operator hooks visible, any event at all: EVERY_EVENT).
+  // it takes every event a staged plugin declares.
   const EVERY_EVENT = "*";
   const byEvent = new Map<string, Set<string>>();
   const add = (ev: string, key: string) => byEvent.set(ev, (byEvent.get(ev) ?? new Set()).add(key));
@@ -259,22 +255,12 @@ export function warnAmbiguousHookOutput(
     byEvent.delete(EVERY_EVENT);
     for (const d of declaring) for (const ev of d.events) add(ev, [...every][0]!);
   }
-  // No staged plugin declares an event to attribute it to: name it once, beside any event another key names.
-  if (every && operatorHooksVisible && !declaring.some((d) => d.events.length > 0)) byEvent.set("any event", new Set(every));
   for (const [ev, keys] of [...byEvent].sort(([a], [b]) => a.localeCompare(b))) {
     const roots = declaring.filter((d) => d.events.includes(ev)).map((d) => d.root);
-    const reasons: string[] = [];
-    if (roots.length > 1) reasons.push(`${roots.length} staged plugins declare \`${ev}\` (${roots.join(", ")})`);
-    if (operatorHooksVisible)
-      reasons.push(
-        "this protocol run reads your real config dir (no sealed managed config), so a hook from a plugin installed on this machine may also answer it",
-      );
-    if (reasons.length)
+    if (roots.length > 1)
       warn(
-        `::warning:: [hooks] ${[...keys].sort().join(" / ")} on \`${ev}\`: ${reasons.join("; ")} — hook_response frames carry no plugin id, ` +
-          `so the output or decision graded cannot be attributed to one hook. Stage only the plugin under test${
-            operatorHooksVisible ? " and seal the config dir (COWORK_MANAGED_CONFIG=1 with a token)" : ""
-          }, or match text only it prints.\n`,
+        `::warning:: [hooks] ${[...keys].sort().join(" / ")} on \`${ev}\`: ${roots.length} staged plugins declare \`${ev}\` (${roots.join(", ")}) — hook_response frames carry no plugin id, ` +
+          `so the output or decision graded cannot be attributed to one hook. Stage only the plugin under test, or match text only it prints.\n`,
       );
   }
 }

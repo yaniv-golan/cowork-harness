@@ -7,7 +7,7 @@ import { readSessionManifest, executeScenario, parseScenarioFile } from "../src/
 // The manifest's NAME makes it the first thing anyone opens in a run dir, but it held only opaque ids —
 // so a consumer running three concurrent critiques could not tell which run was which without opening each
 // turn's result.json. The identity fields added for that are ADDITIVE-OPTIONAL: `readSessionManifest`
-// validates `sessionId` and `fidelity` only, so a manifest written before they existed must still resume.
+// validates `sessionId` and `fidelity` only (both required), so a manifest without `scenario`/`prompt` still resumes.
 
 function manifest(root: string, body: Record<string, unknown>): string {
   const p = join(root, "session.json");
@@ -16,7 +16,7 @@ function manifest(root: string, body: Record<string, unknown>): string {
 }
 
 describe("session manifest — identity fields never gate resume", () => {
-  it("resumes a LEGACY manifest that has no identity fields at all", () => {
+  it("resumes a manifest that has none of the signpost fields (scenario, prompt)", () => {
     const root = mkdtempSync(join(tmpdir(), "cwh-sm-"));
     const p = manifest(root, { sessionId: "s1", agentSessionId: "agent-1", fidelity: "container" });
     expect(readSessionManifest(p, "s1", "container")).toBe("agent-1");

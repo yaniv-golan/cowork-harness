@@ -99,14 +99,14 @@ describe("live grading: sub-agent reasoning is captured before the judge runs", 
     expect(persisted[0].webSearches).toHaveLength(1);
   });
 
-  it("no config root (unmanaged protocol): no capture, the judge still runs, the section is absent", async () => {
+  it("no config root (a tier with no readable child transcripts): no capture, the judge still runs, the section is absent", async () => {
     const { subagents, ctx } = stagedRun();
     const { judge, received } = capturingJudge();
     const a: Assertion = { semantic_matches: { rubric: ["x"], include_subagent_text: true } };
     const { stderr } = await withStderr(() =>
       captureSubagentReasoningThenJudge({
         subagentConfigRoot: undefined,
-        effectiveFidelity: "protocol",
+        effectiveFidelity: "microvm",
         asserts: [a],
         ctx,
         judges: () => ({ judge }),
@@ -115,7 +115,7 @@ describe("live grading: sub-agent reasoning is captured before the judge runs", 
     expect(subagents[0].reasoning).toBeUndefined();
     expect(received[0]).not.toContain("Sub-agent output");
     expect(stderr).toMatch(/::warning:: \[semantic_matches\] include_subagent_text: true, but the judged document has NO sub-agent text/);
-    expect(stderr).toMatch(/without managed config/);
+    expect(stderr).toMatch(/the microvm tier has no child transcripts the harness can read/);
   });
 });
 
