@@ -20,8 +20,8 @@ All notable changes to this project are documented here. The format is based on
   credential that selects the protocol tier's managed config directory every real run uses, instead of forcing the
   unsealed branch.
 - **The live test lane looks up its token once, for every live suite**: the exported variable, then
-  `COWORK_LIVE_DOTENV`, then `~/.cowork-harness-token`, then the repository's `.env`. Before, only one suite read
-  `COWORK_LIVE_DOTENV` or the `.env`, so the others could skip on a machine that had a token.
+  `COWORK_LIVE_DOTENV`, then `~/.cowork-harness-token`, then the repository's `.env`. Before, two suites read the
+  `.env` and only one read `COWORK_LIVE_DOTENV`, so the others could skip on a machine that had a token.
 - **CI's Node 22 floor job names what keeps the test runner alive after the run, and logs per-file test times.**
 
 ## [4.15.0] - 2026-11-06
