@@ -15,7 +15,8 @@ All notable changes to this project are documented here. The format is based on
   (exit 2).
 - **`allow_max_turns: true`**, a verdict modifier for a scenario that sets the session's `agent_max_turns` on
   purpose. A run the cap stopped is a completed run: the verdict raises no `result_error`, and `eval` buckets it
-  `turn_cap_allowed`. It does not make the run a success: `result` is still `error`, so `result: success` beside it
+  `turn_cap_allowed`. Only the agent's own `error_max_turns` or `error_during_execution` end at or past the cap
+  counts; its own sign-in, usage-limit or no-model reply never does. It does not make the run a success: `result` is still `error`, so `result: success` beside it
   fails, and `lint` warns about that pair (`contradictory-turn-cap`). Without the modifier, the `result_error` message
   now says the cap was reached and names the key. `result.json` records the cap as `turnCap: {maxTurns, source}`.
 - **`lint` on a session file** reports it once, as INFO `not-a-scenario`, and checks nothing else, so
@@ -46,6 +47,8 @@ All notable changes to this project are documented here. The format is based on
   what it did before. A cassette also freezes `turnCap` and `timeout`. An older harness refuses a v19 cassette.
 - **`hillclimb` passes its `--timeout-s` ceiling to the run as its budget** (`timeout.source: runner`) instead of
   lowering the scenario's `timeout_ms`, so an attempt's scenario is the one the loop was given.
+- **`skill --dry-run` previews `--timeout` as `timeout: {ms, source: "flag"}`**, the shape `record --dry-run` and
+  `result.json` use, instead of a scenario `timeout_ms`.
 - **`run` names the scenario key or session field for a `skill`-only flag it rejects** (for example
   `--allow-stall → assert: - allow_stall: true`).
 - **The `search_corpus_*` record refusal no longer names a cassette version.**
