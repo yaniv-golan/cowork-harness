@@ -210,3 +210,28 @@ const BY_FLAG = new Map(SKILL_FLAG_SURFACE.map((s) => [s.flag, s]));
 export function lookupSkillFlag(name: string): SkillFlagSpec | undefined {
   return BY_FLAG.get(name);
 }
+
+/** What `run` takes in place of a `skill` flag it rejects: the scenario key or session field that says the same
+ *  thing, or why there is none. Read by `run`'s unexpected-argument message; a test keeps every key a real `skill`
+ *  flag and every `skill` flag `run` rejects named here. */
+export const RUN_EQUIVALENT_OF_SKILL_FLAG: Record<string, string> = {
+  "--answer": "the scenario's `answers:`",
+  "--answer-policy": "the scenario's `answers:`",
+  "--allow-stall": "`assert: - allow_stall: true`",
+  "--allow-missing-capability": "`assert: - allow_missing_capability: true`",
+  "--allow-host-writes": "the scenario's `allow_host_writes: true`",
+  "--allow-host-hooks": "the scenario's `allow_host_hooks: true`",
+  "--decider-llm": "the scenario's `on_unanswered: llm`",
+  "--intent": "none (`skill` only: the decider's one-line test intent)",
+  "--upload": "the session's `uploads:`",
+  "--folder": "the session's `folders:`",
+  "--plugin": "the session's `plugins.local_plugins:`",
+  "--marketplace": "the session's `plugins.local_marketplaces:`",
+  "--enable": "the session's `plugins.enabled:`",
+  "--prompt-file": "the scenario's `prompt:`",
+  "--fidelity": "the scenario's `fidelity:`",
+  "--session-id": "none (`skill` only: it pins one run dir to resume)",
+  "--resume": "none (`skill` only)",
+  "--ablate-skill": "none (`skill`, `eval` and `hillclimb` only)",
+  "--dry-run": "`record <scenario.yaml> --dry-run`",
+};

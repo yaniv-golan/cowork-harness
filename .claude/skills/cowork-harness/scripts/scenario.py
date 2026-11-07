@@ -51,6 +51,8 @@ lint flags (see references/scenario-schema.md for the why of each):
   W  no content assertion → no-op on a replay gate    (every assertion is fs/egress)
   W  mixed-class assert item → fs/egress half dropped on replay
   W  unknown top-level / assertion key                (typo or hallucinated schema)
+  W  `contradictory-turn-cap`  `allow_max_turns: true` beside `result: success` (a capped run's result is error)
+  I  `not-a-scenario`          a session file (only session keys) in the linted set: reported once, not checked
   W  double-quoted regex with a backslash             (YAML eats the backslash)
   I  gate key present → needs a controlOut cassette on replay
 
@@ -4895,7 +4897,12 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="command", required=True)
 
     lp = sub.add_parser("lint", prog=f"{prog} lint" if prog else None, help="lint scenario(s) for silent-false-green invariants")
-    lp.add_argument("files", nargs="+", help="scenario YAML file(s) or director(ies) of *.yaml/*.yml to lint")
+    lp.add_argument(
+        "files",
+        nargs="+",
+        help="scenario YAML file(s) or director(ies) of *.yaml/*.yml to lint. A session file among them "
+        "(only session keys) is reported once, INFO not-a-scenario, and not checked",
+    )
     lp.add_argument("--json", action="store_true", help="emit findings as JSON")
     lp.add_argument(
         "--strict",

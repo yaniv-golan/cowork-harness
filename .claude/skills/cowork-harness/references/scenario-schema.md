@@ -244,6 +244,7 @@ legs:
 A session (`sessions/*.yaml`) captures everything you'd configure in Cowork **before the first
 prompt**. One session is reused by many scenarios. Mental model: **platform baseline = the release;
 session = your setup.**
+Agent-flag keys reach every tier, `protocol` included ([table](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/session.md#which-keys-reach-the-agent-per-tier)).
 
 ```yaml
 # model & reasoning
@@ -270,7 +271,8 @@ effort: high                     # low | medium | high | xhigh | max (+ extra, n
 extended_thinking: true          # real Cowork on/off toggle; default true (ON) -> --max-thinking-tokens 31999,
                                   # or --thinking disabled when false (no arbitrary budget in real Cowork)
 agent_max_turns: 500              # optional turn ceiling -> agent --max-turns; omit for the agent default
-                                  # (distinct from the max_turns ASSERTION)
+                                  # (distinct from the max_turns ASSERTION). Capped ⇒ result: error; see
+                                  # allow_max_turns. Cap N: `max_turns: N` fits, `max_turns: N-1` always fails.
 permission_mode: default         # default | acceptEdits | plan | bypassPermissions; omitted -> default (acceptEdits under device_bridge)
 permission_parity: cowork        # cowork (unscripted tool calls allowed) | strict (deny unscripted)
 # answer_channel: none           # NOT Cowork: nobody answers the agent (--permission-prompts none; the agent then

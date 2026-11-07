@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { RUN_EQUIVALENT_OF_SKILL_FLAG } from "./run/skill-flag-surface.js";
 import { ANSWER_CHANNEL_NONE_LABEL } from "./answer-channel.js";
 import type { SearchCorpusOption } from "./search-corpus/run.js";
 import { InterruptedError, interrupt } from "./termination.js";
@@ -542,6 +543,9 @@ Output:
                                    estimate (a single run has no live cost signal to abort on); with no
                                    priced history it warns and proceeds uncapped.
   --allow-budget-stop              treat a budget-stopped batch as a pass rather than incomplete. Needs --repeat.
+  --timeout <ms>                   the agent's wall-clock budget; on expiry it is killed and the run ends
+                                   result:error / errorSource:timeout. result.json records it as timeout:
+                                   {ms, source: flag}. \`run\` and \`record\` take the same flag.
   --run-dir <path>                 relocates runs/ output (default ~/.cowork-harness/runs) out of the working tree.
                                    flag > COWORK_HARNESS_RUNS_DIR > default. Before or after the subcommand.
   --dotenv <path>                  load a .env for this run (see Auth below). Before or after the subcommand.
@@ -570,8 +574,6 @@ Output:
 
 Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of silence.
             COWORK_HARNESS_NO_HEARTBEAT=1 disables it; COWORK_HARNESS_HEARTBEAT_MS tunes the interval.
-  --timeout <ms>                   wall-clock budget; on expiry the agent is killed and the run ends
-                                   result:error / errorSource:timeout (the CLI form of a scenario's timeout_ms).
 
 Auth:  Run 'doctor' to check auth. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN) from process.env >
        --dotenv <path> > ./.env > <install>/.env.
@@ -1967,11 +1969,17 @@ async function cmdRun(rawArgs: string[]) {
   // e.g. `--fidelity microvm` was a silent no-op (fidelity comes from the scenario's `fidelity:`
   // field, not a flag). Runs before existsSync so the message is precise even for a bogus path.
   const extra = args.slice(1);
+  // A `skill` flag passed to `run`: name what the scenario or session says instead.
+  const runEquivalents = (toks: string[]) => {
+    const named = [...new Set(toks.map((t) => t.split("=")[0]).filter((t) => Object.hasOwn(RUN_EQUIVALENT_OF_SKILL_FLAG, t)))];
+    return named.length ? `In a scenario: ${named.map((f) => `${f} → ${RUN_EQUIVALENT_OF_SKILL_FLAG[f]}`).join("; ")}. ` : "";
+  };
   if (extra.length)
     fail(
       "run",
       "usage",
       `unexpected argument(s): ${extra.join(" ")} — \`run\` takes one <scenario.yaml | dir/> plus common flags. Fidelity is set by the scenario's \`fidelity:\` field, not a flag. ` +
+        runEquivalents(extra) +
         `To check a scenario without spending: \`lint <file.yaml>\` (does it load, and are the assertions sane) or \`record <file.yaml> --dry-run\` (also the pre-spend refusals).`,
       undefined,
       flags.output === "json",
