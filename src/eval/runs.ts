@@ -174,6 +174,8 @@ export function buildRunsLine(args: {
             ...(r.fingerprint?.contentSig !== undefined ? { fingerprint: { contentSig: r.fingerprint.contentSig } } : {}),
             ...(r.cost?.usd !== undefined ? { cost: { usd: r.cost.usd } } : {}),
             ...(r.usage?.turns !== undefined ? { usage: { turns: r.usage.turns } } : {}),
+            // The session's turn cap: with usage.turns, what `allow_max_turns` reads (eval/classify.ts, turn-cap.ts).
+            ...(r.turnCap !== undefined ? { turnCap: r.turnCap } : {}),
             ...(r.durationMs !== undefined ? { durationMs: r.durationMs } : {}),
             // The frozen corpus the rep was served from, its counts and its `search_corpus_*` warnings: the pin
             // bucket, the refused-search exclusion, the per-arm metrics and the asymmetry marker are rebuilt from it.

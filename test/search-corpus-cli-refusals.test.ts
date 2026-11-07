@@ -163,11 +163,14 @@ describe.runIf(can)("--search-corpus refusals (CLI, $0)", () => {
     );
   });
 
-  it("refuses record, naming the cassette version", async () => {
+  it("refuses record with its own reason, naming no cassette version", async () => {
     const f = fixture();
     const r = await cli(f, ["record", scenario(f, "r.yaml", ["fidelity: hostloop"]), "--search-corpus", "p"]);
     expect(r.code).not.toBe(0);
-    expect(r.text).toMatch(/record --search-corpus is refused: .*cassette version 19/);
+    const line = r.text.split("\n").find((l) => l.includes("record --search-corpus is refused:"));
+    expect(line).toMatch(/needs a reader that serves the frozen corpus/);
+    // Version-free: a version number here went false once a cassette version shipped for another reason.
+    expect(line).not.toMatch(/\d/);
   });
 
   it("refuses chat and probe-dispatch by name", async () => {

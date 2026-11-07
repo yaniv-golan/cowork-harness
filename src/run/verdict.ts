@@ -1,4 +1,5 @@
 import { describeSubagentUsageLimit, subagentUsageLimits } from "../usage-limit.js";
+import { allowsMaxTurns, turnCapReached } from "./turn-cap.js";
 import { warn } from "../io.js";
 import { rootfsManifestDesktopVersion } from "../baseline.js";
 import type { InfraErrorSource, RunResult } from "../types.js";
@@ -314,6 +315,17 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
               ? "transport dropped after a successful result; assertions re-checked on replay — likely a flaky connection, retry"
               : "transport dropped after a successful result; assertions passed and artifacts were written — likely a flaky connection, retry";
       signals.push({ code: "transport_error", severity: "fail", message: msg });
+    } else if (turnCapReached(result)) {
+      // The session's own agent_max_turns stopped the agent. A scenario that set the cap on purpose opts out, and the
+      // run is then a completed one (turn-cap.ts); otherwise name the cap and the opt-out. One spelling: a session cap
+      // reaches only a lane with a session file (`skill` builds an inline session with no cap).
+      if (!allowsMaxTurns(result.assertions)) {
+        signals.push({
+          code: "result_error",
+          severity: "fail",
+          message: `run result was error (the session's agent_max_turns: ${result.turnCap!.maxTurns} cap was reached; assert allow_max_turns: true if that is the intended end)`,
+        });
+      }
     } else {
       signals.push({ code: "result_error", severity: "fail", message: "run result was error" });
     }

@@ -4,6 +4,7 @@
     "all_tasks_completed",
     "allow_delete_in",
     "allow_l0_host_config_contamination",
+    "allow_max_turns",
     "allow_missing_capability",
     "allow_outputs_delete",
     "allow_permissive_auto_allow",
@@ -117,6 +118,7 @@
   "verdictModifierKeys": [
     "allow_delete_in",
     "allow_l0_host_config_contamination",
+    "allow_max_turns",
     "allow_missing_capability",
     "allow_outputs_delete",
     "allow_permissive_auto_allow",

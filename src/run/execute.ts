@@ -1,4 +1,5 @@
 import { warn, writeTextAtomic } from "../io.js";
+import { turnCapReached } from "./turn-cap.js";
 import { searchCorpusAssertRefusal } from "../search-corpus/assert-keys.js";
 import { effectivePool, PoolBuildError, resolvePoolDir } from "../search-corpus/pool.js";
 import { inlineSchemaFiles } from "./schema-files.js";
@@ -2165,6 +2166,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       subagentTools: record.subagentTools,
       egress,
       result: record.result,
+      turnCapReached: turnCapReached({ ...record, turnCap }),
       workRoot,
       userVisiblePrefixes: userVisibleRoots,
       lane: scenario.lane,

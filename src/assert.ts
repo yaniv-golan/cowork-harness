@@ -688,6 +688,9 @@ export interface AssertContext {
    *  the SDK reported neither num_turns nor a countable fallback. Own undefined-ness is the
    *  evidence-unavailable signal for max_turns — 0 turns is a real, satisfying value. */
   turns?: number;
+  /** The run ended at the session's agent_max_turns cap (turn-cap.ts `turnCapReached`). Only words the `result` key's
+   *  failure; undefined on a context that cannot tell. */
+  turnCapReached?: boolean;
   /** Per-tool call/error rollup — undefined means no data was captured (old/partial run), the
    *  evidence-unavailable signal for tool_no_error/max_tool_errors (an empty `{}` is a valid "ran clean"
    *  state and is NOT the same as undefined). */
@@ -5114,7 +5117,15 @@ function check(
   }
 
   if (a.result !== undefined)
-    results.push(ctx.result === a.result ? ok(`result: ${ctx.result}`) : fail(`result was ${ctx.result}, expected ${a.result}`));
+    results.push(
+      ctx.result === a.result
+        ? ok(`result: ${ctx.result}`)
+        : fail(
+            ctx.turnCapReached && a.result === "success"
+              ? "result was error (the agent_max_turns cap was reached; allow_max_turns makes it a completed run, not a success; assert `result: error` or drop the key)"
+              : `result was ${ctx.result}, expected ${a.result}`,
+          ),
+    );
 
   if (results.length === 0) return { assertion: a, pass: false, message: "empty assertion" };
   // Structured per-claim results for a semantic_matches assert (undefined for every other key) — so a

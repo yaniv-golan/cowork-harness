@@ -1464,6 +1464,12 @@ export const Assertion = z.strictObject({
     .describe(
       "(verdict modifier) suppress the default-fail when a run ends on a question or a closing request for input (e.g. 'Please share X so I can…') having done no productive tool work after its last gate (the agent asked for input and stopped — incl. re-asking in plain text after answering an AskUserQuestion) — assert this only when ending on a question is the intended terminal state; otherwise script the answer (answer:/--answer/decider)",
     ),
+  allow_max_turns: z
+    .literal(true)
+    .optional()
+    .describe(
+      "(verdict modifier) a run that stopped at the session's `agent_max_turns` cap is a COMPLETED run, not a failure: no `result_error` is raised, and `eval` buckets it `turn_cap_allowed`. It never makes the run a success — `result` is still `error`, so `result: success` beside it always fails (assert `result: error` or leave `result` out). Only the session's cap counts, and only an agent-reported error result at or past it; a transport, auth or usage-limit end is unchanged",
+    ),
   allow_undelivered_deliverables: z
     .literal(true)
     .optional()
@@ -1698,6 +1704,7 @@ export const VERDICT_MODIFIER_KEYS = [
   "allow_missing_capability",
   "allow_l0_host_config_contamination",
   "allow_stall",
+  "allow_max_turns",
   "allow_undelivered_deliverables",
   "allow_outputs_delete",
   "allow_delete_in",

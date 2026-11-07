@@ -1,4 +1,5 @@
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
+import { turnCapReached } from "./turn-cap.js";
 import { hasHookFailureBlocks, resolveHookFailureBlocks, type HookFailureBlocks } from "./hook-failure-blocks.js";
 import { initAgentVersion, initAgentVersions } from "./recorded-agent-version.js";
 import { measureMetrics, type CommandOutcomes, type MetricMeasurement, type MetricsContext } from "../metrics.js";
@@ -551,7 +552,12 @@ export interface Cassette {
 //    grading leg 1 as the run; see multi-leg-cassette.ts). Stamped only on such a cassette (the `legs` term in
 //    requiredVersionFor).
 //  Every other scenario stamps exactly what it did. No hashing change; HASH_FORMAT_EPOCH stays at 12.
-export const CASSETTE_VERSION = 18;
+// v19: `allow_max_turns` (V19_ASSERT_FEATURES): a v18 reader's strict assertion schema rejects the key ("re-record", the
+//  wrong remedy), and the modifier changes the replayed verdict (with the frozen top-level `turnCap`), so a cassette
+//  using it stamps v19 and an older reader refuses it as too new. The frozen `turnCap` and `timeout` themselves need no
+//  stamp: without the modifier nothing reads either, and an older reader that ignores them grades the same. Every other
+//  scenario stamps exactly what it did. No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
+export const CASSETTE_VERSION = 19;
 
 /** One command metric's record-time measurement, frozen in a cassette (`commandMetrics`). */
 export interface FrozenCommandMetric {
@@ -636,13 +642,15 @@ export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
   assert: (v) =>
     !Array.isArray(v)
       ? 0
-      : v.some((a) => V15_ASSERT_FEATURES.some((f) => f(a)))
-        ? 15
-        : v.some((a) => V14_ASSERT_FEATURES.some((f) => f(a)))
-          ? 14
-          : v.some(usesToolCallObjectForm)
-            ? 13
-            : 0,
+      : v.some((a) => V19_ASSERT_FEATURES.some((f) => f(a)))
+        ? 19
+        : v.some((a) => V15_ASSERT_FEATURES.some((f) => f(a)))
+          ? 15
+          : v.some((a) => V14_ASSERT_FEATURES.some((f) => f(a)))
+            ? 14
+            : v.some(usesToolCallObjectForm)
+              ? 13
+              : 0,
   skills: () => 0,
   requires_capabilities: () => 0,
   allow_host_writes: () => 0,
@@ -713,6 +721,14 @@ export const V15_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
     const aj = a && typeof a === "object" ? (a as Record<string, unknown>).artifact_json : undefined;
     return !!aj && typeof aj === "object" && "schema" in (aj as object);
   },
+];
+
+/** The assertion-level features that need a v19 reader, as V15_ASSERT_FEATURES is for v15: a new assertion key an
+ *  older reader cannot read appends a predicate here, and a sample to test/cassette-v19.test.ts. */
+export const V19_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
+  // `allow_max_turns` — the key itself: a v18 reader's strict assertion schema rejects it, and it changes the replayed
+  // verdict (read with the frozen `turnCap`).
+  (a) => !!a && typeof a === "object" && "allow_max_turns" in (a as object),
 ];
 
 /** Does this (possibly loose, on-disk) assertion use the v13 object form of tool_called/tool_not_called? */
@@ -5024,7 +5040,7 @@ export async function cmdRecord(args: string[]) {
     return fail(
       "record",
       "usage",
-      "record --search-corpus is refused: a cassette of a frozen-corpus run needs cassette version 19, which this version cannot write yet (an older harness would replay it as a live-search run). Use run --search-corpus.",
+      "record --search-corpus is refused: a frozen-corpus cassette needs a reader that serves the frozen corpus, and this version does not write one yet (an older harness would replay it as a live-search run). Use run --search-corpus.",
       undefined,
       asJson,
     );
@@ -9754,6 +9770,7 @@ export async function replayCassette(
       subagentTools: rec.subagentTools,
       egress: [],
       result: rec.result,
+      turnCapReached: turnCapReached({ ...rec, turnCap: cassette.turnCap }),
       workRoot: replayWorkRoot,
       userVisiblePrefixes: replayPrefixes,
       lane: cassette.scenario.lane, // replay is held to the RECORDED scenario's contract

@@ -8,6 +8,7 @@
 // no bucket. The table below keys on every field that distinguishes the cases, and a combination it does not
 // recognise is `errored_infra` with `unclassified: true` — excluded and reported, never silently scored as
 // the skill failing.
+import { turnCapAllowed } from "../run/turn-cap.js";
 import { PAIRWISE_PROMPT_HASH } from "../decide/pairwise-judge.js";
 import type { Assertion, MetricUnavailable, RunResult, ScenarioMetric } from "../types.js";
 import { VERDICT_MODIFIER_KEYS, isLiveModelId } from "../types.js";
@@ -68,6 +69,7 @@ export type ClassifiableResult = Partial<
     | "modelPinHonored"
     | "finalMessage"
     | "metrics"
+    | "turnCap"
   >
 > & {
   /** A frozen-corpus rep's pool, miss mode, counts and its `search_corpus_*` verdict signal codes. */
@@ -199,6 +201,9 @@ export function thrownKind(e: unknown): ThrownKind {
  *  | error, `<synthetic>` in models, finalMessage a terminal limit         | errored_infra (usage_limit)       |
  *  | error, models only `<synthetic>`, cost 0 (no model answered)          | errored_infra (no_model_answered) |
  *  | error, errorSource timeout / no_result                                | errored_agent                     |
+ *  | error, errorSource result, kind agent, turns ≥ the session's turnCap, | valid (turn_cap_allowed)          |
+ *  |   allow_max_turns (turn-cap.ts; any subtype, error_during_execution  |                                   |
+ *  |   included: the cap was reached either way)                           |                                   |
  *  | error, errorSource result, kind agent (any subtype)                   | errored_agent                     |
  *  | error, errorSource exit, kind agent                                   | errored_agent, ambiguousExit      |
  *  | error, errorSource agent, no kind (partial, or no terminal event)     | errored_agent                     |
@@ -276,6 +281,9 @@ export function classifyTermination(ev: RepEvidence): TerminationClassification 
     if (rule === "infra") return out("errored_infra", `source_${source}`);
     if (kind !== undefined && INFRA_KINDS.has(kind)) return out("errored_infra", `kind_${kind}`);
     if (rule === "agent") return out("errored_agent", `source_${source}`);
+    // The session's own turn cap stopped the agent and the scenario allowed it: a completed run (turn-cap.ts, the
+    // predicate the verdict reads). After the infra rows, so an auth or limit end is never re-bucketed as a cap.
+    if (turnCapAllowed(r, r.assertions)) return out("valid", "turn_cap_allowed");
     if (rule === "by_kind" && kind === "agent") {
       return source === "exit" ? out("errored_agent", "exit_agent", { ambiguousExit: true }) : out("errored_agent", `${source}_agent`);
     }

@@ -1477,6 +1477,11 @@
             "type": "boolean",
             "const": true
           },
+          "allow_max_turns": {
+            "description": "(verdict modifier) a run that stopped at the session's `agent_max_turns` cap is a COMPLETED run, not a failure: no `result_error` is raised, and `eval` buckets it `turn_cap_allowed`. It never makes the run a success — `result` is still `error`, so `result: success` beside it always fails (assert `result: error` or leave `result` out). Only the session's cap counts, and only an agent-reported error result at or past it; a transport, auth or usage-limit end is unchanged",
+            "type": "boolean",
+            "const": true
+          },
           "allow_undelivered_deliverables": {
             "description": "(verdict modifier) suppress the `undelivered_deliverables` WARN for this scenario — assert it when the skill legitimately leaves working files behind that were never meant to reach the user (intermediates, caches, downloaded inputs). The signal is warn-only and never fails a run on its own; this exists so a scenario whose scratch activity is intentional can say so instead of carrying permanent noise. ALSO suppresses the sibling `delivery_unobservable` WARN on `lane: remote` (where delivery cannot be measured at all because no remote delivery tool is modeled) — on that lane this key means 'I know delivery is unverifiable here and accept it', NOT 'the files were delivered'",
             "type": "boolean",

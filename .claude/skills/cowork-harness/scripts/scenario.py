@@ -266,6 +266,7 @@ VERDICT_MODIFIER_KEYS = {
     "allow_l0_host_config_contamination",
     "allow_missing_capability",
     "allow_stall",
+    "allow_max_turns",
     "allow_undelivered_deliverables",
     "allow_outputs_delete",
     "allow_delete_in",
@@ -749,7 +750,7 @@ _MISSING = object()
 
 # Keep these values in sync with src/run/cassette.ts. The sync test below makes a format-range change
 # fail loudly instead of allowing lint to suppress an advisory from a cassette replay would refuse.
-CASSETTE_VERSION = 18
+CASSETTE_VERSION = 19
 MIN_SUPPORTED_CASSETTE_VERSION = 9
 
 
