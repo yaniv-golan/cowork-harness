@@ -742,7 +742,7 @@ describe("connected projects — .projects/<uuid>, read-only, never the cwd", ()
 });
 
 // A pinned config_dir is single-run: the harness creates it with a marker naming the run's root, the same run's later
-// legs and --resume turns reuse it, and every other existing dir — a real Claude config, another run's — is refused
+// legs reuse it, and every other existing dir — a real Claude config, another run's — is refused
 // before anything is written into it.
 describe("plugins.config_dir: the single-run marker", () => {
   const session = (dir: string) => loadSession({ plugins: { config_dir: dir } });
@@ -776,7 +776,7 @@ describe("plugins.config_dir: the single-run marker", () => {
     expect(tree(real)).toEqual(before);
   });
 
-  it("created by a run: marked with that run's root, and reused by the same run (a later leg, a --resume turn)", () => {
+  it("created by a run: marked with that run's root, and reused by the same run's later legs", () => {
     const dir = join(mkdtempSync(join(tmpdir(), "pin-")), "cfg");
     const run = mkdtempSync(join(tmpdir(), "run-"));
     runPlan(dir, run);
@@ -785,7 +785,6 @@ describe("plugins.config_dir: the single-run marker", () => {
     expect(marker.runId).toBe(basename(realpathSync(run)));
     expect(typeof marker.createdAt).toBe("string");
     expect(() => runPlan(dir, run)).not.toThrow(); // a later leg of the same run
-    expect(() => runPlan(dir, run, true)).not.toThrow(); // a --resume turn
     // reuse does not re-mark: the marker is the creating run's
     expect(JSON.parse(readFileSync(join(dir, CONFIG_DIR_MARKER), "utf8"))).toEqual(marker);
   });

@@ -520,7 +520,9 @@ export function tokenCheck(tier: Tier, probe: DoctorProbe = realProbe): DoctorCh
   // caveat rides on the `ok` row.
   const authTokenCaveat =
     token && (tier === "protocol" || tier === "hostloop") && probe.authTokenOnly?.()
-      ? " — ANTHROPIC_AUTH_TOKEN only: if the agent rejects it, the run ends as a timeout, not as an auth error"
+      ? tier === "protocol"
+        ? " — ANTHROPIC_AUTH_TOKEN only: if the agent rejects it, the run ends as a timeout, not as an auth error"
+        : " — ANTHROPIC_AUTH_TOKEN only: if the agent rejects it, the run is expected to end as a timeout, not as an auth error (inferred from protocol, not measured here)"
       : "";
   return {
     id: "token",

@@ -59,6 +59,7 @@ import {
   firstLine,
   unresolvedModelPreflight,
   protocolCredentialPreflight,
+  sharedConfigDirPreflight,
   scenarioInputRefusal,
   UnansweredError,
   BoundaryError,
@@ -2300,6 +2301,9 @@ async function cmdRun(rawArgs: string[]) {
       const singleRun = configDirSingleRunRefusal(`scenario "${scenario.name}"`, configDir, repeatN);
       if (singleRun) fail("run", "usage", singleRun, undefined, o.json);
     }
+  // Likewise two scenarios of one batch pinning the same dir: the first would spend, then the marker refuse the second.
+  const sharedDir = sharedConfigDirPreflight(loaded);
+  if (sharedDir) fail("run", "usage", sharedDir, undefined, o.json);
   if (maxBudgetUsd !== undefined && repeatN === undefined)
     for (const scenario of loaded) preflightBudget("run", scenario.name, maxBudgetUsd, o.json);
   // Last: a protocol scenario with no credential in the environment, named with every other one, before any runs.

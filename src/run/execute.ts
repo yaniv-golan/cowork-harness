@@ -92,6 +92,9 @@ import {
   strippedEnv,
   workBaseOf,
   agentEnvOverrides,
+  configDirSingleRunRefusal,
+  pinnedConfigDirOf,
+  realpathOrSelf,
   type LaunchPlan,
   type LegStage,
 } from "../session.js";
@@ -3356,6 +3359,29 @@ export function protocolCredentialPreflight(
   return c.status === "fail"
     ? protocolCredentialRefusal(names.length === 1 ? `scenario "${names[0]}"` : `scenarios ${names.join(", ")}`, c)
     : undefined;
+}
+
+/** A batch in which two or more scenarios pin the same `plugins.config_dir`, as a refusal, or undefined. The first of
+ *  them creates and marks the dir, so the next is refused by the marker only after the first has spent: refuse the
+ *  batch before any of it runs. One scenario pinning a dir is fine. A session that does not load is skipped: the run
+ *  reports it itself (see {@link unresolvedModelPreflight}). */
+export function sharedConfigDirPreflight(scenarios: ReadonlyArray<{ name: string; session: string }>): string | undefined {
+  const byDir = new Map<string, string[]>();
+  for (const s of scenarios) {
+    let dir: string | undefined;
+    try {
+      dir = pinnedConfigDirOf(loadSessionFromFile(s.session));
+    } catch {
+      continue;
+    }
+    if (!dir) continue;
+    const key = realpathOrSelf(resolve(dir));
+    byDir.set(key, [...(byDir.get(key) ?? []), s.name]);
+  }
+  for (const [dir, names] of byDir)
+    if (names.length > 1)
+      return configDirSingleRunRefusal(`scenarios ${names.join(", ")}`, dir, `${names.length} scenarios that pin ${dir}`);
+  return undefined;
 }
 
 export function unresolvedModelPreflight(scenario: Scenario, explicit: string | undefined): string | undefined {

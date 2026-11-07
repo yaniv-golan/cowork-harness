@@ -68,6 +68,7 @@ import {
   slugForPath,
   FidelityMissingError,
   unresolvedModelPreflight,
+  sharedConfigDirPreflight,
   scenarioInputRefusal,
   scenarioInputFindings,
   loadSessionFromFile,
@@ -5688,6 +5689,7 @@ export async function cmdRecord(args: string[]) {
     // the loop below resolves it (its on-disk source, or the embedded snapshot under --from-embedded); one
     // that cannot be resolved or loaded here is left to the loop, which reports it.
     const staleUnpinned: string[] = [];
+    const staleLoaded: Scenario[] = [];
     for (const { path: cp } of stale) {
       const t = readRerecordTarget(cp);
       if ("error" in t) continue;
@@ -5704,9 +5706,13 @@ export async function cmdRecord(args: string[]) {
         sc = embeddedPairwiseRefs(embeddedScenario(t.cassette.scenario, cp), cp);
       }
       if (sc && unresolvedModelPreflight(sc, modelOverride)) staleUnpinned.push(src.path ?? cp);
+      if (sc) staleLoaded.push(sc);
     }
     if (staleUnpinned.length)
       return fail("record", "usage", `record: ${unresolvedModelRefusal(staleUnpinned.join(", "))}`, undefined, asJson, 1);
+    // Two stale scenarios pinning the same config_dir: the first would spend, then the marker refuse the second.
+    const staleSharedDir = sharedConfigDirPreflight(staleLoaded);
+    if (staleSharedDir) return fail("record", "usage", `record: ${staleSharedDir}`, undefined, asJson);
     if (maxBudgetUsd !== undefined) {
       preflightBatchBudget("record", staleNames, maxBudgetUsd, asJson);
       if (concurrency > 1) warn(CONCURRENCY_BUDGET_CAVEAT(concurrency));
@@ -5957,6 +5963,18 @@ export async function cmdRecord(args: string[]) {
       }
     });
     if (unpinned.length) return fail("record", "usage", `record: ${unresolvedModelRefusal(unpinned.join(", "))}`, undefined, asJson, 1);
+    // Two scenarios pinning the same config_dir: the first would spend, then the marker refuse the second.
+    const sharedDir = sharedConfigDirPreflight(
+      disc.scenarios.flatMap((f) => {
+        try {
+          return [parseScenarioFile(f)];
+        } catch (caught) {
+          rethrowIfExit(caught);
+          return [];
+        }
+      }),
+    );
+    if (sharedDir) return fail("record", "usage", `record: ${sharedDir}`, undefined, asJson);
 
     const total = disc.scenarios.length;
     // Budget pre-flight for the whole batch, BEFORE the first spawn — same rationale as the redaction

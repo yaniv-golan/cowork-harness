@@ -33,6 +33,13 @@ describe("prepareCases", () => {
     );
   });
 
+  it("a caller that runs no agent (hillclimb regrade) is not refused a pinned config_dir: it creates no run", () => {
+    session("_session.yaml", `model: claude-sonnet-5\nplugins:\n  config_dir: ./pinned\n  local_plugins:\n    - ${SKILL}\n`);
+    scenario("a.yaml");
+    const { cases } = loadCases(join(dir, "a.yaml"));
+    expect(() => prepareCases(cases, { env: {}, noAgentRun: true })).not.toThrow();
+  });
+
   it("the repo's own eval scenarios: one lever (the companion skill), a concrete pin per case", () => {
     const { cases } = loadCases(join(EVALS, "eval-14-subagent-dispatch-and-declared-unused.yaml"));
     const p = prepareCases(cases, { env: {} });

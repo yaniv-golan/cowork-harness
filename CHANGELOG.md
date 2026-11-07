@@ -95,14 +95,15 @@ All notable changes to this project are documented here. The format is based on
   file, which used to reach its first leg. Machine-level managed settings are outside any config dir and still reach the
   agent.
 - **`ANTHROPIC_AUTH_TOKEN` reaches the protocol agent under its own name only.** It was also copied into
-  `CLAUDE_CODE_OAUTH_TOKEN`; the agent sent the original anyway, so nothing billed differently. A rejected
+  `CLAUDE_CODE_OAUTH_TOKEN`; the agent sent the original anyway, so what the agent sends is unchanged. A rejected
   `ANTHROPIC_AUTH_TOKEN` is not reported as an auth error at `protocol`: the agent retries it until the run's timeout,
   so the run ends as a timeout. `hostloop`, whose agent gets the token the same way, is expected to behave alike (not
   measured). `doctor` says so when it is your only credential.
 - **Breaking: a pinned `plugins.config_dir` is single-run.** The harness creates it (the path must not exist yet),
-  marks it, and reuses it only for the same run's later legs and `--resume` turns. An existing directory the harness
+  marks it, and reuses it only for the same run's later legs. An existing directory the harness
   did not create for this run is refused, so a real Claude config is never written to. `run --repeat` (above 1),
-  `run --matrix`, `eval` and `hillclimb` refuse a pinned `config_dir` before the first run.
+  `run --matrix`, `eval` and `hillclimb` refuse a pinned `config_dir` before the first run, and so do `run <dir/>`,
+  `record <dir/>` and `record --rerecord-stale` when two of their scenarios pin the same dir.
 - **Breaking: `--resume` refuses a session manifest without its identity stamps** (`sessionId` and `fidelity`), where
   it used to let one through with a warning. Start a fresh session, or delete the run dir and re-run with
   `--session-id`.

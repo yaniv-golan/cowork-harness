@@ -110,9 +110,11 @@ export function prepareCases(
     }
     const session = sessions.get(c.id);
     // A pinned config_dir belongs to one run; the loop runs every selected case once per slot, round after round.
-    const singleRun = isSel
-      ? configDirSingleRunRefusal(`case ${c.id}`, session?.plugins.config_dir, "it once per slot, every round")
-      : undefined;
+    // A caller that runs no agent (`hillclimb regrade`) creates no run, so it has nothing to refuse.
+    const singleRun =
+      !opts.noAgentRun && isSel
+        ? configDirSingleRunRefusal(`case ${c.id}`, session?.plugins.config_dir, "it once per slot, every round")
+        : undefined;
     if (singleRun) throw new UsageError(singleRun);
     if (session !== undefined && session.plugins.local_plugins.length !== 1)
       throw new UsageError(

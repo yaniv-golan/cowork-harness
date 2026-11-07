@@ -636,12 +636,13 @@ describe("doctor — tokenCheck is the token row runDoctorChecks reports", () =>
 // row says so. Status unchanged.
 describe("doctor — the ANTHROPIC_AUTH_TOKEN-only caveat", () => {
   const authOnly = probe({ hasToken: () => true, authTokenOnly: () => true });
-  it.each(["protocol", "hostloop"] as const)("at %s: ok, with the timeout caveat", (tier) => {
+  it.each([
+    ["protocol", "the run ends as a timeout, not as an auth error"],
+    ["hostloop", "the run is expected to end as a timeout, not as an auth error (inferred from protocol, not measured here)"],
+  ] as const)("at %s: ok, with the timeout caveat (inferred at hostloop)", (tier, says) => {
     const tok = tokenCheck(tier, authOnly);
     expect(tok.status).toBe("ok");
-    expect(tok.detail).toBe(
-      "found (env / .env) — ANTHROPIC_AUTH_TOKEN only: if the agent rejects it, the run ends as a timeout, not as an auth error",
-    );
+    expect(tok.detail).toBe(`found (env / .env) — ANTHROPIC_AUTH_TOKEN only: if the agent rejects it, ${says}`);
   });
   it.each(["container", "microvm"] as const)("at %s (where it never reaches the agent): no caveat", (tier) => {
     expect(tokenCheck(tier, authOnly).detail).toBe("found (env / .env)");

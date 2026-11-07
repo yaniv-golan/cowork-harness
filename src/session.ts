@@ -912,7 +912,7 @@ export function resolveLaunchSources(
   // Protocol's agent reads its config dir in place: a pinned dir that IS the operator's is refused here, before
   // buildLaunchPlan writes settings into it (spawnProtocol repeats the check as a backstop).
   if (pinnedConfigDir && tier === "protocol") assertProtocolConfigSealed(pinnedConfigDir);
-  // An existing pinned config_dir is used only by the run that created it (its later legs and its --resume turns):
+  // An existing pinned config_dir is used only by the run that created it (its later legs):
   // writing settings into any other dir would clobber a real Claude config, and an agent reading one would see its
   // plugins, skills, hooks and MCP servers beside the thing under test.
   const createPinnedConfigDir = pinnedConfigDir !== undefined && !existsSync(pinnedConfigDir);
@@ -1326,7 +1326,7 @@ export const CONFIG_DIR_MARKER = ".cowork-harness-config-dir";
 
 /** realpath when the path exists, else the resolved path: a dir that does not exist yet is still comparable by
  *  spelling, and a symlinked HOME or tmp dir (macOS /tmp, /var) must not read as a different dir. */
-function realpathOrSelf(p: string): string {
+export function realpathOrSelf(p: string): string {
   try {
     return realpathSync(p);
   } catch {
@@ -1421,7 +1421,7 @@ export function buildLaunchPlan(
   // Beside the session tree: a `workdir: persistent` multi-leg run shares one config dir across legs, as it shares the
   // tree (protocol's agent reads it directly; the sandbox tiers copy it into mnt/.claude on the first leg only).
   const configDir = pinnedConfigDir ?? join(resolve(opts.workBase ?? outDir), "claude-config");
-  // A pinned dir the harness creates carries a marker naming this run, so a later leg or --resume turn of the same
+  // A pinned dir the harness creates carries a marker naming this run, so a later leg of the same
   // run can reuse it and every other run is refused (resolveLaunchSources). Written only on creation, decided by what
   // resolveLaunchSources saw (not re-checked here): a dir that already existed was accepted on its own marker.
   if (pinnedConfigDir && createPinnedConfigDir) {
