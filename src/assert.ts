@@ -790,8 +790,8 @@ export interface AssertContext {
    *  (older result) — dependent assertions fail "cannot verify" (excluded-loud), mirroring hookEvents. */
   fileToolAttempts?: RunResult["fileToolAttempts"];
   /** RunResult.pathDenials — decision-level path-denial telemetry (pretooluse/can_use_tool/
-   *  permission_denied). Undefined = evidence unavailable — older result, or replay without controlOut
-   *  (the can_use_tool source is reconstructible ONLY from controlOut). */
+   *  permission_denied). Undefined = evidence unavailable — an older result. (On replay the
+   *  can_use_tool source is reconstructed from controlOut.) */
   pathDenials?: RunResult["pathDenials"];
   /** Minimal per-result pairing info (toolUseId/isError only, no text) for `subagent_file_write`'s
    *  causal pairing — the exact half `toolResultTexts` drops (it's `assertText ?? text`, no id/error).
@@ -2565,7 +2565,7 @@ function slashMatches(re: RegExp, ids: string[] | undefined): boolean {
  * keys pass. (The previous first-key-wins `if (a.X) return …` chain silently ignored every key
  * after the first.) The per-key logic is unchanged; each branch now PUSHES its result instead of
  * returning. The first failing key supplies the surfaced message. On the replay lane, keys that
- * cannot be evaluated (filesystem/egress, or question/gate when controlOut is absent) are stripped
+ * cannot be evaluated (filesystem/egress without a manifest) are stripped
  * from the object BEFORE this runs (see replayCassette), so AND never straddles replay classes.
  */
 /** Did THIS run create or rewrite `p` (a workRoot-relative assertion path)? The same rule the authored-file capture
@@ -3904,16 +3904,14 @@ function check(
   if (a.hook_blocked !== undefined) {
     const c = compileUserRegex(a.hook_blocked);
     if ("error" in c) results.push(fail(`hook_blocked: bad regex "${a.hook_blocked}": ${c.error}`));
-    else if (ctx.hookEvents === undefined)
-      results.push(fail(`hook_blocked: no hook events (older run / replay without controlOut) — cannot verify`));
+    else if (ctx.hookEvents === undefined) results.push(fail(`hook_blocked: no hook events (older run) — cannot verify`));
     else {
       const hit = ctx.hookEvents.find((h) => h.decision === "block" && h.tool !== undefined && c.re.test(h.tool));
       results.push(hit ? ok() : fail(`hook_blocked: no blocked tool matched "${a.hook_blocked}"`));
     }
   }
   if (a.no_hook_blocked !== undefined) {
-    if (ctx.hookEvents === undefined)
-      results.push(fail(`no_hook_blocked: no hook events (older run / replay without controlOut) — cannot verify`));
+    if (ctx.hookEvents === undefined) results.push(fail(`no_hook_blocked: no hook events (older run) — cannot verify`));
     else {
       const blk = ctx.hookEvents.find((h) => h.decision === "block");
       results.push(
@@ -4963,15 +4961,13 @@ function check(
   if (a.vm_path_denied !== undefined) {
     const gate = hostloopOnly("vm_path_denied");
     if (gate) results.push(gate);
-    else if (ctx.pathDenials === undefined)
-      results.push(fail("vm_path_denied: no path-denial telemetry (older run / replay without controlOut) — cannot verify"));
+    else if (ctx.pathDenials === undefined) results.push(fail("vm_path_denied: no path-denial telemetry (older run) — cannot verify"));
     else results.push(ctx.pathDenials.some((d) => VM_PATH(d.path)) ? ok() : fail("vm_path_denied: no /sessions-targeted denial recorded"));
   }
   if (a.path_denied !== undefined) {
     const gate = hostloopOnly("path_denied");
     if (gate) results.push(gate);
-    else if (ctx.pathDenials === undefined)
-      results.push(fail("path_denied: no path-denial telemetry (older run / replay without controlOut) — cannot verify"));
+    else if (ctx.pathDenials === undefined) results.push(fail("path_denied: no path-denial telemetry (older run) — cannot verify"));
     else {
       const q = a.path_denied;
       const re = q.path_matches ? compileUserRegex(q.path_matches) : undefined;
@@ -4993,8 +4989,7 @@ function check(
   if (a.no_path_denied !== undefined) {
     const gate = hostloopOnly("no_path_denied");
     if (gate) results.push(gate);
-    else if (ctx.pathDenials === undefined)
-      results.push(fail("no_path_denied: no path-denial telemetry (older run / replay without controlOut) — cannot verify"));
+    else if (ctx.pathDenials === undefined) results.push(fail("no_path_denied: no path-denial telemetry (older run) — cannot verify"));
     else {
       const d = ctx.pathDenials[0];
       results.push(d ? fail(`no_path_denied: ${d.source} denied ${d.tool} on "${d.path ?? "?"}"`) : ok());

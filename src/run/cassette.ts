@@ -6707,9 +6707,7 @@ export interface BehaviourSummary {
 
 /** Count the AskUserQuestion gates a cassette recorded. Sourced from `controlOut` (the decision stream),
  *  where an answered gate appears as a control_response whose `updatedInput` carries `questions[]` — the
- *  same shape the replay decision pipeline reads. A cassette without controlOut reports 0 gates, which is
- *  indistinguishable from "no gates fired"; that ambiguity is why the delta line says "0 → 2" rather than
- *  claiming a regression. */
+ *  same shape the replay decision pipeline reads. */
 export function behaviourSummary(cassette: Pick<Cassette, "controlOut" | "events" | "artifacts">): BehaviourSummary {
   let gates = 0;
   for (const raw of cassette.controlOut ?? []) {
@@ -9219,8 +9217,6 @@ export async function replayCassette(
     replayPathDenials.push(...rec.pathDenials.filter((d) => d.source === "permission_denied"));
   }
 
-  // build a conditional contentKeys — omit question/gate keys when controlOut is absent
-  // (they would evaluate vacuously/incorrectly).
   const alwaysContentKeys = ALWAYS_CONTENT_KEYS;
   const questionGateKeys = QUESTION_GATE_KEYS;
   // with an artifact manifest, the filesystem assertions become replay-checkable (materialized below).
@@ -9252,8 +9248,7 @@ export async function replayCassette(
     ...(iumReplayable ? (["input_unmodified"] as (keyof Assertion)[]) : []),
   ];
   // DELIBERATE asymmetry (live vs replay): live/verify-run without preRunPaths ⇒ evidence-unavailable
-  // HARD-FAIL; replay of a baseline-less cassette ⇒ loud EXCLUDE here (same contract as gate keys
-  // without controlOut) — the recording cannot support the key, not a vacuous pass.
+  // HARD-FAIL; replay of a baseline-less cassette ⇒ loud EXCLUDE here — the recording cannot support the key, not a vacuous pass.
   if (cassette.scenario.assert.some((a) => a.no_unexpected_files !== undefined) && nufExcludedLoudly)
     warn(
       "::warning:: [replay] no_unexpected_files: cassette has no pre-run manifest (recorded before the manifest seam) — key skipped on replay; re-record on a current harness\n",
@@ -9328,14 +9323,13 @@ export async function replayCassette(
 
     // footgun: replay must be LOUD about anything it can't check, in two distinct classes —
     // a silent partial false-green is the project's cardinal sin.
-    //  • FULL skip  — an assertion with no evaluated key at all (pure filesystem/egress, or pure
-    //    gate-keys when controlOut is absent) + every `expect_denied` host. Not evaluated on replay.
+    //  • FULL skip  — an assertion with no evaluated key at all (pure filesystem/egress) + every
+    //    `expect_denied` host. Not evaluated on replay.
     //  • PARTIAL skip — a MIXED assertion whose content half IS evaluated but whose genuine
     //    filesystem/egress half is silently dropped by stripToContent (e.g. {result, file_exists}).
     //    Counted separately so a mixed assertion can't green on its content half alone unnoticed.
     // `contentishKeys` (always-content ∪ question/gate) marks keys that are NEVER filesystem/egress;
-    // a key outside it is genuinely live-only. (Gate keys dropped purely for missing controlOut are
-    // already announced by the controlOut warning above, so they don't count as a PARTIAL drop.)
+    // a key outside it is genuinely live-only.
     const contentishKeys = new Set<keyof Assertion>([...alwaysContentKeys, ...questionGateKeys, ...manifestKeys]);
     let fullSkipCount = cassette.scenario.expect_denied?.length ?? 0;
     let partialSkipCount = 0;
@@ -9421,9 +9415,7 @@ export async function replayCassette(
       recordedNonDeterministic: cassette.authoring?.nonDeterministic === true,
       gateOptions: rec.gateOptions,
       // A truncated cassette could not be driven, so `gateOptions` is empty because nothing was OBSERVED
-      // — not because no gate fired. Flag it so question_options fails evidence-unavailable. (A cassette
-      // with no controlOut needs no flag: the whole QUESTION_GATE_KEYS bucket is excluded from that
-      // replay, so the key is never reached.)
+      // — not because no gate fired. Flag it so question_options fails evidence-unavailable.
       gateOptionsMissing: truncatedMsg !== undefined,
       hostPathLeaked: false,
       selfHealRan: false,
@@ -9465,14 +9457,12 @@ export async function replayCassette(
       resources: undefined,
       // live-only — a cassette carries no frozen search corpus; the search_corpus_* keys are LIVE_ONLY_KEYS.
       searchCorpus: undefined,
-      // reconstructed above from cassette.events + controlOut; undefined when controlOut is absent
-      // (excludes hook_blocked/no_hook_blocked loud, never a vacuous pass).
+      // reconstructed above from cassette.events + controlOut (an unpaired callback fails the replay as truncated).
       hookEvents: replayHookEvents,
       // content-class — the tool_use blocks are frozen stream content, so the re-drive reproduces
       // fileToolAttempts exactly like the live lane (same reasoning as presentedFiles below).
       fileToolAttempts: rec.fileToolAttempts,
-      // reconstructed above (beside replayHookEvents) from cassette.events + controlOut; undefined when
-      // controlOut is absent.
+      // reconstructed above (beside replayHookEvents) from cassette.events + controlOut.
       pathDenials: replayPathDenials,
       // content-class — re-derived by the re-drive above exactly like the live lane; uncollapsed so an
       // empty [] (nothing presented) vacuous-passes no_scratchpad_leak instead of reading as
@@ -9883,14 +9873,14 @@ export async function replayCassette(
       hookFailureBlocks: replayHookFailureBlocks,
       deviceBridge: cassette.deviceBridge, // what the recording modeled, as frozen
       mcpErrors: undefined, // live-only — the re-drive never produces mcp_error
-      hookEvents: replayHookEvents, // reconstructed above from cassette.events + controlOut; undefined when controlOut is absent
+      hookEvents: replayHookEvents, // reconstructed above from cassette.events + controlOut
       // Content-class: the tool_use blocks live in the ordinary events stream (not controlOut), so the
       // re-drive reproduces fileToolAttempts automatically — same reasoning as presentedFiles below.
       fileToolAttempts: rec.fileToolAttempts,
       toolCalls: rec.toolCalls, // content-class too: re-derived from the frozen tool_use blocks
       // reconstructed above (beside replayHookEvents) from cassette.events + controlOut, pairing the
       // pretooluse/can_use_tool sources with their controlOut reply and merging the permission_denied
-      // source from the re-drive; undefined when controlOut is absent.
+      // source from the re-drive.
       pathDenials: replayPathDenials,
       // Content-class: the tool_use/tool_result pair lives in the ordinary events stream (not
       // controlOut), so the re-drive reproduces it exactly like mcpErrors' live-only counterpart does

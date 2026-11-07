@@ -609,7 +609,6 @@ def test_strict_default_floor_still_fails_on_warn(tmp_path):
     code, out = _lint_cli(tmp_path, "--strict", body="assert:\n  - gate_answers_delivered: true\n")
     assert code == 1
     assert "vacuous-gate-assert" in out
-    assert "gate-needs-controlout" not in out  # the INFO beside it is hidden
 
 
 def test_plain_lint_default_floor_is_still_info(tmp_path):
@@ -658,6 +657,17 @@ def _valid_artifact(path="outputs/result.json"):
     return [{"path": path, "bytes": 2, "sha256": "a" * 64, "body": "{}"}]
 
 
+def test_gate_keys_raise_no_replay_advisory(tmp_path):
+    # Every cassette replay reads carries its recorded control responses, so a gate key always grades on
+    # replay: no advisory, with or without cassette evidence.
+    body = "assert:\n  - question_asked: '.*'\n  - questions_count_max: 2\n"
+    for cassettes in ([], [("old.cassette.json", {"artifacts": [], "controlOut": []})]):
+        root = tmp_path / str(len(cassettes))
+        root.mkdir()
+        _, findings, _ = _lint_with_cassettes(root, body, cassettes)
+        assert not any("controlout" in f["rule"] for f in findings)
+
+
 def test_cassette_evidence_suppresses_only_proven_replay_advice(tmp_path):
     body = (
         "answers:\n  - when_question: '.*'\n    choose: first\n"
@@ -671,7 +681,6 @@ def test_cassette_evidence_suppresses_only_proven_replay_advice(tmp_path):
     rules = {f["rule"] for f in findings}
     assert code == 0
     assert "manifest-needs-snapshot" not in rules
-    assert "gate-needs-controlout" not in rules
     assert "positional-choose-order" in rules
 
 
@@ -697,7 +706,6 @@ def test_cassette_provenance_must_resolve_to_the_linted_file(tmp_path):
         scenario.main(["lint", str(f), "--cassette-dir", str(cassettes_dir), "--json"])
     rules = {finding["rule"] for finding in json.loads(buf.getvalue())}
     assert "manifest-needs-snapshot" in rules
-    assert "gate-needs-controlout" in rules
 
 
 def test_duplicate_matching_cassettes_must_all_prove_each_advisory(tmp_path):
@@ -713,7 +721,6 @@ def test_duplicate_matching_cassettes_must_all_prove_each_advisory(tmp_path):
     rules = {f["rule"] for f in findings}
     assert code == 0
     assert "manifest-needs-snapshot" in rules
-    assert "gate-needs-controlout" in rules
 
 
 def test_empty_manifest_with_baselines_is_checkable_for_diff_assertions(tmp_path):
@@ -734,7 +741,6 @@ def test_empty_manifest_with_baselines_is_checkable_for_diff_assertions(tmp_path
     rules = {f["rule"] for f in findings}
     assert code == 0
     assert "manifest-needs-snapshot" not in rules
-    assert "gate-needs-controlout" not in rules
 
 
 def test_malformed_cassette_evidence_fails_closed(tmp_path):
@@ -747,7 +753,6 @@ def test_malformed_cassette_evidence_fails_closed(tmp_path):
     rules = {f["rule"] for f in findings}
     assert code == 0
     assert "manifest-needs-snapshot" in rules
-    assert "gate-needs-controlout" in rules
 
 
 def test_healthy_matching_cassette_suppresses_replay_advice(tmp_path):
@@ -760,7 +765,6 @@ def test_healthy_matching_cassette_suppresses_replay_advice(tmp_path):
     rules = {f["rule"] for f in findings}
     assert code == 0
     assert "manifest-needs-snapshot" not in rules
-    assert "gate-needs-controlout" not in rules
 
 
 def test_skipped_cassette_is_visible_and_keeps_advice_with_healthy_sibling(tmp_path):
@@ -786,7 +790,6 @@ def test_skipped_cassette_is_visible_and_keeps_advice_with_healthy_sibling(tmp_p
     assert code == 0
     assert "broken.cassette.json" in skipped["message"]
     assert "manifest-needs-snapshot" in rules
-    assert "gate-needs-controlout" in rules
 
 
 def test_unreadable_cassette_is_visible_and_keeps_advice_with_healthy_sibling(tmp_path, monkeypatch):
