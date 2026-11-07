@@ -14,8 +14,9 @@ All notable changes to this project are documented here. The format is based on
   finished, it exits anyway with the same code and names what was holding it on stderr
   (`::warning:: [exit] the event loop was still busy …`). Exit codes and output are unchanged, for
   `cowork-harness` and for critique's module run directly (`node dist/critique/command.js`).
-- **`prune` reports a usage error as a JSON envelope when asked for `--output-format json`**, as every other command
-  does. It printed only the plain message before. The text form is unchanged.
+- **`prune` reports every usage error as a JSON envelope under `COWORK_HARNESS_OUTPUT_FORMAT=json`**, as other
+  commands do. Before, each printed only the plain message. prune has no `--output-format` flag. The text form is
+  unchanged.
 
 ### Changed
 

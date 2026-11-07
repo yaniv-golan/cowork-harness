@@ -424,8 +424,8 @@ function levelRefusal(root: string, source: string): string | undefined {
  *  scenario dir is left alone and counted.
  *  Safe by default (dry-run-able). */
 export function cmdRunsGc(args: string[]): void {
-  // prune has no JSON output of its own, but a usage error asked for under `--output-format json` still gets the
-  // envelope every other command prints (the text form is the same message as before).
+  // prune has no `--output-format` flag and no JSON output of its own. Under COWORK_HARNESS_OUTPUT_FORMAT=json a usage
+  // error still gets the envelope every other command prints; the text form is the same message as before.
   const json = isJsonOutput(args);
   let p;
   try {
@@ -440,7 +440,7 @@ export function cmdRunsGc(args: string[]): void {
     rethrowIfExit(e);
     return fail("prune", "usage", (e as Error).message, undefined, json);
   }
-  applyParsedCommandGlobals("prune", p, false);
+  applyParsedCommandGlobals("prune", p, json);
   if (p.positionals.length > 1) {
     return fail(
       "prune",

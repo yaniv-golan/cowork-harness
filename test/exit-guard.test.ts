@@ -36,6 +36,8 @@ describe("every broad catch that can see an exit request lets it through", () =>
 
   it("every caller of a library function that can raise an exit request is guarded", () => {
     // These live outside the command files and call exitWith themselves; a caller outside the set could swallow it.
+    // A fixed list, not derived: today these four are every such function. A new library raiser is itself guarded (it
+    // calls exitWith), but its callers are pinned only once it is named here; derive the list if it grows.
     const LIBRARY_EXITS = /\b(preflightBudget|preflightBatchBudget|applyCommandGlobals?|stripCommandGlobals)\(/;
     const guarded = new Set(files);
     const callers = srcFiles().filter((f) => LIBRARY_EXITS.test(stripComments(readFileSync(f, "utf8"), { strings: true })));

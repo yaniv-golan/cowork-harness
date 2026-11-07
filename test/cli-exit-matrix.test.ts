@@ -24,10 +24,13 @@ function endedByItself(r: ReturnType<typeof cli>) {
   expect(r.stderr, "the exit fallback fired: something held the event loop after the command").not.toContain(EXIT_FALLBACK_LINE);
 }
 
-/** Commands with no JSON output at all, so a usage error under `--output-format json` prints none. Each with why. */
+/** Commands with no `--output-format` flag, so the flag's rows below don't apply to them. Each with why. */
 const NO_JSON_MODE: Record<string, string> = {
   // An interactive session in the operator's terminal; it has no machine-readable mode to report an envelope in.
   chat: "interactive, no JSON mode",
+  // No JSON output of its own and no `--output-format` flag. COWORK_HARNESS_OUTPUT_FORMAT=json does reach the
+  // envelope for its usage errors (pinned below).
+  prune: "no --output-format flag; env json mode only",
 };
 
 const COMMANDS = [
@@ -69,9 +72,23 @@ describe.skipIf(!built)("exit matrix: each subcommand exits by itself with its d
       const j = cli([c, "--no-such-flag", "--output-format", "json"], cwd);
       expect(j.code, j.stderr).toBe(2);
       endedByItself(j);
-      if (c in NO_JSON_MODE) expect(j.stdout, NO_JSON_MODE[c]).toBe("");
-      else expect(JSON.parse(j.stdout)).toMatchObject({ ok: false, error: { category: "usage" } });
+      if (c === "chat") expect(j.stdout, NO_JSON_MODE[c]).toBe("");
+      else if (!(c in NO_JSON_MODE)) expect(JSON.parse(j.stdout)).toMatchObject({ ok: false, error: { category: "usage" } });
     });
+
+    // With `--output-format json` first, the usage error reported must be the bad flag's, so a command that rejects
+    // `--output-format` itself can't pass by printing an envelope about that.
+    if (!(c in NO_JSON_MODE))
+      it(`${c} --output-format json before an unknown flag reports that flag in the envelope`, () => {
+        // hillclimb's first argument is its subcommand; the flags belong to `hillclimb run`.
+        const head = c === "hillclimb" ? [c, "run"] : [c];
+        const j = cli([...head, "--output-format", "json", "--no-such-flag"], cwd);
+        expect(j.code, j.stderr).toBe(2);
+        endedByItself(j);
+        const env = JSON.parse(j.stdout);
+        expect(env).toMatchObject({ ok: false, error: { category: "usage" } });
+        expect(env.error.message).toContain("--no-such-flag");
+      });
   }
 
   // critique's module can also be run directly (`node dist/critique/command.js`, `tsx src/critique/command.ts`). That
@@ -82,6 +99,26 @@ describe.skipIf(!built)("exit matrix: each subcommand exits by itself with its d
       expect(r.status, r.stderr).toBe(2);
       expect(r.stderr).not.toMatch(/ExitRequested|\n\s+at /);
       expect(r.stderr).not.toContain(EXIT_FALLBACK_LINE);
+    });
+
+  // prune has no `--output-format`, but the env json mode reaches the envelope for each of its usage errors, the
+  // command globals' included. The text form prints the same message on stderr.
+  for (const [args, flag] of [
+    [["--keep-last", "x"], "--keep-last"],
+    [["--pinned-older-than", "5x"], "--pinned-older-than"],
+    [["--dotenv", "a", "--dotenv", "b"], "--dotenv"],
+  ] as const)
+    it(`prune ${args.join(" ")} under COWORK_HARNESS_OUTPUT_FORMAT=json is a usage envelope naming ${flag}`, () => {
+      const j = cli(["prune", ...args], cwd, { COWORK_HARNESS_OUTPUT_FORMAT: "json" });
+      expect(j.code, j.stderr).toBe(2);
+      const env = JSON.parse(j.stdout);
+      expect(env).toMatchObject({ command: "prune", ok: false, error: { category: "usage" } });
+      expect(env.error.message).toContain(flag);
+      const t = cli(["prune", ...args], cwd);
+      expect(t.code).toBe(2);
+      expect(t.stdout).toBe("");
+      expect(t.stderr).toContain(env.error.message);
+      endedByItself(t);
     });
 
   it("an unknown command exits 2", () => {
