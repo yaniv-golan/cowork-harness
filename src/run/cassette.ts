@@ -5682,6 +5682,9 @@ export async function cmdRecord(args: string[]) {
       if (asJson) logSingleInputErrors();
       preflightBudget("record", scenario.name, maxBudgetUsd, asJson, { dryRun: true, target, inputErrors: singleInputErrors });
     }
+    // The budget the recording would have: the flag in place of the scenario's own, as execution resolves it.
+    const budget =
+      timeoutOverride ?? (scenario.timeout_ms !== undefined ? { ms: scenario.timeout_ms, source: "scenario" as const } : undefined);
     if (asJson) {
       out(
         jsonPayloadEnvelope("record", true, {
@@ -5689,6 +5692,7 @@ export async function cmdRecord(args: string[]) {
           target,
           scenario: scenario.name,
           fidelity: scenario.fidelity,
+          ...(budget ? { timeout: budget } : {}),
           cassette: cassettePath,
           inputErrors: singleInputErrors,
           token,
@@ -5700,6 +5704,7 @@ export async function cmdRecord(args: string[]) {
       log(`  scenario: ${scenario.name}`);
       log(`  file:     ${target}`);
       if (scenario.fidelity) log(`  fidelity: ${scenario.fidelity}`);
+      if (budget) log(`  timeout:  ${budget.ms} ms (${budget.source})`);
       log(`  cassette: ${cassettePath}`);
       log(tokenLine);
       log(agentLine);

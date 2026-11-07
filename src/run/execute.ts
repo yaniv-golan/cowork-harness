@@ -1230,6 +1230,9 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // The agent phase's budget and where it came from: a `--timeout`/runner option in place of the scenario's own.
   const budget: RunResult["timeout"] =
     opts.timeoutOverride ?? (scenario.timeout_ms !== undefined ? { ms: scenario.timeout_ms, source: "scenario" } : undefined);
+  // A budget from outside the scenario (`--timeout`, a hillclimb ceiling) is said once on stderr: the frozen scenario
+  // and the file on disk still carry their own value.
+  if (budget && budget.source !== "scenario") process.stderr.write(`[budget] timeout ${budget.ms} ms (${budget.source})\n`);
   // The session's turn cap, as passed to the agent (every tier emits --max-turns from the plan).
   const turnCap: RunResult["turnCap"] = plan.agentMaxTurns !== undefined ? { maxTurns: plan.agentMaxTurns, source: "session" } : undefined;
   // A maintainer control run leaves the device_bridge prompt note out (COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off). Read once:

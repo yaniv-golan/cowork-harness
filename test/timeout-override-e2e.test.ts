@@ -60,6 +60,7 @@ describe.runIf(can)("--timeout is the run's budget, recorded with its source", (
         const r = await cli(f, ["run", f.scenario, ...args, "--output-format", "json"]);
         expect(r.code, r.stderr).toBe(0);
         expect(JSON.parse(r.stdout).results[0].timeout).toEqual({ ms: 600_000, source: "flag" });
+        expect(r.stderr).toContain("[budget] timeout 600000 ms (flag)");
       }
       expect(readFileSync(f.scenario, "utf8")).toContain("timeout_ms: 900000");
     });
@@ -191,6 +192,18 @@ describe.runIf(can)("--timeout is the run's budget, recorded with its source", (
       const r = await cli(f, ["skill", dir, "say hi", "--fidelity", "protocol", "--timeout", "600000", "--output-format", "json"]);
       expect(r.code, r.stderr).toBe(0);
       expect(JSON.parse(r.stdout).results[0].timeout).toEqual({ ms: 600_000, source: "flag" });
+    });
+  }, 120_000);
+
+  it("record --dry-run states the budget the recording would have", async () => {
+    await withStub(QUICK, async (f) => {
+      setUp(f, "timeout_ms: 900000\n");
+      const own = await cli(f, ["record", f.scenario, "--dry-run", "--output-format", "json"]);
+      expect(own.code, own.stderr).toBe(0);
+      expect(JSON.parse(own.stdout).timeout).toEqual({ ms: 900_000, source: "scenario" });
+      const flagged = await cli(f, ["record", f.scenario, "--dry-run", "--timeout", "5000"]);
+      expect(flagged.code, flagged.stderr).toBe(0);
+      expect(flagged.stderr + flagged.stdout).toContain("timeout:  5000 ms (flag)");
     });
   }, 120_000);
 });

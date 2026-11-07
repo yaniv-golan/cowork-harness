@@ -13,7 +13,8 @@ import { managedConfigMode, protocolConfigDirs } from "../src/runtime/protocol.j
  *
  * Billed (two short model turns). It runs ONLY on an explicit opt-in, never on token presence alone:
  *   COWORK_LIVE_PROTOCOL_RESUME=1 npm run test:live -- live-protocol-resume
- * COWORK_LIVE_REQUIRE=1 turns a missing prerequisite into a failure instead of a skip.
+ * COWORK_LIVE_REQUIRE=1 turns a missing prerequisite into a failure instead of a skip. The opt-in is one of those
+ * prerequisites, so a release gate that sets COWORK_LIVE_REQUIRE=1 must also set COWORK_LIVE_PROTOCOL_RESUME=1.
  */
 const OPT_IN = process.env.COWORK_LIVE_PROTOCOL_RESUME === "1";
 const REQUIRE = process.env.COWORK_LIVE_REQUIRE === "1";
