@@ -11,7 +11,10 @@ import { managedConfigMode, protocolConfigDirs } from "../src/runtime/protocol.j
  * agent process started with `--resume`, and it must answer with that token. The assertion is on the outcome
  * (turn 2's final message), not on argv; test/protocol-session-argv-e2e.test.ts is the argv test.
  *
- * Billed (two short model turns). It runs ONLY on an explicit opt-in, never on token presence alone:
+ * The second suite PROVES the session's `agent_max_turns` reaches the protocol agent and stops it: the agent's own result
+ * frame must say `error_max_turns` with `num_turns` equal to the cap, and `allow_max_turns` must count it as completed.
+ *
+ * Billed (two short model turns, then one capped run). It runs ONLY on an explicit opt-in, never on token presence alone:
  *   COWORK_LIVE_PROTOCOL_RESUME=1 npm run test:live -- live-protocol-resume
  * COWORK_LIVE_REQUIRE=1 turns a missing prerequisite into a failure instead of a skip. The opt-in is one of those
  * prerequisites, so a release gate that sets COWORK_LIVE_REQUIRE=1 must also set COWORK_LIVE_PROTOCOL_RESUME=1.
@@ -83,4 +86,39 @@ describe.runIf(CAN || REQUIRE)("protocol --resume conversation continuity (bille
       rmSync(runsDir, { recursive: true, force: true });
     }
   }, 600_000);
+});
+
+describe.runIf(CAN || REQUIRE)("protocol agent_max_turns stops the agent at the cap (billed, opt-in)", () => {
+  it("agent_max_turns: 1 ⇒ the agent's result is error_max_turns with num_turns == 1, and allow_max_turns completes it", () => {
+    expect(CAN, "prerequisites missing under COWORK_LIVE_REQUIRE=1").toBe(true);
+    const dir = mkdtempSync(join(tmpdir(), "cwh-pcap-"));
+    const runsDir = mkdtempSync(join(tmpdir(), "cwh-pcap-runs-"));
+    try {
+      const session = join(dir, "capped.session.yaml");
+      writeFileSync(session, "model: claude-haiku-4-5\npermission_parity: cowork\nagent_max_turns: 1\n");
+      const scenario = join(dir, "capped.yaml");
+      writeFileSync(
+        scenario,
+        `baseline: latest\nfidelity: protocol\nsession: ${session}\n` +
+          "prompt: Run `echo one` with the Bash tool. After it returns, run `echo two` as a separate Bash call. Then tell me both outputs.\n" +
+          "assert:\n  - allow_max_turns: true\n  - result: error\n",
+      );
+      const r = spawnSync("node", [CLI, "run", scenario, "--output-format", "json"], {
+        encoding: "utf8",
+        env: { ...process.env, CLAUDE_CODE_OAUTH_TOKEN: TOKEN, COWORK_HARNESS_GITSET: "0", COWORK_HARNESS_RUNS_DIR: runsDir },
+        timeout: 240_000,
+      });
+      const res = JSON.parse(r.stdout || "{}").results?.[0] ?? {};
+      // The agent's own outcome, from its result frame: the cap stopped it, at the cap.
+      expect(res.resultSubtype, r.stderr).toBe("error_max_turns");
+      expect(res.usage?.turns).toBe(1);
+      expect(res.turnCap).toEqual({ maxTurns: 1, source: "session" });
+      expect(res.result).toBe("error");
+      expect(res.verdict?.pass, JSON.stringify(res.verdict?.signals)).toBe(true);
+      expect(r.status).toBe(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      rmSync(runsDir, { recursive: true, force: true });
+    }
+  }, 300_000);
 });
