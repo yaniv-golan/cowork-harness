@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { replayCassette, redactCassette, redactionRewroteNegativeToolInputs, type Cassette } from "../src/run/cassette.js";
 import { loadRedactionPolicy } from "../src/redact.js";
 import type { Scenario } from "../src/types.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 // THE HAZARD. A committed cassette is redacted by default, and redaction rewrites the frozen tool_use
 // inputs. A NEGATIVE input check naming a literal the policy rewrites (a home path) then looks for bytes
@@ -42,7 +43,7 @@ function cassette(assert: Record<string, unknown>[]): Cassette {
       assert,
     } as unknown as Scenario,
     events: [INIT, BASH, RESULT, DONE],
-    controlOut: [],
+    controlOut: recordedControlOut(),
   } as unknown as Cassette;
 }
 

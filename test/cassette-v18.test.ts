@@ -13,6 +13,7 @@ import { z } from "zod";
 import { loadBaseline } from "../src/baseline.js";
 import { CASSETTE_VERSION, cassetteSchemaUrl, readCassette, requiredVersionFor, type Cassette } from "../src/run/cassette.js";
 import type { Scenario } from "../src/types.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 describe("cassette v18", () => {
   it("this build reads v18, and ships its schema next to v17's", () => {
@@ -48,7 +49,7 @@ describe("cassette v18", () => {
           assert: [{ result: "success" }],
         } as unknown as Scenario,
         events: [JSON.stringify({ type: "result", subtype: "success", is_error: false })],
-        controlOut: [],
+        controlOut: recordedControlOut(),
         cassetteVersion: 17,
         userVisibleRoots: ["outputs"],
         fingerprint: { baseline: loadBaseline("latest").appVersion, hashFormat: "jcs1" },

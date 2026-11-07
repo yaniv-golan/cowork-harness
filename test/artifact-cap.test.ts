@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildManifest, artifactJsonTargetsTruncated, artifactJsonGlobWalkGap } from "../src/run/cassette.js";
 import type { Scenario } from "../src/types.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 /** The inline-body cap is configurable, and a `record` truncates a body over the cap to hash-only. */
 function workRootWith(files: Record<string, string>): string {
@@ -132,7 +133,7 @@ describe("buildManifest — bodyLessPrefixes (T3 read-only connected-folder capt
         assert: [],
       },
       events: [],
-      controlOut: [],
+      controlOut: recordedControlOut(),
       artifacts,
       userVisibleRoots: ["outputs", "carta-folder"], // full root set survives — only the body was stripped
     } as unknown as Parameters<typeof scanCassette>[0];

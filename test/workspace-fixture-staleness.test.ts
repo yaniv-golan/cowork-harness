@@ -11,6 +11,7 @@ import { computeStaleness, replayCassette, CASSETTE_VERSION, type Cassette } fro
 import { computeVerdict } from "../src/run/verdict.js";
 import { loadBaseline } from "../src/baseline.js";
 import { scanWorkspaceFixture } from "../src/fixture/workspace.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 const LIVE = loadBaseline("latest").appVersion;
 
@@ -48,7 +49,7 @@ function recorded(): { cassetteDir: string; fixture: string; cassette: Cassette 
       JSON.stringify({ type: "system", subtype: "init", tools: [] }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
     ],
-    controlOut: [],
+    controlOut: recordedControlOut(),
     cassetteVersion: CASSETTE_VERSION,
     fingerprint: { baseline: LIVE, workspaceFixtureSig: scan.sig, workspaceFixtureFileSigs: scan.fileSigs },
   } as unknown as Cassette;

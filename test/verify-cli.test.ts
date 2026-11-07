@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { DEFAULT_USER_VISIBLE_ROOTS, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 // Exercises the built `verify-cassettes` CLI gate exit codes. Token/agent-free. Needs dist/cli.js
 // (the `ci` script builds before testing); skips cleanly otherwise.
@@ -21,7 +22,9 @@ function run(args: string[], cwd: string) {
 }
 
 const cassette = (events: string[]) => ({
-  cassetteVersion: 9,
+  cassetteVersion: 12,
+  controlOut: recordedControlOut(),
+  userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
   scenario: {
     name: "c",
     baseline: "latest",
@@ -155,7 +158,7 @@ describe.skipIf(!can)("verify-cassettes CLI gate", () => {
     const c = cassette([JSON.stringify({ type: "result", subtype: "success" })]) as Record<string, unknown>;
     // A stale, non-live baseline appVersion — genuine `class: "baseline"` drift, not `unverifiable-baseline`
     // (the live baseline itself always loads fine in this repo's test env).
-    c.fingerprint = { baseline: "0.0.0-does-not-exist" };
+    c.fingerprint = { baseline: "0.0.0-does-not-exist", hashFormat: "jcs1" };
     writeFileSync(join(d, "drift.cassette.json"), JSON.stringify(c));
     const r = run(["verify-cassettes", join(d, "drift.cassette.json"), "--output-format", "json"], d);
     expect(r.code).toBe(1);

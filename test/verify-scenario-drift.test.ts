@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { scenarioContentDrift, CASSETTE_VERSION } from "../src/run/cassette.js";
+import { DEFAULT_USER_VISIBLE_ROOTS, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 // WS-A2: verify-cassettes must catch a committed scenario whose PROMPT diverged from the cassette's frozen
 // prompt — the fingerprint doesn't cover the prompt, so this was previously invisible. A resolvable+drifted
@@ -103,6 +104,8 @@ describe("scenarioContentDrift (function-level)", () => {
 const CLI = resolve("dist/cli.js");
 const cassetteFixture = (prompt: string) => ({
   cassetteVersion: CASSETTE_VERSION,
+  controlOut: recordedControlOut(),
+  userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
   scenario: {
     name: "c",
     baseline: "latest",
@@ -152,6 +155,8 @@ describe.skipIf(!existsSync(CLI))("verify-cassettes gates on scenario prompt dri
       join(d, "a.cassette.json"),
       JSON.stringify({
         cassetteVersion: CASSETTE_VERSION,
+        controlOut: recordedControlOut(),
+        userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
         scenario: { prompt: "hi", session: "(inline)", assert: [] },
         events: [JSON.stringify({ type: "result", subtype: "success" })],
       }),

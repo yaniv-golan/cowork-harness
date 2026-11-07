@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { evaluate, type AssertContext } from "../src/assert.js";
 import { extractComputerLinks, normalizeHostShapedForReplay, resolveComputerLink } from "../src/run/computer-links.js";
 import { replayCassette, buildManifest, CASSETTE_VERSION, type Cassette } from "../src/run/cassette.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 const SID = "abc123";
 
@@ -412,7 +413,7 @@ function baseCassette(over: Partial<Cassette> & { text: string }): Cassette {
       assert: [{ computer_links_resolve: true }],
     },
     events: events(over.text),
-    controlOut: [],
+    controlOut: recordedControlOut(),
     ...over,
   } as unknown as Cassette;
 }
@@ -485,7 +486,7 @@ describe("replay classification — computer_links_resolve is a manifest key (no
         assert: [{ computer_links_resolve: true }],
       },
       events: events(`computer://${hostFolder}/notes.md`),
-      controlOut: [],
+      controlOut: recordedControlOut(),
       artifacts,
       userVisibleRoots: ["outputs", "myproject-src"],
       folderPrefixMap: [{ from: hostFolder, mount: "myproject-src" }],
@@ -522,7 +523,7 @@ describe("replay classification — computer_links_resolve is a manifest key (no
         assert: [{ computer_links_resolve: true }],
       },
       events: events(`computer://${hostFolder}/notes.md`),
-      controlOut: [],
+      controlOut: recordedControlOut(),
       artifacts,
       userVisibleRoots: ["outputs", "myproject-src"],
       // no folderPrefixMap — unexpected for a v9+ cassette
@@ -580,7 +581,7 @@ describe("replay classification — computer_links_resolve is a manifest key (no
         assert: [{ computer_links_resolve: true }],
       },
       events: events(`computer://${hostFolder}/notes.md`),
-      controlOut: [],
+      controlOut: recordedControlOut(),
       artifacts,
       userVisibleRoots: ["outputs", "myproject-src"], // full root set — body-less, not excluded
       folderPrefixMap: [{ from: hostFolder, mount: "myproject-src" }],
@@ -619,7 +620,7 @@ describe("replay classification — computer_links_resolve is a manifest key (no
           assert: [{ artifact_json: { artifact: "carta/input.json", path: "a", equals: 1 } }],
         },
         events: [],
-        controlOut: [],
+        controlOut: recordedControlOut(),
         artifacts,
         userVisibleRoots: ["outputs", "carta"],
       }) as unknown as Cassette;

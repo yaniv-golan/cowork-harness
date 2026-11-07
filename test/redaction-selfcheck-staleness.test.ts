@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { replayCassette, assertRedactionVerdictPreserved, buildFingerprint, CASSETTE_VERSION } from "../src/run/cassette.js";
 import { loadBaseline } from "../src/baseline.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 // Regression: the redaction verdict-preservation self-check (`assertRedactionVerdictPreserved`) used to
 // replay the cassette with NO `cassetteDir`, so the RELOCATABLE (relative) session path could not resolve,
@@ -55,7 +56,7 @@ function relocatableCassetteWithSkill(): { cassette: any; cassetteDir: string } 
       assert: [{ result: "success" }],
     },
     events: okEvents(),
-    controlOut: [],
+    controlOut: recordedControlOut(),
     fingerprint,
     cassetteVersion: CASSETTE_VERSION,
   } as any;

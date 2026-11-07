@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { evaluate, type AssertContext } from "../src/assert.js";
 import { replayCassette } from "../src/run/cassette.js";
 import type { Assertion } from "../src/types.js";
+import { withReplayContract } from "./helpers/minimal-cassette.js";
 
 // `lane: remote` still EXECUTES locally, so the file a skill wrote is on the local work root. The contract it
 // models is a remote container whose filesystem is not locally observable: a body read here grades a file the
@@ -137,9 +138,9 @@ describe("artifact_json on a replayed `lane: remote` cassette", () => {
     ["a glob, match: any", globOf("any")],
   ] as const) {
     it(`${name}: the lane: local twin passes, lane: remote fails on the lane`, async () => {
-      const local = await replayCassette(cassette("local", a));
+      const local = await replayCassette(withReplayContract(cassette("local", a)));
       expect(local.assertions.filter((x) => !x.pass)).toHaveLength(0);
-      const remote = await replayCassette(cassette("remote", a));
+      const remote = await replayCassette(withReplayContract(cassette("remote", a)));
       const failed = remote.assertions.filter((x) => !x.pass);
       expect(failed).toHaveLength(1);
       expect(failed[0].message).toMatch(LANE);

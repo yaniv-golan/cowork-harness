@@ -25,6 +25,7 @@ import { computeVerdict } from "../src/run/verdict.js";
 import { loadBaseline } from "../src/baseline.js";
 import type { RedactionPolicy } from "../src/redact.js";
 import type { Scenario } from "../src/types.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 const LIVE = loadBaseline("latest").appVersion;
 const sha = (s: string | Buffer) => createHash("sha256").update(s).digest("hex");
@@ -89,7 +90,7 @@ describe("untouched BINARY fixture files are hash-only; text ones stay inline", 
   });
 
   it("a hash-only fixture entry raises no committed-binary privacy finding; an inline one does", () => {
-    const base = { scenario: { prompt: "x" }, events: [], controlOut: [] };
+    const base = { scenario: { prompt: "x" }, events: [], controlOut: recordedControlOut() };
     const inline = scanCassette({ ...base, artifacts: [entry("outputs/deck.pptx", bin)] } as never, []);
     expect(inline.some((f) => f.cls === "binary")).toBe(true);
     const hashOnly = fixtureBinariesHashOnly([entry("outputs/deck.pptx", bin)], ["deck.pptx"], { "outputs/deck.pptx": sha(bin) });
@@ -114,7 +115,7 @@ function fixtureCassette(assert: unknown[], artifacts: ManifestEntry[], preRunHa
       JSON.stringify({ type: "system", subtype: "init", tools: [] }),
       JSON.stringify({ type: "result", subtype: "success", is_error: false }),
     ],
-    controlOut: [],
+    controlOut: recordedControlOut(),
     cassetteVersion: CASSETTE_VERSION,
     fingerprint: { baseline: LIVE },
     artifacts,

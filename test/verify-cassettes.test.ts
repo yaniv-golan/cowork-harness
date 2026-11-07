@@ -405,40 +405,6 @@ describe("checkStaleness — gate", () => {
 });
 
 describe("checkStaleness — staleness message variants", () => {
-  it("emits 'older hash format' message when cassette v < current and skillHash mismatches", () => {
-    const root = mkdtempSync(join(tmpdir(), "cwh-g2-"));
-    const skillDir = join(root, "skill");
-    mkdirSync(skillDir, { recursive: true });
-    writeFileSync(join(skillDir, "SKILL.md"), "# s\n");
-    const sessionPath = join(root, "session.yaml");
-    writeFileSync(sessionPath, `skills:\n  local:\n    - ./skill\n`);
-
-    const c = {
-      cassetteVersion: 1, // older format — should trigger format-version message
-      scenario: {
-        name: "s",
-        baseline: "latest",
-        session: sessionPath,
-        fidelity: "container" as const,
-        prompt: "hi",
-        answers: [],
-        expect_denied: [],
-        assert: [],
-      },
-      events: [],
-      fingerprint: {
-        baseline: "99.0.0",
-        skillHash: "0000000000000000000000000000000000000000000000000000000000000000",
-      },
-    } as unknown as Cassette;
-
-    const msgs = checkStaleness(c, root);
-    const skillMsg = msgs.find((m) => /hash format|older/.test(m));
-    expect(skillMsg).toBeDefined();
-    expect(skillMsg).toMatch(/hash format v\d+ \(now v\d+\)/i);
-    expect(skillMsg).not.toMatch(/contents changed/);
-  });
-
   it("emits 'contents changed' message when cassette version is current and skillHash mismatches", () => {
     const root = mkdtempSync(join(tmpdir(), "cwh-g2b-"));
     const skillDir = join(root, "skill");

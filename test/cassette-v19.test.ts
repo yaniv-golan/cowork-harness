@@ -16,6 +16,7 @@ import {
   type Cassette,
 } from "../src/run/cassette.js";
 import type { Scenario } from "../src/types.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 const schema = () => JSON.parse(readFileSync(join(process.cwd(), "schema", "cassette.v19.json"), "utf8"));
 
@@ -71,7 +72,7 @@ describe("cassette v19", () => {
           assert: [{ result: "error" }],
         } as unknown as Scenario,
         events: [JSON.stringify({ type: "result", subtype: "error_max_turns", is_error: true, num_turns: 1 })],
-        controlOut: [],
+        controlOut: recordedControlOut(),
         cassetteVersion: 18,
         userVisibleRoots: ["outputs"],
         fingerprint: { baseline: loadBaseline("latest").appVersion, hashFormat: "jcs1" },

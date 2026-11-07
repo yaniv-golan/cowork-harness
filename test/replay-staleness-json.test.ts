@@ -3,6 +3,7 @@ import { replayCassette, CASSETTE_VERSION } from "../src/run/cassette.js";
 import { computeVerdict } from "../src/run/verdict.js";
 import { loadBaseline } from "../src/baseline.js";
 import type { Fingerprint } from "../src/types.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 // Replay must surface class-tagged `staleness[]` and
 // `skippedAssertions` in the RunResult so a token-free JSON gate can see staleness WITHOUT it flipping the
@@ -39,7 +40,7 @@ const cassette = (fingerprint: Fingerprint, assert: unknown[] = [{ result: "succ
       assert,
     },
     events: okEvents(),
-    controlOut: [],
+    controlOut: recordedControlOut(),
     fingerprint,
     cassetteVersion: CASSETTE_VERSION,
   }) as any;

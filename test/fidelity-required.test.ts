@@ -22,6 +22,7 @@ import { join, resolve } from "node:path";
 import { UsageError } from "../src/errors.js";
 import { executeScenario, loadScenarioPure } from "../src/run/execute.js";
 import { CASSETTE_VERSION } from "../src/run/cassette.js";
+import { DEFAULT_USER_VISIBLE_ROOTS, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 const CLI = resolve("dist/cli.js");
 const can = existsSync(CLI);
@@ -211,6 +212,8 @@ function cassetteDir(frozen: Record<string, unknown> = { fidelity: "hostloop" })
     join(d, "c.cassette.json"),
     JSON.stringify({
       cassetteVersion: CASSETTE_VERSION,
+      controlOut: recordedControlOut(),
+      userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
       scenario: {
         name: "c",
         baseline: "latest",
@@ -290,6 +293,8 @@ describe.skipIf(!can)("record --rerecord-stale over a fidelity-less recorded sou
       join(d, "c.cassette.json"),
       JSON.stringify({
         cassetteVersion: CASSETTE_VERSION,
+        controlOut: recordedControlOut(),
+        userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
         fingerprint: { baseline: "desktop-0.0.1", hashFormat: "jcs1" },
         scenario: {
           name: "c",

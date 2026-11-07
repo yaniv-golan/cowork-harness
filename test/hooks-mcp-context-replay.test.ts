@@ -2,6 +2,8 @@ import { describe, it, expect, afterEach } from "vitest";
 import { replayCassette, CASSETTE_VERSION } from "../src/run/cassette.js";
 import { loadBaseline } from "../src/baseline.js";
 import { computeVerdict } from "../src/run/verdict.js";
+import { emptyControlOut } from "./helpers/minimal-cassette.js";
+import { HOSTLOOP_PATH_GATE_ID } from "../src/runtime/hostloop.js";
 
 const LIVE = loadBaseline("latest").appVersion;
 
@@ -176,7 +178,7 @@ describe("hookEvents reconstruction on replay", () => {
     expect(a?.message).toMatch(/Task/);
   });
 
-  it("excludes both keys loudly when controlOut is absent (never a vacuous pass)", async () => {
+  it("an unpaired hook_callback (empty controlOut) fails the replay as truncated — never an allow", async () => {
     mute();
     const r = await replayCassette({
       scenario: {
@@ -190,12 +192,56 @@ describe("hookEvents reconstruction on replay", () => {
         assert: [{ result: "success" }, { no_hook_blocked: true }],
       },
       events: baseEvents,
-      controlOut: [],
+      controlOut: emptyControlOut(),
       cassetteVersion: CASSETTE_VERSION,
       userVisibleRoots: ["outputs"],
       fingerprint: { baseline: LIVE },
     } as any);
-    expect(r.assertions.some((a) => a.assertion.no_hook_blocked !== undefined)).toBe(false);
-    expect(computeVerdict(r, "replay").pass).toBe(true);
+    const truncated = r.assertions.find((a) => a.assertion.replay_protocol_fidelity !== undefined && !a.pass);
+    expect(truncated?.message).toMatch(
+      /hook_callback \S+ present in events\.jsonl has no matching control_response .* cassette is truncated; re-record/,
+    );
+    expect(computeVerdict(r, "replay").pass).toBe(false);
+  });
+});
+
+describe("the hostloop path gate's callback with no recorded reply", () => {
+  it("fails the replay as truncated — never read as allow, so no_path_denied cannot pass over a lost block", async () => {
+    mute();
+    const r = await replayCassette({
+      scenario: {
+        name: "c",
+        baseline: "latest",
+        session: "(inline)",
+        fidelity: "hostloop",
+        prompt: "hi",
+        answers: [],
+        expect_denied: [],
+        assert: [{ no_path_denied: true }],
+      },
+      events: [
+        JSON.stringify({ type: "system", subtype: "init", tools: [], skills: [] }),
+        JSON.stringify({
+          type: "control_request",
+          request_id: "req-gate-1",
+          request: {
+            subtype: "hook_callback",
+            callback_id: HOSTLOOP_PATH_GATE_ID,
+            tool_use_id: "tu9",
+            input: { tool_name: "Write", tool_input: { file_path: "/sessions/x/outputs/a.md" } },
+          },
+        }),
+        JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+      ],
+      controlOut: emptyControlOut(),
+      cassetteVersion: CASSETTE_VERSION,
+      userVisibleRoots: ["outputs"],
+      effectiveFidelity: "hostloop",
+      fingerprint: { baseline: LIVE },
+    } as any);
+    expect(r.pathDenials).toEqual([]);
+    const truncated = r.assertions.find((a) => a.assertion.replay_protocol_fidelity !== undefined && !a.pass);
+    expect(truncated?.message).toMatch(/hook_callback req-gate-1 present in events\.jsonl has no matching control_response/);
+    expect(computeVerdict(r, "replay").pass).toBe(false);
   });
 });

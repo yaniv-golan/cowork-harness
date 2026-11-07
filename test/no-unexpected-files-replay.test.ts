@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { replayCassette, CASSETTE_VERSION } from "../src/run/cassette.js";
 import { computeVerdict } from "../src/run/verdict.js";
 import { loadBaseline } from "../src/baseline.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 const LIVE = loadBaseline("latest").appVersion;
 
@@ -36,7 +37,7 @@ describe("no_unexpected_files on replay", () => {
         assert: [{ no_unexpected_files: ["outputs/good.json"] }],
       },
       events: okEvents(),
-      controlOut: [],
+      controlOut: recordedControlOut(),
       cassetteVersion: CASSETTE_VERSION,
       userVisibleRoots: ["outputs"],
       preRunPaths: [],
@@ -68,7 +69,7 @@ describe("no_unexpected_files on replay", () => {
         assert: [{ result: "success" }, { no_unexpected_files: ["outputs/**"] }],
       },
       events: okEvents(),
-      controlOut: [],
+      controlOut: recordedControlOut(),
       cassetteVersion: CASSETTE_VERSION,
       userVisibleRoots: ["outputs"],
       artifacts: [{ path: "outputs/x.json", bytes: 2, sha256: sha, body, encoding: undefined }],
@@ -94,7 +95,7 @@ describe("no_unexpected_files on replay", () => {
         assert: [{ no_unexpected_files: ["outputs/good.json"] }],
       },
       events: okEvents(),
-      controlOut: [],
+      controlOut: recordedControlOut(),
       cassetteVersion: CASSETTE_VERSION,
       userVisibleRoots: ["outputs"],
       preRunPaths: [],
@@ -120,7 +121,7 @@ describe("no_unexpected_files on replay", () => {
         assert: [{ no_unexpected_files: [] }],
       },
       events: okEvents(),
-      controlOut: [],
+      controlOut: recordedControlOut(),
       cassetteVersion: CASSETTE_VERSION,
       userVisibleRoots: ["outputs"],
       preRunPaths: [],
@@ -147,7 +148,7 @@ describe("no_unexpected_files on replay", () => {
         assert: [{ result: "success", no_unexpected_files: ["outputs/**"] }],
       },
       events: okEvents(),
-      controlOut: [],
+      controlOut: recordedControlOut(),
       cassetteVersion: CASSETTE_VERSION,
       userVisibleRoots: ["outputs"],
       fingerprint: { baseline: LIVE },
@@ -179,7 +180,7 @@ describe("input_unmodified on replay", () => {
         assert: [{ input_unmodified: ["ref/**"] }],
       },
       events: okEvents(),
-      controlOut: [],
+      controlOut: recordedControlOut(),
       cassetteVersion: CASSETTE_VERSION,
       userVisibleRoots: ["outputs"],
       preRunPaths: ["ref/in.md"],
@@ -210,7 +211,7 @@ describe("input_unmodified on replay", () => {
         assert: [{ input_unmodified: ["ref/**"] }],
       },
       events: okEvents(),
-      controlOut: [],
+      controlOut: recordedControlOut(),
       cassetteVersion: CASSETTE_VERSION,
       userVisibleRoots: ["outputs"],
       preRunPaths: ["ref/in.md"],
@@ -245,7 +246,7 @@ describe("input_unmodified on replay", () => {
         assert: [{ input_unmodified: ["ref/**"] }],
       },
       events: okEvents(),
-      controlOut: [],
+      controlOut: recordedControlOut(),
       cassetteVersion: CASSETTE_VERSION,
       userVisibleRoots: ["outputs"],
       preRunPaths: ["ref/in.md"],
@@ -276,7 +277,7 @@ describe("input_unmodified on replay", () => {
         assert: [{ result: "success" }, { input_unmodified: ["ref/**"] }],
       },
       events: okEvents(),
-      controlOut: [],
+      controlOut: recordedControlOut(),
       cassetteVersion: CASSETTE_VERSION,
       userVisibleRoots: ["outputs"],
       preRunPaths: ["ref/in.md"],

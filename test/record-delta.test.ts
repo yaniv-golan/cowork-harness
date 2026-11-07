@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { behaviourSummary, describeBehaviourDelta, type Cassette, type ManifestEntry } from "../src/run/cassette.js";
+import { recordedControlOut } from "./helpers/minimal-cassette.js";
 
 // Minimal fixture builder — `behaviourSummary` only reads controlOut/events/artifacts, so we don't
 // need a full Cassette (scenario, fingerprint, etc). The Pick<> signature on behaviourSummary is what
@@ -53,7 +54,7 @@ describe("behaviourSummary", () => {
   });
 
   it("reports 0 gates when controlOut is present but empty", () => {
-    expect(behaviourSummary(fixture({ controlOut: [] })).gates).toBe(0);
+    expect(behaviourSummary(fixture({ controlOut: recordedControlOut() })).gates).toBe(0);
   });
 
   // Regression guard: a truncated/corrupt controlOut line must not crash the whole delta report —

@@ -29,11 +29,11 @@ import { loadBaseline } from "../src/baseline.js";
 import { ScenarioObject } from "../src/types.js";
 import type { Cassette } from "../src/run/cassette.js";
 import type { RunResult, Scenario } from "../src/types.js";
-import { INIT_CONTROL_LINE } from "./helpers/minimal-cassette.js";
+import { INIT_CONTROL_LINE, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 const LIVE = loadBaseline("latest").appVersion;
 const line = (o: unknown) => JSON.stringify(o);
-const cassetteOf = (events: string[]): Cassette => ({ events, controlOut: [] }) as unknown as Cassette;
+const cassetteOf = (events: string[]): Cassette => ({ events, controlOut: recordedControlOut() }) as unknown as Cassette;
 
 const RATE = line({
   type: "rate_limit_event",

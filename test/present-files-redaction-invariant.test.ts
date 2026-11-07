@@ -7,6 +7,7 @@ import { ScriptedDecider } from "../src/decide/decider.js";
 import { evaluate, type AssertContext } from "../src/assert.js";
 import { redactText, type RedactionPolicy } from "../src/redact.js";
 import { redactCassette, replayCassette, assertRedactionVerdictPreserved } from "../src/run/cassette.js";
+import { withReplayContract } from "./helpers/minimal-cassette.js";
 
 // `present_files_called` reads PRESENCE off the invocation count, not off the classified
 // `presentedFiles` list — the two answer different questions and only one survives redaction. At
@@ -187,35 +188,38 @@ describe("present_files_called reads presence, not classification", () => {
 // presence read off classification, the redacted replay flipped present_files_called to false and every
 // such record was refused. These drive the real `assertRedactionVerdictPreserved`.
 describe("record's redaction self-check accepts a hostloop present_files cassette", () => {
-  const hostloopCassette = (assertions: unknown[]) => ({
-    scenario: {
-      name: "deliver",
-      baseline: "latest",
-      session: "(inline)",
-      fidelity: "hostloop" as const,
-      prompt: "write the report and present it",
-      answers: [],
-      expect_denied: [],
-      assert: assertions,
-    },
-    effectiveFidelity: "hostloop",
-    events: [
-      JSON.stringify({ type: "system", subtype: "init", tools: [], cwd: HOST_CWD }),
-      JSON.stringify({
-        type: "assistant",
-        message: {
-          content: [{ type: "tool_use", id: "toolu_1", name: "mcp__cowork__present_files", input: { files: [{ file_path: HOST_FILE }] } }],
-        },
-      }),
-      JSON.stringify({
-        type: "user",
-        message: {
-          content: [{ type: "tool_result", tool_use_id: "toolu_1", is_error: false, content: [{ type: "text", text: HOST_FILE }] }],
-        },
-      }),
-      JSON.stringify({ type: "result", subtype: "success", is_error: false }),
-    ],
-  });
+  const hostloopCassette = (assertions: unknown[]) =>
+    withReplayContract({
+      scenario: {
+        name: "deliver",
+        baseline: "latest",
+        session: "(inline)",
+        fidelity: "hostloop" as const,
+        prompt: "write the report and present it",
+        answers: [],
+        expect_denied: [],
+        assert: assertions,
+      },
+      effectiveFidelity: "hostloop",
+      events: [
+        JSON.stringify({ type: "system", subtype: "init", tools: [], cwd: HOST_CWD }),
+        JSON.stringify({
+          type: "assistant",
+          message: {
+            content: [
+              { type: "tool_use", id: "toolu_1", name: "mcp__cowork__present_files", input: { files: [{ file_path: HOST_FILE }] } },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: "user",
+          message: {
+            content: [{ type: "tool_result", tool_use_id: "toolu_1", is_error: false, content: [{ type: "text", text: HOST_FILE }] }],
+          },
+        }),
+        JSON.stringify({ type: "result", subtype: "success", is_error: false }),
+      ],
+    });
 
   it("CONTROL: the un-redacted cassette genuinely PASSES present_files_called (not a shared tier-gate fail)", async () => {
     const r = await replayCassette(hostloopCassette([{ present_files_called: true }]) as never, []);

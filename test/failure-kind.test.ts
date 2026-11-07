@@ -125,14 +125,14 @@ describe("every pseudo-assertion injection site stamps `source`", () => {
     });
 
   it("finds the sites at all (guards against a refactor that changes the shape)", () => {
-    // Counted, not inherited: 12 in cassette.ts (--strict staleness, --fail-on-skill-drift, the
+    // Counted, not inherited: 13 in cassette.ts (--strict staleness, --fail-on-skill-drift, the
     // explicit-override escalation, the 2.0.0
     // DEFAULT unverifiable-skill escalation,
-    // future-version, and SEVEN replay_protocol_fidelity corruption paths) + 2 in cli.ts (both
+    // future-version, and EIGHT replay_protocol_fidelity corruption paths, the eighth an unpaired hook_callback) + 2 in cli.ts (both
     // answer-coverage) + 1 in verify-context.ts: verify-run's expect_denied expansion, moved there with the shared
     // kept-run re-evaluation — the author's own `expect_denied`, not an injection (`AUTHORED_EXPANSION`, exempt from
     // the stamp below). A refactor that moves or renames a call reds here rather than silently scanning nothing.
-    expect(injectionSites().length).toBe(15);
+    expect(injectionSites().length).toBe(16);
     expect(injectionSites().filter((s) => AUTHORED_EXPANSION.test(s.literal))).toEqual([
       expect.objectContaining({ file: "src/run/verify-context.ts" }),
     ]);

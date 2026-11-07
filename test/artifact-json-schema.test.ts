@@ -9,6 +9,7 @@ import { loadScenarioPure, parseScenarioFile } from "../src/run/execute.js";
 import { replayCassette, requiredVersionFor } from "../src/run/cassette.js";
 import { loaderFindings } from "../src/run/lint-load.js";
 import { UsageError } from "../src/errors.js";
+import { withReplayContract } from "./helpers/minimal-cassette.js";
 
 // `artifact_json.schema`: a JSON Schema (draft 2020-12, ajv) the value at `path` (or the whole document) must match.
 // Everything an author can get wrong in the SCHEMA is a load error, never a run-time crash or a silent no-op.
@@ -291,7 +292,7 @@ describe("artifact_json.schema — {file:} is inlined at load", () => {
         { path: "outputs/p.json", bytes: Buffer.byteLength(body), sha256: createHash("sha256").update(body).digest("hex"), body },
       ],
     } as any;
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     const a = r.assertions.find((x) => "artifact_json" in x.assertion)!;
     expect(a.pass).toBe(false);
     expect(a.message).toContain("/age");
@@ -311,7 +312,7 @@ describe("artifact_json.schema — {file:} is inlined at load", () => {
         { path: "outputs/p.json", bytes: Buffer.byteLength(body), sha256: createHash("sha256").update(body).digest("hex"), body },
       ],
     } as any;
-    const r = await replayCassette(cassette);
+    const r = await replayCassette(withReplayContract(cassette));
     expect(r.assertions.find((x) => "artifact_json" in x.assertion)!.pass).toBe(true);
   });
 

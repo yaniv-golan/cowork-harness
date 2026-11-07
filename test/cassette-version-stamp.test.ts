@@ -15,6 +15,7 @@ import {
 } from "../src/run/cassette.js";
 import { ScenarioObject } from "../src/types.js";
 import { loadBaseline } from "../src/baseline.js";
+import { DEFAULT_USER_VISIBLE_ROOTS, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 // `cassetteVersion` means "the minimum format version a reader needs to INTERPRET this cassette
 // correctly", not "which recorder wrote it". An earlier design of this mechanism keyed the stamp on KEY
@@ -114,6 +115,8 @@ describe("staleness — hash-format epoch, not CASSETTE_VERSION", () => {
 
     const cassette = {
       cassetteVersion: HASH_FORMAT_EPOCH_FOR_TEST, // AT the epoch — its digests are comparable, so drift is real drift
+      controlOut: recordedControlOut(),
+      userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
       scenario: {
         name: "s",
         baseline: "latest",
@@ -150,6 +153,8 @@ describe("a future-version cassette is refused by a capped reader; the escape ha
     ];
     const future = {
       cassetteVersion: CASSETTE_VERSION + 1,
+      controlOut: recordedControlOut(),
+      userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
       scenario: {
         name: "c",
         baseline: "latest",
@@ -176,6 +181,8 @@ describe("a future-version cassette is refused by a capped reader; the escape ha
     const cwd = mkdtempSync(join(tmpdir(), "cwh-p8-verify-"));
     const body = {
       cassetteVersion: CASSETTE_VERSION + 1,
+      controlOut: recordedControlOut(),
+      userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
       scenario: {
         name: "c",
         baseline: "latest",

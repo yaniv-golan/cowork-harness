@@ -298,7 +298,7 @@ describe.skipIf(!can)("replay grades question_option_count from the cassette's o
     const env = JSON.parse(r.stdout) as {
       results: Array<{ assertions: Array<{ assertion: Record<string, unknown>; pass: boolean; message?: string }> }>;
     };
-    const grades = env.results[0]!.assertions.filter((a) => "question_option_count" in a.assertion);
+    const grades = (env.results?.[0]?.assertions ?? []).filter((a) => "question_option_count" in a.assertion);
     return { code: r.status, text: (r.stderr || "") + grades.map((g) => g.message ?? "").join("\n"), grades };
   }
 
@@ -308,11 +308,11 @@ describe.skipIf(!can)("replay grades question_option_count from the cassette's o
     expect(r.grades).toMatchObject([{ pass: true }]);
   });
 
-  it("a cassette without controlOut cannot grade it: excluded with a warning, never a pass", () => {
+  it("a cassette without controlOut is refused on read (re-record), never graded and never a pass", () => {
     const r = replayWith(`  - question_option_count:\n      matches: '^(Auth|Audit)$'\n      exactly: 2\n`, (c) => delete c.controlOut);
-    // Not graded at all: excluded (the replay warns), never a pass.
+    expect(r.code).toBe(2);
     expect(r.grades).toEqual([]);
-    expect(r.text).toMatch(/question_option_count/);
+    expect(r.text).toMatch(/cassette has no `controlOut`/);
   });
 
   it("a gate label the cassette's redaction rewrote makes a count it could change evidence-unavailable", () => {
