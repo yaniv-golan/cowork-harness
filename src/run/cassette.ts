@@ -4165,6 +4165,17 @@ export function parseCassetteObject(raw: unknown): CassetteReadResult {
   // materializes the manifest under `userVisibleRoots`. A recorder has written both since before 2.0.0, so an
   // absent one is an old or hand-made cassette; there is no fallback that would grade it honestly.
   const stringArray = (v: unknown): boolean => Array.isArray(v) && v.every((x) => typeof x === "string");
+  // A NEWER format missing one of them is judged "too new" first, never "re-record it": a re-record here would
+  // overwrite a cassette written by a newer build with an older one's recording (and `--rerecord-stale` acts
+  // on `rerecordable`, so it must not be set).
+  if (
+    recordedVersion > CASSETTE_VERSION &&
+    (!stringArray((cassette as { controlOut?: unknown }).controlOut) ||
+      !stringArray((cassette as { userVisibleRoots?: unknown }).userVisibleRoots))
+  )
+    return {
+      error: `cassette format too new: v${recordedVersion} > this harness's v${CASSETTE_VERSION} — upgrade cowork-harness to read it`,
+    };
   if (!stringArray((cassette as { controlOut?: unknown }).controlOut))
     return {
       error: "cassette has no `controlOut` (the recorded control responses replay grades decisions against) — re-record it",
@@ -7927,9 +7938,9 @@ interface MarginRow {
  *  sync with the schema — a key missing here silently drops from the margin report. The 6 budget-field keys
  *  reuse `budgetFields` (identical to what the asserts evaluate); the array-count keys read the same RunResult
  *  fields the AssertContext builder does. `questions_count_max` counts SUB-questions off the re-drive's
- *  `decisions[]` (matching the assert, which folds `rec.questions`); a controlOut-less cassette re-drives with
- *  no question decisions, so `computeCassetteMargins` nulls its recorded count there (see the guard below)
- *  rather than report a false-infinite margin off a spurious 0. */
+ *  `decisions[]` (matching the assert, which folds `rec.questions`); a re-drive that failed as a truncated
+ *  cassette answered no questions, so `computeCassetteMargins` nulls its recorded count there (see the guard
+ *  below) rather than report a false-infinite margin off a spurious 0. */
 const COUNT_BOUND_MARGIN_KEYS: {
   key: keyof Assertion;
   kind: MarginKind;

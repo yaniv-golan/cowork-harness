@@ -153,6 +153,21 @@ describe.skipIf(!can)("verify-cassettes CLI gate", () => {
     expect(JSON.stringify(r.json)).toMatch(/invalid cassette JSON|unreadable/);
   });
 
+  it("a well-formed v11 cassette → exit 3 (refused at the read floor), naming the 4.x rehash remedy — and still privacy-scanned", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
+    const c = cassette([JSON.stringify({ type: "result", subtype: "success" })]) as Record<string, unknown>;
+    c.cassetteVersion = 11;
+    writeFileSync(join(d, "old.cassette.json"), JSON.stringify(c));
+    const r = run(["verify-cassettes", join(d, "old.cassette.json"), "--output-format", "json"], d);
+    expect(r.code).toBe(3);
+    expect(r.json.ok).toBe(false);
+    const res = r.json.results[0];
+    expect(res.error).toContain("below the minimum supported v12");
+    expect(res.error).toContain("npx cowork-harness@4 rehash <dir/>");
+    expect(res.error).toContain("record <dir/> --rerecord-stale");
+    expect(res.privacyScanned).toBe(true);
+  });
+
   it("a genuine baseline DRIFT cassette (fingerprint.baseline stale) → exit 1 (verified & failed), landed in the `staleness` bucket, NOT `unverifiable`", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-vc-"));
     const c = cassette([JSON.stringify({ type: "result", subtype: "success" })]) as Record<string, unknown>;

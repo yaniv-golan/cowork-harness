@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readCassette, CASSETTE_VERSION, MIN_SUPPORTED_CASSETTE_VERSION } from "../src/run/cassette.js";
+import { readCassette, readRerecordTarget, CASSETTE_VERSION, MIN_SUPPORTED_CASSETTE_VERSION } from "../src/run/cassette.js";
 import { DEFAULT_USER_VISIBLE_ROOTS, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 function writeCassette(dir: string, body: object): string {
@@ -66,6 +66,21 @@ describe("cassette version floor (v12) and the replay contract", () => {
   it("an EMPTY controlOut loads (evaluated on replay, where any decision in it fails as truncated)", () => {
     const r = read({ cassetteVersion: 12, events: [], scenario: minimalScenario, controlOut: [], userVisibleRoots: [] });
     expect("error" in r).toBe(false);
+  });
+
+  it("a NEWER cassette missing either field is too new, never re-recordable — a re-record would overwrite a newer build's file", () => {
+    const v = CASSETTE_VERSION + 1;
+    const tooNew = `cassette format too new: v${v} > this harness's v${CASSETTE_VERSION} — upgrade cowork-harness to read it`;
+    for (const body of [
+      { cassetteVersion: v, events: [], scenario: minimalScenario, userVisibleRoots: ["outputs"] },
+      { cassetteVersion: v, events: [], scenario: minimalScenario, controlOut: recordedControlOut() },
+    ]) {
+      const dir = mkdtempSync(join(tmpdir(), "cc-floor-"));
+      const path = writeCassette(dir, body);
+      expect(readCassette(path)).toEqual({ error: tooNew });
+      // --rerecord-stale's reader: an error it reports, not an old cassette it re-records.
+      expect(readRerecordTarget(path)).toEqual({ error: tooNew });
+    }
   });
 
   it("accepts the current cassette version", () => {

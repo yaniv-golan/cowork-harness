@@ -4,6 +4,7 @@ import { mkdtempSync, cpSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { rehashExitCode } from "../src/run/cassette.js";
+import { DEFAULT_USER_VISIBLE_ROOTS, recordedControlOut } from "./helpers/minimal-cassette.js";
 
 /**
  * `rehash`'s exit codes now that it is check-only: `0` when every cassette is current, `1` when any is not.
@@ -41,6 +42,27 @@ describe.skipIf(!existsSync(CLI))("the CLI emits them", () => {
     const r = run(["rehash", dir]);
     expect(r.out).toMatch(/rehash: 1 require a re-record, \d+ current/);
     expect(r.code, r.out).toBe(1);
+  });
+
+  it("a cassette that LOADS but is stamped below what its scenario needs → error row naming both versions, exit 1", () => {
+    const d = mkdtempSync(join(tmpdir(), "cwh-rehash-understamped-"));
+    // `allow_max_turns` needs v19; this one is stamped at the floor.
+    const c = {
+      cassetteVersion: 12,
+      controlOut: recordedControlOut(),
+      userVisibleRoots: [...DEFAULT_USER_VISIBLE_ROOTS],
+      scenario: { name: "u", session: "(inline)", fidelity: "container", prompt: "hi", answers: [], assert: [{ allow_max_turns: true }] },
+      events: [JSON.stringify({ type: "result", subtype: "success" })],
+    };
+    writeFileSync(join(d, "under.cassette.json"), JSON.stringify(c));
+    const r = spawnSync(process.execPath, [CLI, "rehash", d, "--output-format", "json"], { encoding: "utf8" });
+    expect(r.status, r.stdout + r.stderr).toBe(1);
+    const env = JSON.parse(r.stdout);
+    expect(env.ok).toBe(false);
+    expect(env.migrated).toBe(0);
+    expect(env.results).toEqual([
+      { file: join(d, "under.cassette.json"), action: "error", reason: "stamped v12, its scenario needs v19 — re-record" },
+    ]);
   });
 
   it("prints the summary BEFORE the per-file lines", () => {
