@@ -6,12 +6,12 @@ import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import type { LaunchPlan } from "../session.js";
-import { SCRUBBED_AGENT_ENV_KEYS, resolveEffort, workBaseOf } from "../session.js";
+import { SCRUBBED_AGENT_ENV_KEYS, workBaseOf } from "../session.js";
 import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
 import { containedRealPath } from "../boundary-paths.js";
 import { BoundaryError } from "../errors.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
-import { BACKGROUND_TASKS_ENV_KEY, backgroundTasksEnv, pluginDirArgs } from "./argv.js";
+import { BACKGROUND_TASKS_ENV_KEY, backgroundTasksEnv, pluginDirArgs, sessionFlagArgs } from "./argv.js";
 import { agentSpawnOptions } from "./agent-tree.js";
 import { stageWorkspaceFixture } from "../fixture/workspace.js";
 import { carryLegFolders } from "./stage.js";
@@ -229,38 +229,7 @@ export function spawnProtocol(
     discoveryArgs.push("--settings", settingsFile);
   }
 
-  const args = [
-    "-p",
-    "--verbose", // required by --output-format=stream-json with --print
-    "--input-format",
-    "stream-json",
-    "--output-format",
-    "stream-json",
-    // routes can_use_tool / AskUserQuestion to our Controller (verified); `answer_channel: none` declares nobody instead.
-    // Shared with the sandbox tiers' argv (permissionPromptArgs).
-    ...permissionPromptArgs(plan),
-    "--include-partial-messages",
-    ...discoveryArgs,
-    ...(plan.model ? ["--model", plan.model] : []),
-    ...(plan.permissionMode ? ["--permission-mode", plan.permissionMode] : []),
-    // Real Cowork ALWAYS emits `--effort`, falling back to the baseline's medium default when nothing
-    // is set — never omitted, for every model class (see buildLaunchPlan's validateEffort). The host
-    // CLI accepts the flag (live-verified), so L0 is a non-vacuous check of this too.
-    "--effort",
-    resolveEffort({ session: plan.effort, baseline }),
-    ...(plan.mcpConfig ? ["--mcp-config", plan.mcpConfig] : []),
-    // Plugin roots, rooted at the tree THIS function staged (`workReal`) — never re-derived by a caller.
-    // Shared derivation with container/hostloop/microvm; see pluginDirArgs.
-    ...pluginDirArgs(plan, workReal),
-    // Thread the rendered system prompt append into L0, matching container/microvm/host-loop.
-    // The host `claude` CLI accepts --append-system-prompt just like the staged binary does, so L0
-    // records can carry Cowork framing instead of running with no system prompt extension at all.
-    ...(opts.systemPromptAppend ? ["--append-system-prompt", opts.systemPromptAppend] : []),
-    // Hook lifecycle frames, on the same rule as the other tiers (see baseAgentArgs): only when a staged plugin
-    // declares runnable hooks. Without it the host CLI streams SessionStart/Setup frames only, and every other
-    // event's hook_event_* / hook_output_* assertion read "never fired" here.
-    ...(plan.includeHookEvents ? ["--include-hook-events"] : []),
-  ];
+  const args = protocolAgentArgs(baseline, plan, { discoveryArgs, workRoot: workReal, systemPromptAppend: opts.systemPromptAppend });
 
   // The L0 divergence is no longer about DELIVERY — --plugin-dir is passed above, so a declared plugin
   // or skill dir now reaches the agent. What remains is CONTAMINATION: off the managed branch the agent
@@ -280,7 +249,8 @@ export function spawnProtocol(
     warn(
       `::warning:: ${scenario.name}: L0 (protocol) is reading your REAL config dir (${agentConfigDir}), so your ` +
         `installed plugins, skills and MCP servers are visible to the agent and may answer INSTEAD of ` +
-        `the plugin/skill under test. Set COWORK_MANAGED_CONFIG=1 AND provide a token ` +
+        `the plugin/skill under test. The agent's session transcripts are written there too, and \`--resume\` ` +
+        `continues from them. Set COWORK_MANAGED_CONFIG=1 AND provide a token ` +
         `(echo CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) >> .env) — the flag alone yields "Not logged in" — ` +
         `or run 'cowork-harness doctor'. Use container/microvm for full isolation.\n`,
     );
@@ -294,4 +264,49 @@ export function spawnProtocol(
   // and ONLY when it is not the operator's real one — walking that would read every other session they ran.
   const subagentConfigRoot = useManagedConfig && !l0HostConfigContamination ? plan.configDir : undefined;
   return { child, l0HostConfigContamination, runTag, workDir: work, subagentConfigRoot };
+}
+
+/** The protocol (L0) agent's argv, without the binary token. Session-decided flags come from `sessionFlagArgs`, the
+ *  segments every tier shares; which `LaunchPlan` field reaches which tier is `SESSION_ARGV_FIELDS`. Pure: the
+ *  caller passes the discovery args it chose and the work root it staged. */
+export function protocolAgentArgs(
+  baseline: PlatformBaseline,
+  plan: LaunchPlan,
+  o: { discoveryArgs: string[]; workRoot: string; systemPromptAppend?: string },
+): string[] {
+  const seg = sessionFlagArgs(baseline, plan);
+  return [
+    "-p",
+    "--verbose", // required by --output-format=stream-json with --print
+    "--input-format",
+    "stream-json",
+    "--output-format",
+    "stream-json",
+    // routes can_use_tool / AskUserQuestion to our Controller (verified); `answer_channel: none` declares nobody instead.
+    // Shared with the sandbox tiers' argv (permissionPromptArgs).
+    ...permissionPromptArgs(plan),
+    "--include-partial-messages",
+    ...o.discoveryArgs,
+    ...seg.model,
+    ...(plan.permissionMode ? ["--permission-mode", plan.permissionMode] : []),
+    // effort, thinking, --thinking-display, --max-turns: the segment every tier shares (sessionFlagArgs). The host
+    // CLI accepts each flag (checked against the binary: an unknown flag is refused before auth, these reach it).
+    ...seg.budget,
+    ...(plan.mcpConfig ? ["--mcp-config", plan.mcpConfig] : []),
+    // Plugin roots, rooted at the tree spawnProtocol staged (`o.workRoot`) — never re-derived here.
+    // Shared derivation with container/hostloop/microvm; see pluginDirArgs.
+    ...pluginDirArgs(plan, o.workRoot),
+    // Thread the rendered system prompt append into L0, matching container/microvm/host-loop.
+    // The host `claude` CLI accepts --append-system-prompt just like the staged binary does, so L0
+    // records can carry Cowork framing instead of running with no system prompt extension at all.
+    ...(o.systemPromptAppend ? ["--append-system-prompt", o.systemPromptAppend] : []),
+    // Hook lifecycle frames, on the same rule as the other tiers (see baseAgentArgs): only when a staged plugin
+    // declares runnable hooks. Without it the host CLI streams SessionStart/Setup frames only, and every other
+    // event's hook_event_* / hook_output_* assertion read "never fired" here.
+    ...(plan.includeHookEvents ? ["--include-hook-events"] : []),
+    // `--session-id` pins the agent's native session id; `--resume` continues it. Off the managed config branch
+    // the agent persists that session in the operator's real config dir, so a resumed protocol run reads it back
+    // from there (see the contamination warning in spawnProtocol).
+    ...seg.session,
+  ];
 }

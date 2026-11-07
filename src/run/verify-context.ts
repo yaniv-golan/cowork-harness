@@ -6,6 +6,7 @@
  * Refusals are returned, never thrown and never printed: the caller owns the envelope and the exit code.
  * Every message is the text `verify-run` has always printed; `opts.command` only swaps the leading label.
  */
+import { turnCapReached } from "./turn-cap.js";
 import { searchCorpusAssertKey } from "../search-corpus/assert-keys.js";
 import { resolveHookFailureBlocks } from "./hook-failure-blocks.js";
 import { runDirAgentVersions } from "./recorded-agent-version.js";
@@ -443,6 +444,7 @@ export function assertContextFromRunDir(
     egress: result.egress ?? [],
     egressMissing: result.egress === undefined, // absent field (old result.json) ≠ a run that made zero egress attempts
     result: result.result === "error" ? "error" : "success",
+    turnCapReached: turnCapReached(result),
     workRoot,
     // Read the roots persisted at run time (folder mount names are dynamic/gated, not a fixed prefix).
     // Fall back to the legacy prefix for old result.json that predates the field.

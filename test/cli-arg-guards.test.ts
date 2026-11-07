@@ -191,12 +191,12 @@ describe.skipIf(!can)("skill/common flags accept --flag=value identically to --f
     expect(r.out).toMatch(/requires a non-empty value/);
   });
 
-  it("--timeout <ms> is parsed onto the scenario (visible in the dry-run plan)", () => {
+  it("--timeout <ms> is parsed as the run's budget (visible in the dry-run plan)", () => {
     const d = mkdtempSync(join(tmpdir(), "g5-"));
     mkdirSync(join(d, "plugin"));
     const raw = spawnSync("node", [CLI, "skill", "./plugin", "hi", "--dry-run", "--timeout", "5000"], { encoding: "utf8", cwd: d });
     expect(raw.status).toBe(0);
-    expect(JSON.parse(raw.stdout).timeout_ms).toBe(5000);
+    expect(JSON.parse(raw.stdout).timeout).toEqual({ ms: 5000, source: "flag" });
   });
 
   it("--timeout with a non-positive-integer value is a usage error, exit 2", () => {

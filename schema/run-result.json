@@ -1229,6 +1229,26 @@
     "nonReproducibleAnswers": {
       "type": "array"
     },
+    "turnCap": {
+      "type": "object",
+      "description": "The session's agent_max_turns cap, when one was passed to the agent. Read by allow_max_turns: a result:error whose usage.turns reached maxTurns is a completed run, not a failure.",
+      "additionalProperties": false,
+      "required": ["maxTurns", "source"],
+      "properties": {
+        "maxTurns": { "type": "integer", "minimum": 1 },
+        "source": { "const": "session" }
+      }
+    },
+    "timeout": {
+      "type": "object",
+      "description": "The wall-clock budget the agent phase ran under: --timeout (flag), a runner's ceiling lower than the scenario's own (runner), or the scenario's timeout_ms (scenario). Absent when none applied. Informational.",
+      "additionalProperties": false,
+      "required": ["ms", "source"],
+      "properties": {
+        "ms": { "type": "integer", "minimum": 1 },
+        "source": { "enum": ["flag", "scenario", "runner"] }
+      }
+    },
     "usage": {
       "type": "object",
       "description": "SDK usage payload (input_tokens, output_tokens, etc.), pass-through, plus a harness-computed 'turns' field (from the SDK result message's num_turns) when available. Wave 0 seam.",

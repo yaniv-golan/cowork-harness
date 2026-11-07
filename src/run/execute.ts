@@ -1,4 +1,5 @@
 import { warn, writeTextAtomic } from "../io.js";
+import { turnCapReached } from "./turn-cap.js";
 import { searchCorpusAssertRefusal } from "../search-corpus/assert-keys.js";
 import { effectivePool, PoolBuildError, resolvePoolDir } from "../search-corpus/pool.js";
 import { inlineSchemaFiles } from "./schema-files.js";
@@ -229,6 +230,11 @@ export interface ExecuteOptions {
    *  A caller that passes an explicit `session` with its own model (a matrix cell axis) has already made
    *  the more specific choice — it resolves the axis before calling, so nothing here can outrank it. */
   modelOverride?: string;
+  /** `--timeout <ms>` (`flag`) or a runner's ceiling (`runner`): the agent phase's budget for this invocation, in
+   *  place of the scenario's `timeout_ms`. The scenario itself is left as authored, so a recorded cassette's frozen
+   *  scenario is still the file on disk; `RunResult.timeout` records which budget applied. In a `legs:` file it
+   *  applies to every leg, in place of each leg's own. */
+  timeoutOverride?: { ms: number; source: "flag" | "runner" };
   /** input policy for unscripted questions/dialogs. Default: scenario.on_unanswered ?? "fail". */
   onUnanswered?: OnUnanswered;
   /** The user's EXPLICIT `--on-unanswered`, or undefined when they passed none — distinct from
@@ -1221,6 +1227,14 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     plan.agentSessionId = opts.leg.agentSessionId;
     plan.resume = false;
   }
+  // The agent phase's budget and where it came from: a `--timeout`/runner option in place of the scenario's own.
+  const budget: RunResult["timeout"] =
+    opts.timeoutOverride ?? (scenario.timeout_ms !== undefined ? { ms: scenario.timeout_ms, source: "scenario" } : undefined);
+  // A budget from `--timeout` is said once on stderr: the frozen scenario and the file on disk still carry their own
+  // value. A hillclimb ceiling (`runner`) is not: it would print once per attempt, and the result records it.
+  if (budget?.source === "flag") process.stderr.write(`[budget] timeout ${budget.ms} ms (${budget.source})\n`);
+  // The session's turn cap, as passed to the agent (every tier emits --max-turns from the plan).
+  const turnCap: RunResult["turnCap"] = plan.agentMaxTurns !== undefined ? { maxTurns: plan.agentMaxTurns, source: "session" } : undefined;
   // A maintainer control run leaves the device_bridge prompt note out (COWORK_HARNESS_DEVICE_BRIDGE_NOTE=off). Read once:
   // the render, both fingerprints and the record must agree on it.
   const bridgeNote = deviceBridgeNoteMode();
@@ -1710,7 +1724,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       // the harness analog is FIRST in the Chain — Chain stops at the first non-abstain, so any later
       // placement would let a scripted/default answer preempt a production-shaped deny.
       const decider = effectiveFidelity === "hostloop" ? Chain(makeHostLoopCanUseToolGate(), policyDecider) : policyDecider;
-      const run = new Run(sessionT, decider, opts.hooks ?? [], sessionId, dialogTimeoutMs ?? undefined, scenario.timeout_ms);
+      const run = new Run(sessionT, decider, opts.hooks ?? [], sessionId, dialogTimeoutMs ?? undefined, budget?.ms);
       run.seedApprovedDomains(session.web_fetch.approved_domains); // test convenience: pre-approved web_fetch hosts
       // `answer_channel: none`: no request may be decided — one that arrives anyway is a violation (see Run).
       if (plan.answerChannel === "none") run.disableAnswerChannel();
@@ -1988,6 +2002,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
         // a positive false statement, and one `CompleteRunResult` cannot catch (it guards the result's
         // fields, not the assembler's inputs, so the spread satisfied it with a lie).
         pinnedModel: plan.model,
+        turnCap,
+        timeout: budget,
         ablated: opts.ablateSkill,
         runLabel: opts.runLabel, // run-identity: a salvaged partial is still a labeled generation
         skillCommit: skillCommit(scenario.session, loadedSession),
@@ -2153,6 +2169,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       subagentTools: record.subagentTools,
       egress,
       result: record.result,
+      turnCapReached: turnCapReached({ ...record, finalMessage: record.resultText, turnCap }),
       workRoot,
       userVisiblePrefixes: userVisibleRoots,
       lane: scenario.lane,
@@ -2548,6 +2565,8 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       subagents: timelineEvents ? attributeSubagentSkills(record.subagents, timelineEvents) : record.subagents,
       nonReproducibleAnswers: record.unanswered,
       usage: record.usage,
+      turnCap,
+      timeout: budget,
       cost: record.cost,
       deciderCostUsd: llmDecider?.costUsd(),
       deciderUsage: llmDecider?.usage(),
@@ -3532,6 +3551,9 @@ export async function reapAgentOnTeardown(p: {
 export function buildPartialResult(args: {
   /** This turn's 1-based number (multi-turn attribution); undefined for callers that don't track it. */
   turn?: number;
+  /** `RunResult.turnCap` / `RunResult.timeout`, from the caller, where the plan and the budget are in scope. */
+  turnCap?: RunResult["turnCap"];
+  timeout?: RunResult["timeout"];
   /** The run's `onFailure: "block"` inventory (`runHookFailureBlocks`). */
   hookFailureBlocks?: HookFailureBlocks;
   /** What a device_bridge run modeled (`deviceBridgeRecord`). */
@@ -3718,6 +3740,8 @@ export function buildPartialResult(args: {
     subagents: timelineEvents ? attributeSubagentSkills(record.subagents, timelineEvents) : record.subagents,
     nonReproducibleAnswers: record.unanswered,
     usage: record.usage,
+    turnCap: args.turnCap,
+    timeout: args.timeout,
     cost: record.cost,
     deciderCostUsd: args.deciderCostUsd,
     deciderUsage: args.deciderUsage,

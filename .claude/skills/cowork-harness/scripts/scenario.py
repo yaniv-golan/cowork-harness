@@ -51,6 +51,8 @@ lint flags (see references/scenario-schema.md for the why of each):
   W  no content assertion → no-op on a replay gate    (every assertion is fs/egress)
   W  mixed-class assert item → fs/egress half dropped on replay
   W  unknown top-level / assertion key                (typo or hallucinated schema)
+  W  `contradictory-turn-cap`  `allow_max_turns: true` beside `result: success` (a capped run's result is error)
+  I  `not-a-scenario`          a session file (only session keys) in the linted set: reported once, not checked
   W  double-quoted regex with a backslash             (YAML eats the backslash)
   I  gate key present → needs a controlOut cassette on replay
 
@@ -266,6 +268,7 @@ VERDICT_MODIFIER_KEYS = {
     "allow_l0_host_config_contamination",
     "allow_missing_capability",
     "allow_stall",
+    "allow_max_turns",
     "allow_undelivered_deliverables",
     "allow_outputs_delete",
     "allow_delete_in",
@@ -462,6 +465,25 @@ def _load_top_level_keys():
 
 # every valid top-level scenario key (generated from the zod ScenarioObject schema; see _load_top_level_keys)
 TOP_LEVEL_KEYS = _load_top_level_keys()
+
+
+def _load_session_only_keys():
+    """Session-file keys a scenario never takes (`sessionKeys` in assertion-keys.json, minus TOP_LEVEL_KEYS).
+    Empty when the file lacks them: the session-file rule is then off (the top-level-key load already warned)."""
+    try:
+        p = Path(__file__).resolve().parent / "assertion-keys.json"
+        keys = set(_str_list(json.loads(p.read_text(encoding="utf-8")).get("sessionKeys") or [], "sessionKeys"))
+    except Exception:
+        keys = set()
+    return keys, keys - TOP_LEVEL_KEYS
+
+
+SESSION_KEYS, SESSION_ONLY_KEYS = _load_session_only_keys()
+
+
+def looks_like_session_file(doc):
+    """Only session keys, one or more a scenario never takes (the TS twin: looksLikeSessionFile)."""
+    return isinstance(doc, dict) and bool(doc) and set(doc) <= SESSION_KEYS and bool(set(doc) & SESSION_ONLY_KEYS)
 REGEX_KEYS = {
     "matches",
     "transcript_matches",
@@ -749,7 +771,7 @@ _MISSING = object()
 
 # Keep these values in sync with src/run/cassette.ts. The sync test below makes a format-range change
 # fail loudly instead of allowing lint to suppress an advisory from a cassette replay would refuse.
-CASSETTE_VERSION = 18
+CASSETTE_VERSION = 19
 MIN_SUPPORTED_CASSETTE_VERSION = 9
 
 
@@ -1711,6 +1733,16 @@ def _lint_multi_leg_doc(doc, path, raw_lines, cassette_records=None):
 
 def lint_doc(doc, path, raw_lines, cassette_records=None):
     findings = []
+    if looks_like_session_file(doc):
+        return [
+            Finding(
+                "INFO",
+                "not-a-scenario",
+                "looks like a session file (only session keys), not a scenario: not checked",
+                "Lint the scenarios that name it in `session:`; `run` loads and checks it there.",
+                path,
+            )
+        ]
     if isinstance(doc, dict) and "legs" in doc:
         return _lint_multi_leg_doc(doc, path, raw_lines, cassette_records)
     if not isinstance(doc, dict):
@@ -2480,6 +2512,18 @@ def lint_doc(doc, path, raw_lines, cassette_records=None):
                 path,
             )
         )
+    # W: `allow_max_turns` makes a capped run a completed one, never a successful one: its result is still `error`.
+    if any(v is True for v in _assert_values(items, "allow_max_turns")) and "success" in _assert_values(items, "result"):
+        findings.append(
+            Finding(
+                "WARN",
+                "contradictory-turn-cap",
+                "`allow_max_turns: true` beside `result: success`: a run the session's `agent_max_turns` cap stopped "
+                "ends as `result: error`, so the `result` row fails on every capped run.",
+                "On a capped run `result` is `error`; drop `result: success` or assert `result: error`.",
+                path,
+            )
+        )
     # E: a control character in a hook_output_* needle. The harness's loader refuses it (src/types.ts, CONTROL_CHAR):
     # it is almost always a YAML double-quoted escape (`"\bfailed\b"` loads a backspace), and a needle no hook
     # prints makes the negative key pass silently. Mirrored so this linter rejects what `run` rejects.
@@ -2830,6 +2874,7 @@ LINT_RULES = {
     "capabilities-on-protocol": "ERROR",
     "cassette-evidence-skipped": "INFO",
     "container-only-key-off-container": "ERROR",
+    "contradictory-turn-cap": "WARN",
     "count-bound-unsatisfiable": "ERROR",
     "device-bridge-misplaced": "ERROR",
     "egress-on-protocol": "ERROR",
@@ -2847,6 +2892,7 @@ LINT_RULES = {
     "manifest-needs-snapshot": "INFO",
     "mixed-assert-item": "WARN",
     "no-scenarios": "ERROR",
+    "not-a-scenario": "INFO",
     "not-found": "ERROR",
     "parse": "ERROR",
     "positional-choose-order": "INFO",
@@ -4851,7 +4897,12 @@ def main(argv=None):
     sub = ap.add_subparsers(dest="command", required=True)
 
     lp = sub.add_parser("lint", prog=f"{prog} lint" if prog else None, help="lint scenario(s) for silent-false-green invariants")
-    lp.add_argument("files", nargs="+", help="scenario YAML file(s) or director(ies) of *.yaml/*.yml to lint")
+    lp.add_argument(
+        "files",
+        nargs="+",
+        help="scenario YAML file(s) or director(ies) of *.yaml/*.yml to lint. A session file among them "
+        "(only session keys) is reported once, INFO not-a-scenario, and not checked",
+    )
     lp.add_argument("--json", action="store_true", help="emit findings as JSON")
     lp.add_argument(
         "--strict",

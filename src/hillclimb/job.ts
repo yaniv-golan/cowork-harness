@@ -3,8 +3,9 @@
 // reads label/ablateSkill from its flags, and jobs run concurrently), a pre-assigned run id, an unanswered gate
 // rethrown and its run dir salvaged.
 //
-// The wall-clock ceiling: the agent phase is bounded by lowering the scenario's own `timeout_ms` to the
-// runner's `--timeout-s`, so the run's own timer kills the session and no VM is orphaned. A timeout that fired
+// The wall-clock ceiling: the agent phase is bounded by the smaller of the scenario's own `timeout_ms` and the
+// runner's `--timeout-s`. When the runner's is smaller it is passed as the run's budget (source `runner` in the
+// result), and the scenario itself is never rewritten, so the run's own timer kills the session and no VM is orphaned. A timeout that fired
 // at the runner's value is the runner's (an errors row); one at the scenario's own shorter value is the skill's
 // (a scored row). A tie goes to the runner.
 
@@ -75,11 +76,13 @@ export function makeHillclimbJobRunner<F extends { label?: string; ablateSkill?:
     const ceilingMs = spec.timeoutS > 0 ? spec.timeoutS * 1000 : undefined;
     const own = spec.c.scenario.timeout_ms;
     const runnerBound = ceilingMs !== undefined && (own === undefined || ceilingMs <= own);
-    const scenario: Scenario = runnerBound ? { ...spec.c.scenario, timeout_ms: ceilingMs } : spec.c.scenario;
+    const scenario: Scenario = spec.c.scenario;
+    const budget: Pick<ExecuteOptions, "timeoutOverride"> =
+      runnerBound && ceilingMs !== undefined ? { timeoutOverride: { ms: ceilingMs, source: "runner" } } : {};
     const runId = attemptRunId(spec);
     const expectedDir = deps.runDirFor(scenario, runId);
     const t0 = now();
-    // The runner's ceiling covers the whole attempt: `timeout_ms` bounds the agent, and this deadline keeps a
+    // The runner's ceiling covers the whole attempt: the budget bounds the agent, and this deadline keeps a
     // judge from starting after it (executeScenario then ends the run as a timeout).
     const deadline = ceilingMs !== undefined ? t0 + ceilingMs : undefined;
     let result: RunResult | undefined;
@@ -92,7 +95,7 @@ export function makeHillclimbJobRunner<F extends { label?: string; ablateSkill?:
         flags: { ...deps.flags, label: spec.runLabel, ablateSkill: spec.ablate },
         // Every attempt records the pre-run manifest, whatever its scenario asserts now: a metric or an authorship
         // assert added later in the loop is decided against it when `hillclimb regrade` re-measures the kept run.
-        extra: { runId, ...(deadline !== undefined ? { deadline } : {}), ...extra, armPreRunManifest: true },
+        extra: { runId, ...(deadline !== undefined ? { deadline } : {}), ...budget, ...extra, armPreRunManifest: true },
         rethrowUnanswered: true,
       });
     } catch (e) {

@@ -155,16 +155,15 @@ describe.skipIf(!can || !havePython)("lint reports what the scenario loader reje
     }
   });
 
-  it("a directory mixing a scenario and a session file reports the session file (a file the loader rejects)", () => {
+  it("a directory mixing a scenario and a session file: the session file is one INFO, and the lint passes", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-lint-load-"));
     const good = scenario(d, "a.yaml", CLEAN);
     const session = scenario(d, "b-session.yaml", ["model: claude-sonnet-4-5"]);
     const r = runCli(["lint", d, "--output-format", "json"]);
-    expect(r.code).toBe(1);
-    const loader = jsonFindings(r.stdout).filter((x) => x.rule === "scenario-invalid");
-    expect([...new Set(loader.map((x) => x.file))]).toEqual([session]);
-    expect(loader[0].fix).toMatch(/not a scenario/);
-    expect(loader.some((x) => x.file === good)).toBe(false);
+    expect(r.code, r.stderr).toBe(0);
+    const forSession = jsonFindings(r.stdout).filter((x) => x.file === session);
+    expect(forSession.map((x) => `${x.severity} ${x.rule}`)).toEqual(["INFO not-a-scenario"]);
+    expect(jsonFindings(r.stdout).some((x) => x.file === good && x.rule === "scenario-invalid")).toBe(false);
   });
 
   it("an inherited COWORK_HARNESS_LINT_EXTRA_FINDINGS never reaches python on a clean corpus", () => {

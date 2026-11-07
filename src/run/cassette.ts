@@ -1,4 +1,5 @@
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
+import { turnCapReached } from "./turn-cap.js";
 import { hasHookFailureBlocks, resolveHookFailureBlocks, type HookFailureBlocks } from "./hook-failure-blocks.js";
 import { initAgentVersion, initAgentVersions } from "./recorded-agent-version.js";
 import { measureMetrics, type CommandOutcomes, type MetricMeasurement, type MetricsContext } from "../metrics.js";
@@ -442,6 +443,12 @@ export interface Cassette {
   // file is not readable at rehash or replay time, and both read it: `requiredVersionFor` stamps v15 from it, and
   // replay re-drives with the channel disabled so a recorded request replays as a violation, not an answer.
   answerChannel?: "none";
+  // The session's turn cap and the agent phase's budget (RunResult.turnCap / .timeout). FROZEN because replay has no
+  // session file or CLI flags to re-derive them from. `turnCap` is read only under `allow_max_turns`, which stamps
+  // the cassette itself (V19_ASSERT_FEATURES); `timeout` is informational. Neither needs a stamp of its own: an older
+  // reader that ignores the key grades the same.
+  turnCap?: { maxTurns: number; source: "session" };
+  timeout?: { ms: number; source: "flag" | "scenario" | "runner" };
   // v16: the run's `onFailure: "block"` inventory (RunResult.hookFailureBlocks) — the events it may have a hook on that
   // blocks when it fails, or unknown. FROZEN because replay reads failed hook frames by it and has no plugin tree to
   // re-read. Always written by a recording from this build (an empty `{events: []}` says "none", which an older
@@ -545,7 +552,12 @@ export interface Cassette {
 //    grading leg 1 as the run; see multi-leg-cassette.ts). Stamped only on such a cassette (the `legs` term in
 //    requiredVersionFor).
 //  Every other scenario stamps exactly what it did. No hashing change; HASH_FORMAT_EPOCH stays at 12.
-export const CASSETTE_VERSION = 18;
+// v19: `allow_max_turns` (V19_ASSERT_FEATURES): a v18 reader's strict assertion schema rejects the key ("re-record", the
+//  wrong remedy), and the modifier changes the replayed verdict (with the frozen top-level `turnCap`), so a cassette
+//  using it stamps v19 and an older reader refuses it as too new. The frozen `turnCap` and `timeout` themselves need no
+//  stamp: without the modifier nothing reads either, and an older reader that ignores them grades the same. Every other
+//  scenario stamps exactly what it did. No hashing or shape change; HASH_FORMAT_EPOCH stays at 12.
+export const CASSETTE_VERSION = 19;
 
 /** One command metric's record-time measurement, frozen in a cassette (`commandMetrics`). */
 export interface FrozenCommandMetric {
@@ -630,13 +642,15 @@ export const KEY_REQUIRED_VERSION: Record<string, (v: unknown) => number> = {
   assert: (v) =>
     !Array.isArray(v)
       ? 0
-      : v.some((a) => V15_ASSERT_FEATURES.some((f) => f(a)))
-        ? 15
-        : v.some((a) => V14_ASSERT_FEATURES.some((f) => f(a)))
-          ? 14
-          : v.some(usesToolCallObjectForm)
-            ? 13
-            : 0,
+      : v.some((a) => V19_ASSERT_FEATURES.some((f) => f(a)))
+        ? 19
+        : v.some((a) => V15_ASSERT_FEATURES.some((f) => f(a)))
+          ? 15
+          : v.some((a) => V14_ASSERT_FEATURES.some((f) => f(a)))
+            ? 14
+            : v.some(usesToolCallObjectForm)
+              ? 13
+              : 0,
   skills: () => 0,
   requires_capabilities: () => 0,
   allow_host_writes: () => 0,
@@ -707,6 +721,14 @@ export const V15_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
     const aj = a && typeof a === "object" ? (a as Record<string, unknown>).artifact_json : undefined;
     return !!aj && typeof aj === "object" && "schema" in (aj as object);
   },
+];
+
+/** The assertion-level features that need a v19 reader, as V15_ASSERT_FEATURES is for v15: a new assertion key an
+ *  older reader cannot read appends a predicate here, and a sample to test/cassette-v19.test.ts. */
+export const V19_ASSERT_FEATURES: ReadonlyArray<(a: unknown) => boolean> = [
+  // `allow_max_turns` — the key itself: a v18 reader's strict assertion schema rejects it, and it changes the replayed
+  // verdict (read with the frozen `turnCap`).
+  (a) => !!a && typeof a === "object" && "allow_max_turns" in (a as object),
 ];
 
 /** Does this (possibly loose, on-disk) assertion use the v13 object form of tool_called/tool_not_called? */
@@ -4069,6 +4091,8 @@ const CassetteShape = z.looseObject({
   sessionFingerprint: z.string().optional(),
   folderPrefixMap: z.array(z.object({ from: z.string(), mount: z.string() })).optional(),
   answerChannel: z.literal("none").optional(),
+  turnCap: z.object({ maxTurns: z.number().int().positive(), source: z.literal("session") }).optional(),
+  timeout: z.object({ ms: z.number().int().positive(), source: z.enum(["flag", "scenario", "runner"]) }).optional(),
 });
 
 /** the ONE place the default cassette path is computed from a scenario name. Both `record --dry-run`
@@ -4417,6 +4441,8 @@ export interface RecordOpts {
    *  freezes whatever model recorded it, so pinning at record time is what makes the recording's model a
    *  stated fact rather than a property of the recording machine. */
   modelOverride?: string;
+  /** `--timeout <ms>`: the agent phase's budget, as an execute option (the frozen scenario keeps its own timeout_ms). */
+  timeoutOverride?: { ms: number; source: "flag" };
   noRedact: boolean;
   allowFailing: boolean;
   force?: boolean; // --force: overwrite a default-path cassette even if it belongs to a different scenario (slug collision)
@@ -4844,6 +4870,7 @@ export const RECORD_VALUE_FLAGS = [
   "--intent",
   "--decider-model",
   "--model",
+  "--timeout",
   "--on-unanswered",
   "--concurrency",
   "--max-budget-usd",
@@ -4936,7 +4963,8 @@ export const RECORD_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 // copies each one had (cli.ts's was already a superset for `replay`; `verify-cassettes`' two copies had
 // textually diverged --margins prose — the cli.ts wording is kept as the single source).
 export const RECORD_USAGE =
-  "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--model <id>] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--case <stem>]… [--concurrency <N>] [--max-budget-usd <x>] [--allow-host-inventory-fixture] [--allow-host-inventory-findings]\n" +
+  "usage: record <scenario.yaml | dir/> [--out <file>] [--output-format text|json] [--model <id>] [--timeout <ms>] [--rerecord-stale] [--from-embedded] [--force] [--no-redact] [--allow-failing] [--max-artifact-bytes <n>] [--dry-run] [--case <stem>]… [--concurrency <N>] [--max-budget-usd <x>] [--allow-host-inventory-fixture] [--allow-host-inventory-findings]\n" +
+  "       --timeout <ms>: the agent's wall-clock budget for this recording, in place of the scenario's timeout_ms. The frozen scenario keeps its own value; the cassette and result.json record the budget that applied (timeout: {ms, source: flag}).\n" +
   "       --model <id>: pin the model for this recording, overriding the session's `model:` (env COWORK_HARNESS_MODEL sets a default). A cassette freezes whatever model recorded it, so pinning here is what makes the recording's model a stated fact rather than a property of this machine. A scenario that resolves no model (this flag, the session's `model:`, or the env var) is refused before spending, exit 1 — on --dry-run and on every batch item before the first spawn.\n" +
   "       --allow-host-inventory-fixture: proceed PAST THE PRE-FLIGHT when recording at protocol/hostloop into a repo-visible path. Those tiers inherit the host env, so the cassette could freeze THIS machine's MCP servers/agents/account into a committed fixture; the record is refused by default. This bypasses that pre-flight only — the finished recording is still scanned, and a real finding still refuses the write and quarantines it.\n" +
   "       --dry-run: resolve and CHECK without recording. A single scenario file runs every pre-spend refusal the real record runs (prompt policy, assert contradictions, host-inventory, slug collision) and refuses identically — same --out, same flags, so the verdict is binding. A DIRECTORY reports the path-dependent ones as advisory 'would-refuse'/'would-warn' notes instead, labelled by verdict kind (a dir target takes no --out, so the destination is a guess), and gates only on the path-independent ones.\n" +
@@ -5016,7 +5044,7 @@ export async function cmdRecord(args: string[]) {
     return fail(
       "record",
       "usage",
-      "record --search-corpus is refused: a cassette of a frozen-corpus run needs cassette version 19, which this version cannot write yet (an older harness would replay it as a live-search run). Use run --search-corpus.",
+      "record --search-corpus is refused: a frozen-corpus cassette needs a reader that serves the frozen corpus, and this version does not write one yet (an older harness would replay it as a live-search run). Use run --search-corpus.",
       undefined,
       asJson,
     );
@@ -5056,6 +5084,15 @@ export async function cmdRecord(args: string[]) {
   // `--model <id>` — the EXPLICIT flag only. `COWORK_HARNESS_MODEL` is applied in `executeScenario`, and
   // only when the session declares no `model:` of its own: an env var must not outrank a session file.
   const modelOverride = p.options["--model"];
+  // `--timeout <ms>`: the agent phase's budget, in place of the scenario's timeout_ms (the frozen scenario keeps it).
+  const rawTimeout = p.options["--timeout"];
+  let timeoutOverride: { ms: number; source: "flag" } | undefined;
+  if (rawTimeout !== undefined) {
+    const n = Number(rawTimeout);
+    if (!Number.isInteger(n) || n <= 0)
+      return fail("record", "usage", `--timeout requires a positive integer (ms); got "${rawTimeout}"`, undefined, asJson);
+    timeoutOverride = { ms: n, source: "flag" };
+  }
   const allowHostInventoryFixture = p.flags["--allow-host-inventory-fixture"] ?? false;
   const allowHostInventoryFindings = p.flags["--allow-host-inventory-findings"] ?? false;
   if (noRedact) log("record: --no-redact — content redaction is OFF; the cassette is written verbatim, so ensure inputs are synthetic.");
@@ -5180,6 +5217,7 @@ export async function cmdRecord(args: string[]) {
         allowHostInventoryFindings,
         ...(maxArtifactBytes !== undefined ? { maxArtifactBytes } : {}),
         ...(modelOverride !== undefined ? { modelOverride } : {}),
+        ...(timeoutOverride !== undefined ? { timeoutOverride } : {}),
         ...(onUnansweredOpt !== undefined ? { onUnanswered: onUnansweredOpt } : {}),
       });
       const sr = outcome.scenarioResult;
@@ -5644,6 +5682,9 @@ export async function cmdRecord(args: string[]) {
       if (asJson) logSingleInputErrors();
       preflightBudget("record", scenario.name, maxBudgetUsd, asJson, { dryRun: true, target, inputErrors: singleInputErrors });
     }
+    // The budget the recording would have: the flag in place of the scenario's own, as execution resolves it.
+    const budget =
+      timeoutOverride ?? (scenario.timeout_ms !== undefined ? { ms: scenario.timeout_ms, source: "scenario" as const } : undefined);
     if (asJson) {
       out(
         jsonPayloadEnvelope("record", true, {
@@ -5651,6 +5692,7 @@ export async function cmdRecord(args: string[]) {
           target,
           scenario: scenario.name,
           fidelity: scenario.fidelity,
+          ...(budget ? { timeout: budget } : {}),
           cassette: cassettePath,
           inputErrors: singleInputErrors,
           token,
@@ -5662,6 +5704,7 @@ export async function cmdRecord(args: string[]) {
       log(`  scenario: ${scenario.name}`);
       log(`  file:     ${target}`);
       if (scenario.fidelity) log(`  fidelity: ${scenario.fidelity}`);
+      if (budget) log(`  timeout:  ${budget.ms} ms (${budget.source})`);
       log(`  cassette: ${cassettePath}`);
       log(tokenLine);
       log(agentLine);
@@ -5841,6 +5884,7 @@ export async function cmdRecord(args: string[]) {
             allowHostInventoryFixture,
             allowHostInventoryFindings,
             ...(modelOverride !== undefined ? { modelOverride } : {}),
+            ...(timeoutOverride !== undefined ? { timeoutOverride } : {}),
           });
           staleItems[i] = { cassette: cp, status: "recorded" };
           return true;
@@ -5874,6 +5918,7 @@ export async function cmdRecord(args: string[]) {
           r = await recordScenarioFile(diskScenario, {
             noRedact,
             modelOverride,
+            timeoutOverride,
             allowFailing,
             cassettePath: cp,
             maxArtifactBytes,
@@ -5898,6 +5943,7 @@ export async function cmdRecord(args: string[]) {
           r = await recordScenarioObject(embeddedPairwiseRefs(embeddedScenario(cassette.scenario, cp), cp), {
             noRedact,
             modelOverride,
+            timeoutOverride,
             allowFailing,
             cassettePath: cp,
             maxArtifactBytes,
@@ -6045,6 +6091,7 @@ export async function cmdRecord(args: string[]) {
         const r = await recordScenarioFile(f, {
           noRedact,
           modelOverride,
+          timeoutOverride,
           allowFailing,
           maxArtifactBytes,
           skipRedactionPreflight: true,
@@ -6112,6 +6159,7 @@ export async function cmdRecord(args: string[]) {
       {
         noRedact,
         modelOverride,
+        timeoutOverride,
         allowFailing,
         force,
         cassettePath,
@@ -6384,6 +6432,7 @@ async function recordScenarioObject(
   const result = await executeScenario(scenario, {
     command: "record",
     modelOverride: opts.modelOverride,
+    timeoutOverride: opts.timeoutOverride,
     onUnanswered: opts.onUnanswered,
     // record's `onUnanswered` is already explicit-only (`p.options["--on-unanswered"]`, undefined when
     // the flag is absent), unlike run's resolved `policy` — so the same value serves both roles here.
@@ -6648,6 +6697,8 @@ export async function freezeRecordedRun(
     // "not checked" (never a false mismatch).
     sessionFingerprint: buildSessionFingerprint(scenario.session, undefined),
     ...(result.answerChannel ? { answerChannel: result.answerChannel } : {}),
+    ...(result.turnCap ? { turnCap: result.turnCap } : {}),
+    ...(result.timeout ? { timeout: result.timeout } : {}),
     ...(result.hookFailureBlocks ? { hookFailureBlocks: result.hookFailureBlocks } : {}),
     ...(result.deviceBridge ? { deviceBridge: result.deviceBridge } : {}),
     ...freezeCommandMetrics(scenario.metrics, result.metrics),
@@ -6893,6 +6944,8 @@ function replayErrorResult(file: string): RunResult {
     subagents: undefined,
     nonReproducibleAnswers: undefined,
     usage: undefined,
+    turnCap: undefined,
+    timeout: undefined,
     cost: undefined,
     deciderCostUsd: undefined, // no run happened
     deciderUsage: undefined,
@@ -9742,6 +9795,7 @@ export async function replayCassette(
       subagentTools: rec.subagentTools,
       egress: [],
       result: rec.result,
+      turnCapReached: turnCapReached({ ...rec, finalMessage: rec.resultText, turnCap: cassette.turnCap }),
       workRoot: replayWorkRoot,
       userVisiblePrefixes: replayPrefixes,
       lane: cassette.scenario.lane, // replay is held to the RECORDED scenario's contract
@@ -10179,6 +10233,8 @@ export async function replayCassette(
       // so a cassette that recorded usage/cost silently dropped it on replay. re-drive (rec) recomputes
       // them deterministically from the same events, so this is a content key, not a live-only one.
       usage: rec.usage,
+      turnCap: cassette.turnCap,
+      timeout: cassette.timeout,
       cost: rec.cost,
       deciderCostUsd: undefined, // replay answers from the frozen recording; no model call is made
       deciderUsage: undefined,

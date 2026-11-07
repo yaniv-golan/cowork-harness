@@ -136,6 +136,8 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     toolResults: record.toolResults,
     subagents: timeline ? attributeSubagentSkills(record.subagents, timeline.events) : record.subagents,
     usage: record.usage,
+    turnCap: undefined, // chat's inline session (chat.ts) sets no agent_max_turns, so no cap reaches the agent
+    timeout: undefined,
     cost: record.cost,
     deciderCostUsd: undefined, // the chat lane has no decider — the human answers
     deciderUsage: undefined,

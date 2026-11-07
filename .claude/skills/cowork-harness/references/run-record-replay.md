@@ -453,7 +453,8 @@ Full rules: [docs/scenario.md → "Multi-leg scenarios"](https://github.com/yani
 ### Other flags worth knowing
 
 - `skill` / `critique`: `--prompt-file <path>` reads the prompt verbatim (no shell parsing); `--marketplace <dir>
-  --enable name@mkt` loads skills through a marketplace; `--timeout <ms>` is the wall-clock budget;
+  --enable name@mkt` loads skills through a marketplace; `--timeout <ms>` is the wall-clock budget (`run`/`record`
+  too, over `timeout_ms`);
   `--allow-host-writes` consents to a writable `hostloop` connected folder; `--verbose` adds thinking, tool inputs
   and the sub-agent tree to the output.
 - `run --matrix`: `--max-cells <n>` caps the cross-product (default 16), and a truncated matrix fails unless

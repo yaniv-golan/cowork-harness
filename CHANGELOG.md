@@ -6,8 +6,31 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`run --timeout <ms>` and `record --timeout <ms>`** set the agent's wall-clock budget for every scenario and leg
+  the command starts, in place of the scenario's `timeout_ms`, as `skill --timeout` does. The scenario is not
+  changed: a recording freezes the scenario as written. `result.json` and the cassette record the budget that
+  applied as `timeout: {ms, source}`, where `source` is `flag`, `scenario` or `runner`. A bad value is a usage error
+  (exit 2).
+- **`allow_max_turns: true`**, a verdict modifier for a scenario that sets the session's `agent_max_turns` on
+  purpose. A run the cap stopped is a completed run: the verdict raises no `result_error`, and `eval` buckets it
+  `turn_cap_allowed`. Only the agent's own `error_max_turns` or `error_during_execution` end at or past the cap
+  counts; its own sign-in, usage-limit or no-model reply never does. It does not make the run a success: `result` is still `error`, so `result: success` beside it
+  fails, and `lint` warns about that pair (`contradictory-turn-cap`). Without the modifier, the `result_error` message
+  now says the cap was reached and names the key. `result.json` records the cap as `turnCap: {maxTurns, source}`.
+- **`lint` on a session file** reports it once, as INFO `not-a-scenario`, and checks nothing else, so
+  `lint examples/sessions/` exits 0. Before, it reported every session key as an unknown scenario key, and the
+  loader check rejected the file.
+- **`docs/session.md` lists which session keys reach the agent as flags, per tier.**
+
 ### Fixed
 
+- **At `protocol`, the session's agent flags now reach the agent.** The protocol tier built its own command line and
+  dropped `--max-turns`, the thinking flags, `--thinking-display`, and `--session-id`/`--resume`. So
+  `agent_max_turns` was recorded but never applied, and `skill --session-id … --resume` at protocol started a new
+  conversation. Every tier now builds these flags from one place. The host CLI accepts each of them. Protocol runs
+  now also pass `--max-thinking-tokens 31999` (or `--thinking disabled`), as the other tiers and Cowork do.
 - **A rare hang at exit on Node 24 and later.** Commands no longer end the process with `process.exit` from inside
   their own code, which on some Node 24+ builds could deadlock inside the exit itself. A command now sets its exit
   code and the process ends once its work is done. If something still holds the process 5 seconds after the command
@@ -20,6 +43,15 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **Cassette format 19.** A recording whose `assert:` uses `allow_max_turns` stamps 19; every other recording stamps
+  what it did before. A cassette also freezes `turnCap` and `timeout`. An older harness refuses a v19 cassette.
+- **`hillclimb` passes its `--timeout-s` ceiling to the run as its budget** (`timeout.source: runner`) instead of
+  lowering the scenario's `timeout_ms`, so an attempt's scenario is the one the loop was given.
+- **`skill --dry-run` previews `--timeout` as `timeout: {ms, source: "flag"}`**, the shape `record --dry-run` and
+  `result.json` use, instead of a scenario `timeout_ms`.
+- **`run` names the scenario key or session field for a `skill`-only flag it rejects** (for example
+  `--allow-stall → assert: - allow_stall: true`).
+- **The `search_corpus_*` record refusal no longer names a cassette version.**
 - **The test suite's stub agent runs on the sealed config directory.** It now carries a fixed fake token, the
   credential that selects the protocol tier's managed config directory every real run uses, instead of forcing the
   unsealed branch.

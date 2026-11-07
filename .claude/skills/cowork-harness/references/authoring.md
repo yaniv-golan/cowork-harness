@@ -288,6 +288,7 @@ cowork-harness lint scenarios/*.yaml
 | `capabilities-on-protocol` | ERROR | non-empty `requires_capabilities` on `protocol` without `allow_missing_capability` — the probe cannot run there, so the run fails as unverifiable |
 | `cassette-evidence-skipped` | INFO | with `--cassette-dir`: a cassette (or the directory) could not be read, so it cannot quiet replay-evidence advice |
 | `container-only-key-off-container` | ERROR | `no_scratchpad_leak` off `container` — hostloop's `present_files` never promotes, so there is nothing to leak (WARN on `cowork`, whose tier resolves per the baseline gate) |
+| `contradictory-turn-cap` | WARN | `allow_max_turns: true` beside `result: success` (a capped run is `error`) |
 | `egress-on-protocol` | ERROR | an egress assertion (`egress_*` / `expect_denied`) on `protocol`, which enforces no egress |
 | `enum-value-invalid` | ERROR | a field value outside its allowed set |
 | `artifact-json-match` | ERROR | an `artifact_json` glob `artifact` (with `*` or `?`) with no `match` or ending in `/`, or a literal one that sets `match` |
@@ -304,6 +305,7 @@ cowork-harness lint scenarios/*.yaml
 | `manifest-needs-snapshot` | INFO | manifest-backed keys, which evaluate on replay only when the cassette carries an `artifacts` manifest (not reported on `lane: remote` for `user_visible_artifact` / `artifact_json` / `artifact_text`, which cannot pass there) |
 | `mixed-assert-item` | WARN | one assert item mixing replay-checkable and live-only keys (replay drops the live-only half) |
 | `no-scenarios` | ERROR | a linted directory with no `*.yaml` / `*.yml` |
+| `not-a-scenario` | INFO | a session file (only session keys); not checked |
 | `not-found` | ERROR | a named file that does not exist |
 | `parse` | ERROR | a file that is not YAML, or not a mapping |
 | `positional-choose-order` | INFO | an answer rule with a positional `choose` (first / index), which option re-ordering can move |

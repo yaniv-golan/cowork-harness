@@ -76,7 +76,7 @@ export function baseAgentArgs(
   // unknown) — falling back to the baseline's synced medium default when the session left it unset
   // (per-model validation of an EXPLICIT value already ran in buildLaunchPlan's validateEffort; the
   // trailing "medium" only guards a baseline synced before `spawn.effortDefault` existed).
-  const effort = resolveEffort({ session: plan.effort, baseline });
+  const seg = sessionFlagArgs(baseline, plan);
   const tools = [...(spawn?.tools ?? []).filter(notIn(opts.disallowed)), ...(opts.extraTools ?? [])];
   // extraAllowedTools is deliberately NOT defaulted from extraTools: registering a tool and
   // pre-approving it session-wide are different decisions, so each caller states its pre-approval set
@@ -100,38 +100,73 @@ export function baseAgentArgs(
     plan.permissionMode ?? spawn?.permissionMode ?? "default",
     "--setting-sources",
     (spawn?.settingSources ?? ["user"]).join(","),
-    "--effort",
-    effort,
-    // Extended thinking — a CLI FLAG ONLY (real Cowork sets no MAX_THINKING_TOKENS env; the SDK option
-    // maps straight to the flag). `debugMaxThinkingTokens` (the fenced, non-Cowork escape hatch) ALWAYS
-    // wins when set; otherwise the boolean resolves to the fixed 31999-or-disabled budget, matching
-    // Cowork's own "no arbitrary N" invariant. Kept among the FIXED flags so the variadic
-    // --tools/--allowedTools stay last (golden invariant).
-    ...thinkingArgs(plan.extendedThinking, plan.debugMaxThinkingTokens),
-    // Fenced, non-Cowork `debug.thinking_display` → `--thinking-display <mode>` (real Cowork passes none,
-    // so this is emitted ONLY when the escape hatch is set; default omits it → byte-identical argv).
-    ...(plan.debugThinkingDisplay ? ["--thinking-display", plan.debugThinkingDisplay] : []),
-    // Agent turn budget — emitted ONLY when the session opts in (`agent_max_turns`). Omitted by default so
-    // the agent inherits its own turn ceiling (fidelity: real Cowork passes no --max-turns for interactive
-    // sessions). The flag is verified supported by the staged agent binary.
-    ...(plan.agentMaxTurns !== undefined ? ["--max-turns", String(plan.agentMaxTurns)] : []),
+    // effort, thinking, --thinking-display, --max-turns: one segment, shared with protocol (sessionFlagArgs).
+    ...seg.budget,
     // Hook lifecycle frames — emitted ONLY when a staged plugin declares runnable hooks (see
     // LaunchPlan.includeHookEvents). Telemetry-only on the agent side; Desktop never passes it, so the
     // default omits it → goldens unchanged.
     ...(plan.includeHookEvents ? ["--include-hook-events"] : []),
     ...(opts.disallowed?.length ? ["--disallowedTools", ...opts.disallowed] : []),
     ...(opts.systemPromptAppend ? ["--append-system-prompt", opts.systemPromptAppend] : []),
-    ...(plan.model ? ["--model", plan.model] : []),
+    ...seg.model,
     ...(opts.mcpGuest ? ["--mcp-config", opts.mcpGuest] : []),
-    // Session persistence: pin the agent's native session id (so we can resume it), or resume a prior
-    // one. Only emitted when a stable session was requested — default omits both → goldens unchanged.
-    ...(plan.agentSessionId ? (plan.resume ? ["--resume", plan.agentSessionId] : ["--session-id", plan.agentSessionId]) : []),
+    ...seg.session,
     ...(opts.extraArgs ?? []),
     ...pluginDirArgs(plan, opts.mntRoot),
     // variadic flags LAST so they don't swallow other options
     ...(tools.length ? ["--tools", ...tools] : []),
     ...(allowed.length ? ["--allowedTools", ...allowed] : []),
   ];
+}
+
+/**
+ * The agent flags a session decides, in three segments: one source for every tier's argv (`baseAgentArgs` for
+ * container/microvm/hostloop, `protocolAgentArgs` for protocol), so a session key can never reach one tier's agent
+ * and silently not another's. Each builder places the segments at its own positions.
+ *   - `budget`: `--effort`, thinking, `--thinking-display`, `--max-turns`.
+ *   - `model`: `--model`.
+ *   - `session`: `--session-id` / `--resume`.
+ * Which `LaunchPlan` field becomes which flag, per tier, is `SESSION_ARGV_FIELDS` (src/runtime/session-argv-fields.ts).
+ */
+export function sessionFlagArgs(
+  baseline: PlatformBaseline,
+  plan: Pick<
+    LaunchPlan,
+    | "effort"
+    | "extendedThinking"
+    | "debugMaxThinkingTokens"
+    | "debugThinkingDisplay"
+    | "agentMaxTurns"
+    | "model"
+    | "agentSessionId"
+    | "resume"
+  >,
+): { budget: string[]; model: string[]; session: string[] } {
+  return {
+    budget: [
+      // Real Cowork ALWAYS emits `--effort`, for every model class (picker, no-picker, regex-default,
+      // unknown) — falling back to the baseline's synced medium default when the session left it unset
+      // (per-model validation of an EXPLICIT value already ran in buildLaunchPlan's validateEffort).
+      "--effort",
+      resolveEffort({ session: plan.effort, baseline }),
+      // Extended thinking — a CLI FLAG ONLY (real Cowork sets no MAX_THINKING_TOKENS env; the SDK option
+      // maps straight to the flag). `debugMaxThinkingTokens` (the fenced, non-Cowork escape hatch) ALWAYS
+      // wins when set; otherwise the boolean resolves to the fixed 31999-or-disabled budget, matching
+      // Cowork's own "no arbitrary N" invariant.
+      ...thinkingArgs(plan.extendedThinking, plan.debugMaxThinkingTokens),
+      // Fenced, non-Cowork `debug.thinking_display` → `--thinking-display <mode>` (real Cowork passes none,
+      // so this is emitted ONLY when the escape hatch is set; default omits it → byte-identical argv).
+      ...(plan.debugThinkingDisplay ? ["--thinking-display", plan.debugThinkingDisplay] : []),
+      // Agent turn budget — emitted ONLY when the session opts in (`agent_max_turns`). Omitted by default so
+      // the agent inherits its own turn ceiling (fidelity: real Cowork passes no --max-turns for interactive
+      // sessions). Supported by the staged agent binary and the host CLI.
+      ...(plan.agentMaxTurns !== undefined ? ["--max-turns", String(plan.agentMaxTurns)] : []),
+    ],
+    model: plan.model ? ["--model", plan.model] : [],
+    // Session persistence: pin the agent's native session id (so it can be resumed), or resume a prior
+    // one. Only emitted when a stable session was requested — default omits both.
+    session: plan.agentSessionId ? (plan.resume ? ["--resume", plan.agentSessionId] : ["--session-id", plan.agentSessionId]) : [],
+  };
 }
 
 /**

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { RUN_EQUIVALENT_OF_SKILL_FLAG } from "./run/skill-flag-surface.js";
 import { ANSWER_CHANNEL_NONE_LABEL } from "./answer-channel.js";
 import type { SearchCorpusOption } from "./search-corpus/run.js";
 import { InterruptedError, interrupt } from "./termination.js";
@@ -290,6 +291,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
 ── Automated scenarios ────────────────────────────────────────────────────────
   run <scenario.yaml | dir/>   run one scenario or every *.yaml in a dir (CI-ready exit code)
       [--model <id>]   pin the model (overrides the session's 'model:'; a run that resolves none is refused)
+      [--timeout <ms>]   the agent's wall-clock budget, in place of the scenario's timeout_ms
       [--on-unanswered fail|first]   ('prompt' rejected — breaks determinism)
       [--decider-cmd '<helper>']   answer live questions via a spawned helper
       [--decider-dir <dir>]   answer live questions in-band; then use 'gates'/'answer' to stream/respond
@@ -309,7 +311,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   hillclimb regrade <scenario.yaml | dir/> [--flow DIR]   re-grade a flow's rows from their kept runs (--rejudge: every judged assert; --fill-refs: add win_<vN>)
 
 ── Cassette lifecycle ─────────────────────────────────────────────────────────
-  record <scenario.yaml>       run + save a control-protocol cassette   [--model <id>]
+  record <scenario.yaml>       run + save a control-protocol cassette   [--model <id>] [--timeout <ms>]
       [--out <file>]           cassette path (default: cassettes/<scenario-name>.cassette.json)
       [--max-artifact-bytes <n>]  inline-body cap (default 65536 / $COWORK_HARNESS_MAX_ARTIFACT_BYTES)
       [--concurrency <N>]      record a dir/ batch (or --rerecord-stale) N at a time (default 1; runs are
@@ -541,6 +543,9 @@ Output:
                                    estimate (a single run has no live cost signal to abort on); with no
                                    priced history it warns and proceeds uncapped.
   --allow-budget-stop              treat a budget-stopped batch as a pass rather than incomplete. Needs --repeat.
+  --timeout <ms>                   the agent's wall-clock budget; on expiry it is killed and the run ends
+                                   result:error / errorSource:timeout. result.json records it as timeout:
+                                   {ms, source: flag}. \`run\` and \`record\` take the same flag.
   --run-dir <path>                 relocates runs/ output (default ~/.cowork-harness/runs) out of the working tree.
                                    flag > COWORK_HARNESS_RUNS_DIR > default. Before or after the subcommand.
   --dotenv <path>                  load a .env for this run (see Auth below). Before or after the subcommand.
@@ -569,8 +574,6 @@ Output:
 
 Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of silence.
             COWORK_HARNESS_NO_HEARTBEAT=1 disables it; COWORK_HARNESS_HEARTBEAT_MS tunes the interval.
-  --timeout <ms>                   wall-clock budget; on expiry the agent is killed and the run ends
-                                   result:error / errorSource:timeout (the CLI form of a scenario's timeout_ms).
 
 Auth:  Run 'doctor' to check auth. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN) from process.env >
        --dotenv <path> > ./.env > <install>/.env.
@@ -589,6 +592,13 @@ Model:
                                    (env COWORK_HARNESS_MODEL sets a default; a --matrix 'models:' axis
                                    wins over both). A run that resolves no model from any of these is
                                    refused (exit 2) before anything runs.
+
+Budget:
+  --timeout <ms>                   the agent's wall-clock budget for every scenario this run starts (each
+                                   --matrix cell, each leg of a legs: file), in place of the scenario's
+                                   timeout_ms. On expiry the agent is killed: result:error / errorSource:
+                                   timeout. The scenario file is not changed; result.json records the budget
+                                   and its source (timeout: {ms, source: flag|scenario}).
 
 Input policy:
   --on-unanswered fail|first       policy for an unscripted question (default: fail — deterministic).
@@ -1731,9 +1741,10 @@ async function runMultiLegFile(
     o: ReturnType<typeof resolveOutput>;
     modelFlag: string | undefined;
     deciderModel: string | undefined;
+    timeoutOpt: Pick<ExecuteOptions, "timeoutOverride">;
   },
 ): Promise<void> {
-  const { flags, policy, externalChannel, o, modelFlag, deciderModel } = p;
+  const { flags, policy, externalChannel, o, modelFlag, deciderModel, timeoutOpt } = p;
   const ms = loadMultiLegScenario(file);
   if (ms.on_unanswered === "prompt")
     fail("run", "usage", `scenario "${ms.name}" sets on_unanswered: prompt — rejected on \`run\``, undefined, o.json);
@@ -1747,6 +1758,7 @@ async function runMultiLegFile(
       compact: !!(flags.compact || flags.demo),
       runLabel: flags.label,
       ...(modelFlag !== undefined ? { modelOverride: modelFlag } : {}),
+      ...timeoutOpt, // every leg: in place of each leg's own timeout_ms
       ...(deciderModel !== undefined ? { llmModel: deciderModel } : {}),
       // Passed through so executeMultiLeg refuses it: a negative control must never quietly run with the skill.
       ...(flags.ablateSkill ? { ablateSkill: true } : {}),
@@ -1889,6 +1901,9 @@ async function cmdRun(rawArgs: string[]) {
   // through the back door (a stray line in a repo `.env` would repoint every clone's runs). The flag is
   // an explicit per-invocation act and does outrank the file; the env var only fills a gap.
   let modelFlag: string | undefined;
+  // `--timeout <ms>`: the agent phase's budget for every scenario this invocation runs (each matrix cell, each leg of
+  // a `legs:` file), in place of the scenario's own `timeout_ms`. An execute option, never a rewrite of the scenario.
+  let timeoutFlag: number | undefined;
   const withoutModel: string[] = [];
   for (let i = 0; i < rawRest.length; i++) {
     const tok = rawRest[i];
@@ -1901,6 +1916,14 @@ async function cmdRun(rawArgs: string[]) {
       if (v === undefined || v.trim() === "" || (gEq < 0 && v.startsWith("-")))
         fail("run", "usage", `${gName} requires a path (none provided)`, undefined, isJsonOutput(rawArgs));
       applyCommandGlobal("run", gName, v, isJsonOutput(rawArgs));
+      continue;
+    }
+    if (tok === "--timeout" || tok.startsWith("--timeout=")) {
+      const raw = tok === "--timeout" ? rawRest[++i] : tok.slice("--timeout=".length);
+      const n = Number(raw);
+      if (raw === undefined || !Number.isInteger(n) || n <= 0)
+        fail("run", "usage", `--timeout requires a positive integer (ms); got "${raw ?? ""}"`, undefined, isJsonOutput(rawArgs));
+      timeoutFlag = n;
       continue;
     }
     // Accept `--model=<id>` too: `record` gets it free from the shared parser, and a form that works on
@@ -1937,6 +1960,7 @@ async function cmdRun(rawArgs: string[]) {
     withoutModel.push(tok);
   }
   const args = withoutModel.filter((a) => a !== "--keep");
+  const timeoutOpt = timeoutFlag !== undefined ? { timeoutOverride: { ms: timeoutFlag, source: "flag" as const } } : {};
   if (keepRequested) log("note: `run` always keeps runs (under the runs root); --keep is a no-op here.");
   const target = args[0];
   if (!target) fail("run", "usage", "usage: run <scenario.yaml | dir/>", undefined, flags.output === "json");
@@ -1945,11 +1969,17 @@ async function cmdRun(rawArgs: string[]) {
   // e.g. `--fidelity microvm` was a silent no-op (fidelity comes from the scenario's `fidelity:`
   // field, not a flag). Runs before existsSync so the message is precise even for a bogus path.
   const extra = args.slice(1);
+  // A `skill` flag passed to `run`: name what the scenario or session says instead.
+  const runEquivalents = (toks: string[]) => {
+    const named = [...new Set(toks.map((t) => t.split("=")[0]).filter((t) => Object.hasOwn(RUN_EQUIVALENT_OF_SKILL_FLAG, t)))];
+    return named.length ? `In a scenario: ${named.map((f) => `${f} → ${RUN_EQUIVALENT_OF_SKILL_FLAG[f]}`).join("; ")}. ` : "";
+  };
   if (extra.length)
     fail(
       "run",
       "usage",
       `unexpected argument(s): ${extra.join(" ")} — \`run\` takes one <scenario.yaml | dir/> plus common flags. Fidelity is set by the scenario's \`fidelity:\` field, not a flag. ` +
+        runEquivalents(extra) +
         `To check a scenario without spending: \`lint <file.yaml>\` (does it load, and are the assertions sane) or \`record <file.yaml> --dry-run\` (also the pre-spend refusals).`,
       undefined,
       flags.output === "json",
@@ -1977,7 +2007,7 @@ async function cmdRun(rawArgs: string[]) {
         undefined,
         o.json,
       );
-    return void (await runMultiLegFile(files[0], { flags, policy, externalChannel, o, modelFlag, deciderModel }));
+    return void (await runMultiLegFile(files[0], { flags, policy, externalChannel, o, modelFlag, deciderModel, timeoutOpt }));
   }
 
   // --matrix is a completely separate mode from the per-file/--repeat loop below — one scenario, N
@@ -2116,7 +2146,7 @@ async function cmdRun(rawArgs: string[]) {
                 policy,
                 externalChannel,
                 o,
-                extra: { session, llmModel: deciderModel },
+                extra: { session, llmModel: deciderModel, ...timeoutOpt },
                 rethrowUnanswered: true,
               }),
             onResult: (r) => results.push(r),
@@ -2156,7 +2186,7 @@ async function cmdRun(rawArgs: string[]) {
             policy,
             externalChannel,
             o,
-            extra: { session, llmModel: deciderModel },
+            extra: { session, llmModel: deciderModel, ...timeoutOpt },
             rethrowUnanswered: true,
           });
           results.push(result);
@@ -2262,6 +2292,7 @@ async function cmdRun(rawArgs: string[]) {
             extra: {
               ...(deciderModel ? { llmModel: deciderModel } : {}),
               ...(modelFlag !== undefined ? { modelOverride: modelFlag } : {}),
+              ...timeoutOpt,
             },
           }),
         );
@@ -2289,6 +2320,7 @@ async function cmdRun(rawArgs: string[]) {
             extra: {
               ...(deciderModel ? { llmModel: deciderModel } : {}),
               ...(modelFlag !== undefined ? { modelOverride: modelFlag } : {}),
+              ...timeoutOpt,
             },
             rethrowUnanswered: true,
           }),
@@ -2574,8 +2606,8 @@ async function cmdSkill(rawArgs: string[]) {
       answers.push({ when_question: q, choose });
     } else if (name === "--answer-policy") answerPolicy = nextValStrict();
     else if (name === "--timeout") {
-      // wall-clock budget (ms) for the ephemeral skill scenario — the CLI override of the scenario
-      // `timeout_ms:` field (skill builds its scenario from flags, so there's no YAML to carry it).
+      // wall-clock budget (ms) for the run: passed as the execute option, so the result records it as
+      // `timeout: {ms, source: "flag"}` (skill builds its scenario from flags; there's no YAML to carry it).
       const raw = nextValStrict();
       const n = Number(raw);
       if (!Number.isInteger(n) || n <= 0)
@@ -2770,7 +2802,8 @@ async function cmdSkill(rawArgs: string[]) {
       on_unanswered: useLlm ? "llm" : resolvePolicy("skill", flags),
       ...(flags.deciderDir != null ? { decider: "decider-dir" } : flags.deciderCmd != null ? { decider: "decider-cmd" } : {}),
       ...(useLlm ? { decider: "decider-llm" } : {}),
-      ...(timeoutMs !== undefined ? { timeout_ms: timeoutMs } : {}),
+      // The run's budget, as `record --dry-run` and result.json state it: not a scenario field (the scenario is not rewritten).
+      ...(timeoutMs !== undefined ? { timeout: { ms: timeoutMs, source: "flag" as const } } : {}),
       ...(allowStall ? { allow_stall: true } : {}),
     };
     // Under json the preview rides in the standard envelope (one framed document on stdout); text mode
@@ -2796,7 +2829,7 @@ async function cmdSkill(rawArgs: string[]) {
     session: "(inline)",
     fidelity,
     prompt,
-    ...(timeoutMs !== undefined ? { timeout_ms: timeoutMs } : {}),
+    // `--timeout` is the run's budget (source `flag` in the result), not a field of the synthesized scenario.
     ...(allowHostWrites ? { allow_host_writes: true as const } : {}),
     ...(allowHostHooks ? { allow_host_hooks: true as const } : {}),
     answers,
@@ -2840,6 +2873,7 @@ async function cmdSkill(rawArgs: string[]) {
         llmIntent: intent,
         llmModel: deciderModel,
         nonDeterministicHint: flags.deciderDir != null || flags.deciderCmd != null, // driving agent / helper answers → not reproducible
+        ...(timeoutMs !== undefined ? { timeoutOverride: { ms: timeoutMs, source: "flag" as const } } : {}),
       },
     });
 

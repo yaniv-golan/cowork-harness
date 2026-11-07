@@ -33,6 +33,7 @@ const RUN_VALUE_FLAGS = [
   "--repeat",
   "--min-pass-rate",
   "--max-budget-usd",
+  "--timeout",
 ];
 const SKILL_VALUE_FLAGS = [
   ...new Set([...SKILL_FLAG_SURFACE.filter((s) => s.arity === 1).map((s) => s.flag), "--on-unanswered", "--output-format", "--label"]),

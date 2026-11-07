@@ -135,7 +135,7 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
 ```jsonc
 {
   "generator": "cowork-harness",          // provenance: the tool that produced this file
-  "cassetteVersion": 12,                  // the MINIMUM format a reader needs for this cassette (see Cassette versioning below) — floored at the hash-format epoch, so cassettes stamp 12 (13–17 when a key or the run lifts it, see the table below; e.g. 13 when `assert:` uses the object form of tool_called/tool_not_called; a 3.10.0 `replay` crashes on those, so upgrade first). ABSENT reads as 0 and, like anything below the v9 read floor, is refused at load time with a re-record error; a FUTURE version hard-fails unless --best-effort-future-cassette
+  "cassetteVersion": 12,                  // the MINIMUM format a reader needs for this cassette (see Cassette versioning below) — floored at the hash-format epoch, so cassettes stamp 12 (13–19 when a key or the run lifts it, see the table below; e.g. 13 when `assert:` uses the object form of tool_called/tool_not_called; a 3.10.0 `replay` crashes on those, so upgrade first). ABSENT reads as 0 and, like anything below the v9 read floor, is refused at load time with a re-record error; a FUTURE version hard-fails unless --best-effort-future-cassette
   "scenarioSource": "scenarios/my-test.yaml", // the authored scenario SOURCE file this was recorded from, relative to the cassette dir (absent for an inline/in-memory scenario)
   "scenario": { /* Scenario object — same schema as the .yaml */ },
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
@@ -193,6 +193,7 @@ differential for most scenarios, so cassettes stamp **v12**. These values lift i
 | **v17** | a scenario with `device_bridge: true` (the remote lane's device tools, served from a second container). A v16 reader refuses it as too new | v16: refuses as too new — upgrade the harness, don't re-record |
 | **v18** | a scenario with `device_bridge: true` recorded since the delete card: its frozen `deviceBridge` carries `deleteRefusal` and `grants` (and, when the device refuses deletes, `refusedDeletes` and `bypassedDeletes`), which a v17 reader rejects. A v17 bridge recording still reads; or a scenario declaring a command metric (`metrics[].command`, a script over the run's own events), whose record-time values are frozen in `commandMetrics` (replay reports them as recorded and never re-runs the script), which a v17 reader rejects as unrecognized | v17: refuses as too new — upgrade the harness, don't re-record |
 | **v18** | is a multi-leg (`legs:`) scenario: the cassette is the multi-leg FORM (see [Multi-leg cassettes](#multi-leg-cassettes)) — `legs[]` in place of `events`, no top-level `prompt` | v17: fails its shape check (`events`, `scenario.prompt` missing) even under `--best-effort-future-cassette` — upgrade the harness |
+| **v19** | an `assert:` entry carrying `allow_max_turns` (the session's turn cap is a completed run): the modifier acts on the replayed verdict with the frozen top-level `turnCap`, and a v18 reader rejects the key as unrecognized. The frozen `turnCap` and `timeout` alone stamp nothing | v18: refuses as too new — upgrade the harness, don't re-record |
 
 For v13: a v12 `verify-cassettes` refuses
 that cassette as too new; a v12 `replay` (3.10.0 and earlier) warns the assertion is tolerated and then crashes
@@ -263,7 +264,7 @@ recorded against a different source, so a directory batch cannot share a single 
 
 ### Multi-leg cassettes
 
-A [multi-leg scenario](./scenario.md#multi-leg-scenarios-legs) records ONE cassette (v18) for the whole scenario:
+A [multi-leg scenario](./scenario.md#multi-leg-scenarios-legs) records ONE cassette (v18 or higher) for the whole scenario:
 
 ```jsonc
 {
@@ -609,6 +610,7 @@ the rules and CI-placement rationale (why each category behaves this way), see
 | `allow_missing_capability` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_l0_host_config_contamination` | verdict modifier — kept on replay → no-op pass (the live signal it suppresses is zeroed) |
 | `allow_stall` | verdict modifier — kept on replay → no-op pass (suppresses the `stalled` default-fail; the stall is re-derived on the replay re-drive) |
+| `allow_max_turns` | verdict modifier — kept on replay → no-op pass; the verdict still reads it, against the cassette's frozen `turnCap` (a session-cap stop is a completed run, no `result_error`). Stamps the cassette v19 |
 | `allow_outputs_delete` | verdict modifier — kept on replay → no-op pass (the live outputs-delete scan it waives is zeroed on replay) |
 | `allow_delete_in` | verdict modifier — kept on replay → no-op pass (the live per-mount delete scan it waives is zeroed on replay, same as its outputs-scoped sibling) |
 | `allow_undelivered_deliverables` | verdict modifier — kept on replay → no-op pass (suppresses the `undelivered_deliverables` WARN; a replay runs no scratchpad walk of its own, so the signal is evidence-unavailable there regardless) |

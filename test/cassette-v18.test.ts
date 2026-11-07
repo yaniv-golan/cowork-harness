@@ -15,8 +15,8 @@ import { CASSETTE_VERSION, cassetteSchemaUrl, readCassette, requiredVersionFor, 
 import type { Scenario } from "../src/types.js";
 
 describe("cassette v18", () => {
-  it("this build writes and reads v18, and ships its schema next to v17's", () => {
-    expect(CASSETTE_VERSION).toBe(18);
+  it("this build reads v18, and ships its schema next to v17's", () => {
+    expect(CASSETTE_VERSION).toBeGreaterThanOrEqual(18);
     const schema = JSON.parse(readFileSync(join(process.cwd(), "schema", "cassette.v18.json"), "utf8"));
     expect(schema.$id).toBe(cassetteSchemaUrl(18));
     expect(schema.title).toBe("cowork-harness cassette v18");
@@ -110,8 +110,8 @@ const multiLeg = {
 };
 
 describe("cassette v18: the multi-leg form", () => {
-  it("this build writes and reads v18, and ships its schema next to v17's", () => {
-    expect(CASSETTE_VERSION).toBe(18);
+  it("this build reads v18, and ships its schema next to v17's", () => {
+    expect(CASSETTE_VERSION).toBeGreaterThanOrEqual(18);
     const schema = JSON.parse(readFileSync(join(process.cwd(), "schema", "cassette.v18.json"), "utf8"));
     expect(schema.$id).toBe(cassetteSchemaUrl(18));
     expect(schema.title).toBe("cowork-harness cassette v18");
@@ -136,7 +136,9 @@ describe("cassette v18: the multi-leg form", () => {
       expect(readCassette(p)).toEqual({ error: expect.stringMatching(/is a multi-leg cassette.*`replay`.*`verify-cassettes`/) });
       const future = join(dir, "future.cassette.json");
       writeFileSync(future, JSON.stringify({ cassetteVersion: 99, something: "new" }));
-      expect(readCassette(future)).toEqual({ error: expect.stringMatching(/cassette format too new: v99 > this harness's v18/) });
+      expect(readCassette(future)).toEqual({
+        error: expect.stringMatching(new RegExp(`cassette format too new: v99 > this harness's v${CASSETTE_VERSION}`)),
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -445,8 +445,8 @@ Every envelope, like the CLI's own output, is secret-scrubbed with the same set 
   `skill_tool_used`, `skill_available`, `connector_available`, `tool_available`, `all_tasks_completed`,
   `task_status`, `compaction_occurred`, `max_cost_usd`, `max_tokens`, `tool_calls_max`, `max_turns`,
   `result`, the verdict modifiers (`allow_permissive_auto_allow`, `allow_missing_capability`,
-  `allow_l0_host_config_contamination`, `allow_stall`, `allow_undelivered_deliverables`, `allow_outputs_delete`,
-  `allow_delete_in`),
+  `allow_l0_host_config_contamination`, `allow_stall`, `allow_max_turns`, `allow_undelivered_deliverables`,
+  `allow_outputs_delete`, `allow_delete_in`),
   and (when `controlOut` is present) `question_asked`, `question_option_count`,
   `questions_count_max`, `gate_answers_delivered`, `gate_answer_count_min`, `hook_blocked`,
   `no_hook_blocked` (illustrative — see `ALWAYS_CONTENT_KEYS`/`QUESTION_GATE_KEYS` in `src/run/cassette.ts` for the authoritative
@@ -906,6 +906,8 @@ abridged to the fields most consumers branch on. The complete field list is
   "subagents": [{ "toolUseId","parentToolUseId?","agentType","declaredTools":[],"toolsUsed":[] }],
   "nonReproducibleAnswers?":[{ "question","chosen","by","rationale?","model?" }], // decisions answered by a non-deterministic/non-authoritative source (llm/external/human/first); scripted answers are excluded
   "usage?": { "turns?": number, /* …SDK usage fields (input_tokens, output_tokens, etc.), pass-through */ },
+  "turnCap?": { "maxTurns": number, "source": "session" }, // the session's agent_max_turns as passed to the agent; read by allow_max_turns
+  "timeout?": { "ms": number, "source": "flag|scenario|runner" }, // the agent phase's wall-clock budget: --timeout, the scenario's timeout_ms, or a runner's ceiling (hillclimb); informational
   "cost?": { "usd?": number, "raw?": {...} }, // usd = SDK's total_cost_usd for this invocation; raw = the api_metrics event payload (independent source)
   "durationMs?": number,
   "fingerprint?": { "baseline", "hashFormat?": "jcs1", "skillHash?", "skillSources?":[], "skillScope?":[], "sharedHash?", "contentSig?", "fileSigs?":[["relpath","hashedSha"]], "fileSigsOmitted?": bool, "mode?": "git|raw", "agentScope?": "skill", "workspaceFixtureSig?", "workspaceFixtureFileSigs?":[["path","sig"]] }, // skill/plugin staleness fingerprint recorded at run time (`workspaceFixtureSig` = the staged workspace_fixture's content signature); lets `verify-run` detect a kept run whose gate snapshot predates a skill change. `hashFormat` names the manifest transform that produced the digests — ABSENT means the LEGACY (pre-v12) transform, never raw bytes. A `fileSigs` sha is the sha of the bytes that FOLD INTO skillHash, which for a plugin manifest is not the file's own bytes
@@ -1255,8 +1257,8 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   `unpriced[]`, and sets `lowerBound`. Every other key of that object (`budgetGateWorstUsd`, `judge*`,
   `decider*`, `items[]`) is experimental. Adding a key is MINOR; removing or renaming one, or changing its basis or
   meaning, is MAJOR.
-- **Cassette format** — the maximum `cassetteVersion` this build writes/reads is **18**
-  (`schema/cassette.v18.json`) and its verdict-modifier assertion keys.
+- **Cassette format** — the maximum `cassetteVersion` this build writes/reads is **19**
+  (`schema/cassette.v19.json`) and its verdict-modifier assertion keys.
 
   `cassetteVersion` means **the minimum reader for the whole cassette**, which covers how its digests are
   computed as well as which `scenario` keys it uses: a reader older than the cassette's hash format
@@ -1293,12 +1295,13 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   `device_bridge: true` stamps **v18** (v17 before the delete card): an older reader refuses it as too new. A multi-leg
   (`legs:`) scenario records the multi-leg form, which also stamps **v18**: `legs[]` in place of `events` (each prompt
   leg nests a complete single-prompt cassette, each host action its record) and no top-level `prompt`, so a v17
-  reader fails its shape check rather than grading the first leg as the whole run.
+  reader fails its shape check rather than grading the first leg as the whole run. An `assert:` entry carrying `allow_max_turns`
+  stamps **v19**: it acts on the replayed verdict with the frozen top-level `turnCap`, and a v18 reader rejects the key.
   The minimum supported read version is **v9**
   (`MIN_SUPPORTED_CASSETTE_VERSION`): a cassette below the floor is refused at load time with a
   re-record error (a pre-1.0 decision — no compatibility is maintained for formats below v9, and
   their schema files are no longer shipped; the retained schema files are `schema/cassette.v9.json`
-  through `schema/cassette.v18.json`). A cassette whose stamped version exceeds what a given build understands is
+  through `schema/cassette.v19.json`). A cassette whose stamped version exceeds what a given build understands is
   refused loudly by both `replay` and `verify-cassettes`; `replay` alone offers an opt-in override
   (`--best-effort-future-cassette`), which `verify-cassettes` does not accept — a verification gate has no
   "read it anyway" path. `record --rerecord-stale`'s selection and `rehash`'s own version check accept a
