@@ -96,6 +96,8 @@ export interface ServedModelSplit {
   served: string[];
   /** The cases whose rows carry the split, sorted. */
   cases: string[];
+  /** Every row of this pin was written under `--allow-model-split` (`meta.model_split_allowed`). */
+  allowed: boolean;
 }
 
 /** Over a variant's `results.jsonl`: each requested model (`meta.model_requested`) whose scored rows record more than
@@ -104,10 +106,10 @@ export interface ServedModelSplit {
  *  Rows that record no request, or whose served model is not the pin's (a substitution, already an error row), are
  *  not counted. Lines that do not parse are skipped (schema-check reports them). */
 export function servedModelSplits(results: string | null | undefined): ServedModelSplit[] {
-  const by = new Map<string, { served: Set<string>; cases: Set<string> }>();
+  const by = new Map<string, { served: Set<string>; cases: Set<string>; allowed: boolean }>();
   for (const line of (results ?? "").split("\n")) {
     if (!line.trim()) continue;
-    let r: { prompt_id?: unknown; model?: unknown; meta?: { model_requested?: unknown } };
+    let r: { prompt_id?: unknown; model?: unknown; meta?: { model_requested?: unknown; model_split_allowed?: unknown } };
     try {
       r = JSON.parse(line);
     } catch {
@@ -116,14 +118,15 @@ export function servedModelSplits(results: string | null | undefined): ServedMod
     const req = r.meta?.model_requested;
     if (typeof req !== "string" || typeof r.model !== "string" || !modelIdMatches(req, r.model)) continue;
     const k = normalizeModelId(req);
-    const e = by.get(k) ?? { served: new Set<string>(), cases: new Set<string>() };
+    const e = by.get(k) ?? { served: new Set<string>(), cases: new Set<string>(), allowed: true };
     e.served.add(normalizeModelId(r.model));
     e.cases.add(String(r.prompt_id));
+    if (r.meta?.model_split_allowed !== true) e.allowed = false;
     by.set(k, e);
   }
   return [...by.entries()]
     .filter(([, e]) => e.served.size > 1)
-    .map(([requested, e]) => ({ requested, served: [...e.served].sort(), cases: [...e.cases].sort() }));
+    .map(([requested, e]) => ({ requested, served: [...e.served].sort(), cases: [...e.cases].sort(), allowed: e.allowed }));
 }
 
 /** The one sentence each surface (the pre-spend refusal, the post-pass failure, `hillclimb check`) prints for a split. */

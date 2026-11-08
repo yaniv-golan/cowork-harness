@@ -57,6 +57,34 @@ describe("checkReport", () => {
     );
   });
 
+  // A variant's rows for one pin served two snapshots: exit 1 unless every such row opted in (then a warning, exit 0).
+  const splitFlow = (allowed: [boolean, boolean]): void => {
+    cpSync(CLEAN_FLOW, join(cwd, "flow"), { recursive: true });
+    const res = join(cwd, "flow", "baseline", "results.jsonl");
+    const rows = readFileSync(res, "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    rows.forEach((r, i) => {
+      r.model = i === 0 ? "claude-sonnet-5-20251001" : "claude-sonnet-5-20251101";
+      r.meta = { ...r.meta, model_requested: "claude-sonnet-5", ...(allowed[Math.min(i, 1)] ? { model_split_allowed: true } : {}) };
+    });
+    writeFileSync(res, rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+  };
+  it("a served-model split not opted into is an error: exit 1", () => {
+    splitFlow([false, true]);
+    const r = checkReport("flow", cwd);
+    expect(r.exitCode).toBe(1);
+    expect(r.report.findings.map((f) => f.rule)).toContain("served_model.split");
+  });
+  it("a served-model split every row opted into is a warning: exit 0", () => {
+    splitFlow([true, true]);
+    const r = checkReport("flow", cwd);
+    expect(r.exitCode).toBe(0);
+    expect(r.warnings).toContainEqual(expect.stringMatching(/^served_model\.split: .*count in the headline score/));
+  });
+
   it("a missing flow dir is a usage error", () => {
     expect(() => checkReport("nope", cwd)).toThrow(UsageError);
   });

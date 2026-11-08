@@ -357,9 +357,16 @@ export function incomparableMetricWarnings(snap: FlowSnapshot): string[] {
 
 /** A variant whose scored rows for one requested model were served more than one model id (a warning: the pass that
  *  wrote them already exited 1, and the next pass refuses). */
-export function servedModelSplitWarnings(snap: FlowSnapshot): string[] {
+/** A variant whose scored rows for one pin were served two models: an error, unless every one of those rows was
+ *  written under `--allow-model-split` (then a warning) — as `--allow-mixed-search` is held. */
+export function servedModelSplitFindings(snap: FlowSnapshot): Array<{ severity: "error" | "warning"; message: string }> {
   return Object.entries(snap.variants).flatMap(([v, f]) =>
-    servedModelSplits(f.results).map((s) => `served_model.split: ${servedModelSplitText(v, s)}`),
+    servedModelSplits(f.results).map((s) => ({
+      severity: s.allowed ? ("warning" as const) : ("error" as const),
+      message: s.allowed
+        ? `${servedModelSplitText(v, s)} — every row was written under --allow-model-split; the split rows count in the headline score`
+        : `${servedModelSplitText(v, s)} — not every row was written under --allow-model-split`,
+    })),
   );
 }
 
