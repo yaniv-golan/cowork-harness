@@ -127,6 +127,24 @@ describe("runGateCommand", () => {
     expect(alive).toBe(false);
   }, 15_000);
 
+  it("a shell that exits while an escaped descendant holds the output open fails at the timeout instead of hanging", async () => {
+    const pidFile = join(scratch, "escaped-after-exit.pid");
+    const t0 = Date.now();
+    const g = await runGateCommand({
+      cmd: `python3 -c 'import os,time; os.setsid(); open("${pidFile}","w").write(str(os.getpid())); time.sleep(30)' & sleep 0.3; exit 0`,
+      snapshot: snap,
+      variant: "v1",
+      timeoutS: 1,
+    });
+    try {
+      process.kill(Number(readFileSync(pidFile, "utf8").trim()), "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+    expect(g).toMatchObject({ ok: false, timedOut: true, code: 0 });
+    expect(Date.now() - t0).toBeLessThan(10_000);
+  }, 20_000);
+
   it("a descendant that left the process group and holds the output open cannot hang the pass past the timeout", async () => {
     const pidFile = join(scratch, "escaped.pid");
     const t0 = Date.now();
