@@ -65,11 +65,11 @@ on a question is graded normally when the scenario asserts `allow_stall: true`, 
 under `allow_max_turns: true` (rule `turn_cap_allowed`; `result: success` still fails). Only after that
 are a pin the agent did not honour (false, or unknown on a rep that completed) and a snapshot that changed
 excluded and reported. A loud UNCLASSIFIED count means a termination the classifier does not know — read
-those runs. Per scenario: if EVERY rep of both arms errored, or every rep of one arm is excluded,
-that scenario compared nothing — its rows are `insufficient` and the eval exits 1. If one arm's every rep
-is the agent's own failure and the other arm ran, the reps are scored (a real drop) — exit 0 unless
-`--fail-on`. Either way the header
-names the arm, scenario, dominant error and a matching hint (`Every rep of arm <label> in <scenario> errored — …`).
+those runs. Per scenario: if EVERY rep of both arms errored, or every rep of one arm is excluded or
+`judge_invalid`, that scenario compared nothing — its rows are `insufficient` and the eval exits 1. If one
+arm's every rep is the agent's own failure and the other arm ran, the reps are scored (a real drop) — exit 0
+unless `--fail-on`. Either way the header names the arm, scenario, dominant cause and a hint (`Every rep of
+arm <label> in <scenario> …`).
 
 An invalid judge grade leaves that assertion's rows for that rep, and the report counts it per arm by cause
 (`arms[].judgeInvalidCauses`): `call failed: API <status>` (or `call failed: no API status`, e.g. a timeout),
@@ -81,7 +81,8 @@ rewrite the eval's `runs.jsonl` or report. Pruned run dirs are listed as not re-
 
 ## Refused before any run (exit 2)
 
-- a model or judge that is an alias (`opus`, `best`, `-latest`, `-0`) rather than a concrete id;
+- a model or judge that is an alias (`opus`, `best`, `-latest`, `-0`) rather than a concrete id (an undated id
+  also matches its dated snapshot; `models[0]` of a prior result pins exactly);
 - a judge credential the API refuses (401/403), a judge model it does not know (404), or a spent quota, found by one real call per grader (role, model)
   after every other check (`--no-judge-check` / `COWORK_HARNESS_JUDGE_CHECK=0` skip it; a dry run never makes it);
 - an eval dir inside any git work tree (the snapshots would mount empty);

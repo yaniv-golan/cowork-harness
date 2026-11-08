@@ -495,7 +495,7 @@ live eval of the search change, then a frozen eval with a pool built evenly from
   metric row that is `possible worse`, `confirmed worse` or `insufficient_unmeasured`; with `--fail-on confirmed`, a
   `confirmed` drop or a `confirmed worse` metric only. Also, with or without it: every row `insufficient`, metric rows
   included (`insufficient_refusals` / `insufficient_unmeasured` rows do not count toward this), a scenario that
-  compared nothing (below), a metric row `not compared`, the judge model or the agent's served model differed across reps,
+  compared nothing (below; an arm none of whose reps got a valid judge grade included), a metric row `not compared`, the judge model or the agent's served model differed across reps,
   any scheduled job with no record, or (with `--search-corpus`) any rep was not served from the pinned pool. A job
   has no record when the eval was interrupted or killed, ended on a requested exit, or **stopped**: a judge or LLM
   decider call refused for its credential (401/403), its model (404) or a spent quota fails every later grade the
@@ -521,6 +521,8 @@ Judged per scenario, for each arm:
   eval compares. Same outcome. An arm that mixes the agent's own failures with pool mismatches,
   against an arm with valid reps, is still scored: the agent's reps fail every row and the mismatched ones are left
   out, as with today's mix of the agent's failures and infrastructure.
+- **No rep of one arm got a valid judge grade** (`judge_invalid`: a server error, a timeout or a malformed reply):
+  nothing in that arm can be compared. Same outcome; the hint says to read each rep's `judgeError` and re-run.
 - **Every rep of one arm is the agent's own failure, and the other arm has valid reps**: a skill that
   crashes every time is exactly the regression an eval should show, so the reps are scored (each fails
   every row) and the rows show the drop. The header still names the arm and its error. It exits 0 unless
@@ -586,7 +588,8 @@ local lane.
 session hashes, each scenario's assertions and metric declarations, pins, settings including the metric family's
 correction), `arms/`, `runs.jsonl` (one line per finished job, with every field the report reads — each rep's
 metric values included — and a `semantic_pairwise` grade's per-order outcomes under `order: both`, for reading position bias), `report.json` (`schemaVersion: 0`; each section's `metricRows`, `metricFamily` and `families`, and
-`summary.metricLabels`, `metricsRecorded`, `families`, `confirmReach` and `notCompared`) and `report.md` (host paths
+`summary.metricLabels`, `metricsRecorded`, `families`, `confirmReach`, `notCompared`, `agentModelDisagreements` and
+`modelMismatch`) and `report.md` (host paths
 outside `$HOME` redacted, the count in the header). `stopped.json` exists only when the eval stopped on a grader
 failure: the reason `stoppedEarly` reports, and the only record of one the LLM decider caused (a rebuild reads it). With `--search-corpus`, also `search-pool/` (the pinned copy every
 rep was served from), the manifest's `pins.searchCorpus` and `searchCorpusProvenance` (`schemaVersion: 1`, so an
