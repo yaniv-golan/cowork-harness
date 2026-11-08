@@ -5814,22 +5814,13 @@ function enclosingFunctionName(chunk: string, at: number): string | null {
   return null;
 }
 
-/**
- * The staged agent binary the harness runs is put on disk by Desktop's VM start: `startVM` runs the VM
- * bundle download and `prepareForVM` (the SDK/agent staging) together, as one step:
- *
- *     s.stepStarted("download_and_sdk_prepare");let[d,h]=await Promise.all([BJ(e,t),EG.prepareForVM(t)]);
- *
- * reached from the `startVM` export (`startVM:()=>KJ`, whose body calls the function holding that step).
- * On this account the local VM has been observed booting because a cloud session's `device_bash`, a scheduled
- * task, or a local-lane session started it, so this staging path is the harness's agent supply — if Desktop
- * drops the call or moves it off the startVM path, the agent stops being staged with nothing else noticing.
- * Fail closed.
- */
 /** The rejection handler of Desktop 4.23118.0's staging element, as text between the `.catch(` parens: true only for
  *  `(<id>=>{…;return{ready:!1,…}})` or `(<id>=>({ready:!1,…}))`. The returned literal must be the one way out, lead with
- *  `ready:!1`, and hold no spread that could override it; `ready:` appears nowhere else (a log line naming it refuses, the
- *  safe side to err on), and the handler makes no dotted `prepareForVM(` call of its own. */
+ *  `ready:!1`, and hold only plain `key:value` pairs: a spread, computed key, getter or method could override it.
+ *  Fail closed on purpose, so a refusal of these is the pin working, and costs one sync cycle: the text is scanned without
+ *  regard to strings, so a log line holding `ready:`, the word `return`, or a dotted `<ns>.prepareForVM(` refuses, and a
+ *  `return` must open the body or follow `;`, so a `}return` after a block refuses. Other arrow spellings (a bare `e=>`,
+ *  `(e)=>`) refuse until a build uses them. */
 function stagingHandlerReportsNotReady(handler: string): boolean {
   if (!handler.startsWith("(") || matchClose(handler, 0) !== handler.length - 1) return false;
   const inner = handler.slice(1, -1);
@@ -5856,7 +5847,25 @@ function stagingHandlerReportsNotReady(handler: string): boolean {
   }
   if (matchClose(body, open) !== closeWanted) return false;
   const members = splitTop(body.slice(open + 1, closeWanted)).map((m) => m.trim());
-  return members[0] === "ready:!1" && !members.some((m) => m.startsWith("..."));
+  return members[0] === "ready:!1" && members.every((m) => /^[\w$]+:/.test(m));
+}
+
+/** From 4.23118.0 the staging handler turns a rejection into a not-ready result, so the block after the Promise.all is
+ *  all that stops the VM starting without a staged agent. True only when `tail` (from the array's `]`) opens with
+ *  `]);if(!<result>.ready){` and that block ends in a top-level `throw` with no `return` ahead of it. */
+function notReadyResultThrows(tail: string, result: string): boolean {
+  const head = new RegExp(`^\\]\\);if\\(!${reEsc(result)}\\.ready\\)\\{`).exec(tail);
+  if (!head) return false;
+  const open = head[0].length - 1;
+  const close = matchClose(tail, open);
+  if (close < 0) return false;
+  const block = tail.slice(open + 1, close);
+  const at = [...block.matchAll(/(?<![\w$.])throw(?![\w$])/g)].at(-1)?.index;
+  if (at === undefined || (at !== 0 && block[at - 1] !== ";")) return false;
+  if (/(?<![\w$.])return(?![\w$])/.test(block.slice(0, at))) return false;
+  // A `}` the rest cannot balance means the `throw` sat inside a nested block.
+  const rest = block.slice(at);
+  return matchClose(`{${rest}}`, 0) === rest.length + 1;
 }
 
 /** True when exactly one element of the `Promise.all([...])` is `<ns>.prepareForVM(<one id>)`, bare or with a `.catch`
@@ -5874,6 +5883,18 @@ function stagesAgentBinary(elements: string): boolean {
   return stagingHandlerReportsNotReady(rest.slice(".catch(".length, -1));
 }
 
+/**
+ * The staged agent binary the harness runs is put on disk by Desktop's VM start: `startVM` runs the VM
+ * bundle download and `prepareForVM` (the SDK/agent staging) together, as one step:
+ *
+ *     s.stepStarted("download_and_sdk_prepare");let[d,h]=await Promise.all([BJ(e,t),EG.prepareForVM(t)]);
+ *
+ * reached from the `startVM` export (`startVM:()=>KJ`, whose body calls the function holding that step).
+ * On this account the local VM has been observed booting because a cloud session's `device_bash`, a scheduled
+ * task, or a local-lane session started it, so this staging path is the harness's agent supply — if Desktop
+ * drops the call or moves it off the startVM path, the agent stops being staged with nothing else noticing.
+ * Fail closed.
+ */
 export function checkVmAgentStagingFacts(files: Map<string, string>): string[] {
   const flags: string[] = [];
   const miss = (why: string) => flags.push(`vm agent staging anchor missing — ${why}`);
@@ -5889,7 +5910,7 @@ export function checkVmAgentStagingFacts(files: Map<string, string>): string[] {
   }
   const { chunk, at } = sites[0];
   const after = chunk.slice(at + STEP.length);
-  const head = after.match(/^;let\[[\w$]+,[\w$]+\]=await Promise\.all\(\[/);
+  const head = after.match(/^;let\[[\w$]+,([\w$]+)\]=await Promise\.all\(\[/);
   // Quote- and bracket-aware: from 4.23118.0 an element's rejection handler logs "[VM:start] …", whose `]` ended a
   // `[^\]]*` capture early.
   const closeAt = head ? matchClose(after, head[0].length - 1) : -1;
@@ -5900,6 +5921,8 @@ export function checkVmAgentStagingFacts(files: Map<string, string>): string[] {
   // result, which the code after the Promise.all throws just as before.
   else if (!stagesAgentBinary(after.slice(head[0].length, closeAt)))
     miss("the download_and_sdk_prepare Promise.all no longer runs prepareForVM(<one argument>) — the agent binary may no longer be staged");
+  else if (!notReadyResultThrows(after.slice(closeAt), head[1]!))
+    miss("the not-ready result of the download_and_sdk_prepare step no longer throws — a failed staging may start the VM with no agent");
   const holder = enclosingFunctionName(chunk, at);
   const startChunk = [...files.values()].find((c) => /(?<![\w$])startVM:\(\)=>[\w$]+/.test(c));
   const start = startChunk ? startChunk.match(/(?<![\w$])startVM:\(\)=>([\w$]+)/)![1] : null;

@@ -617,8 +617,9 @@ describe.skipIf(!ASAR_BACKUPS)("readHostLoopFence + checkArtifactsMcpGuardFacts 
 
 // The spawn-contract and VM-staging sentinels over saved asars: 4.16336.0 holds the older shapes (Artifact predicates in
 // the spawn chunk, a bare prepareForVM element) and 4.23118.0 the newer ones (a shared chunk behind a namespace, a
-// rejection handler). The older builds in each table predate a shape the sentinel pins, so each oracle is able to fail,
-// and the real-byte mutations show the newer forms are read, not skipped.
+// rejection handler). The older builds in each table refuse for reasons unrelated to those shapes (an env key, the startVM
+// export), so those rows show only that the suite reads real bytes; no saved build fails on the pinned shapes. The
+// real-byte mutations are what make the newer forms falsifiable.
 describe.skipIf(!ASAR_BACKUPS)("checkSpawnContractFacts + checkVmAgentStagingFacts oracle over saved Desktop asars", () => {
   const read = (version: string) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
@@ -670,6 +671,15 @@ describe.skipIf(!ASAR_BACKUPS)("checkSpawnContractFacts + checkVmAgentStagingFac
       '$1"other_policy"$2',
     );
     expect(spawnFlags(files).join("\n")).toContain("S6d");
+  });
+  it("4.23118.0 with the not-ready result no longer thrown flags", () => {
+    const files = read("4.23118.0");
+    mutate(
+      files,
+      /(\]\);if\(![\w$]+\.ready\)\{let [\w$]+=[\w$]+\(Error\([\w$]+\.error\?\?"SDK preparation failed"\)[^;]*;)throw /,
+      "$1void ",
+    );
+    expect(checkVmAgentStagingFacts(files).join("\n")).toContain("no longer throws");
   });
   it("4.23118.0 with the staging handler reporting ready flags", () => {
     const files = read("4.23118.0");
@@ -5967,6 +5977,7 @@ describe("checkVmAgentStagingFacts — startVM still stages the agent", () => {
     if (!files) return;
     expect(checkVmAgentStagingFacts(files)).toEqual([]);
   });
+  const READY_BLOCK = 'if(!h.ready){let e=Error(h.error??"SDK preparation failed");throw s.stepFailed("download_and_sdk_prepare",e),e}';
   const MUT: ReadonlyArray<readonly [string, (s: string) => string]> = [
     ["V1 prepareForVM dropped from the Promise.all", (s) => s.replace("[BJ(e,t),EG.prepareForVM(t)]", "[BJ(e,t)]")],
     [
@@ -5981,6 +5992,20 @@ describe("checkVmAgentStagingFacts — startVM still stages the agent", () => {
     ["V5 the startVM export is gone", (s) => s.replace("startVM:()=>KJ,", "")],
     // The real call passes one identifier (`EG.prepareForVM(t)`); an options object could switch staging off.
     ["V6 prepareForVM called with an options object", (s) => s.replace("EG.prepareForVM(t)", "EG.prepareForVM(t,{skip:!0})")],
+    ["V7 a not-ready result is logged and the start continues", (s) => s.replace(READY_BLOCK, "if(!h.ready){Z.warn(h.error)}")],
+    [
+      "V8 the check reads the other result",
+      (s) =>
+        s.replace(
+          READY_BLOCK,
+          'if(!d.ready){let e=Error(h.error??"SDK preparation failed");throw s.stepFailed("download_and_sdk_prepare",e),e}',
+        ),
+    ],
+    ["V9 the not-ready check is gone", (s) => s.replace(READY_BLOCK, "")],
+    ["V10 the throw sits under a further condition", (s) => s.replace(READY_BLOCK, "if(!h.ready){if(h.fatal){throw h.error}}")],
+    ["V11 a return ahead of the throw", (s) => s.replace(READY_BLOCK, "if(!h.ready){return;throw h.error}")],
+    ["V12 the throw is only an unbraced conditional", (s) => s.replace(READY_BLOCK, "if(!h.ready){if(h.fatal)throw h.error}")],
+    ["V13 the word throw only in a log line", (s) => s.replace(READY_BLOCK, 'if(!h.ready){Z.warn("will throw")}')],
   ];
   it.each(MUT)("mutation %s fails loud (%#)", (_label, mutate) => {
     expect(checkVmAgentStagingFacts(vmChunk(mutate)).join("\n")).toContain("vm agent staging");
@@ -6011,9 +6036,13 @@ describe("checkVmAgentStagingFacts — startVM still stages the agent", () => {
     ["ready is not the first member", "EG.prepareForVM(t).catch((e=>({error:1,ready:!1})))"],
     ["a function reference handler", "EG.prepareForVM(t).catch(notReady)"],
     ["an array in place of the handler", "EG.prepareForVM(t).catch([e=>({ready:!1})])"],
+    ["a function expression in place of the arrow", "EG.prepareForVM(t).catch((function(e){return{ready:!1}}))"],
     ["an object in place of the handler", "EG.prepareForVM(t).catch((({ready:!1})))"],
-    ["a list, not an object, as the expression body", "EG.prepareForVM(t).catch((e=>([ready:!1])))"],
-    ["a list, not an object, as the returned value", "EG.prepareForVM(t).catch((e=>{return(ready:!1)}))"],
+    ["the arrow is called, not passed", "EG.prepareForVM(t).catch((e=>({ready:!1}))(y))"],
+    ["a call, not an object, as the expression body", "EG.prepareForVM(t).catch((e=>(notReady(e))))"],
+    ["a call, not an object, as the returned value", "EG.prepareForVM(t).catch((e=>{return notReady(e)}))"],
+    ["a computed key overriding not-ready", 'EG.prepareForVM(t).catch((e=>{return{ready:!1,["ready"]:!0}}))'],
+    ["a getter overriding not-ready", "EG.prepareForVM(t).catch((e=>({ready:!1,get ready(){return!0}})))"],
     ["a statement after a return with two members", "EG.prepareForVM(t).catch((e=>{return{ready:!1,a:1};f()}))"],
     ["an options object beside the handler", CATCH.replace("prepareForVM(t)", "prepareForVM(t,{skip:!0})")],
     ["something chained after the handler", `${CATCH}.then(e=>({ready:!0}))`],
