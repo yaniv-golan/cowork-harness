@@ -225,7 +225,7 @@ Three things live outside the flow dir, and the loop needs all three for the who
 | Prove the mechanism is wired | The `skill_invoked` column (pass `--skill <name>` when the plugin has several skills), and a null run: `hillclimb run … --flow <dir>-null --ablate` into a sibling flow. The null flow has its own `_state.json` and gate: you run `state-template` and the `--dry-run --approve-harness` for it first |
 | Recompute the headline from raw results | Rows carry every grade key; recompute from `results.jsonl` |
 | Spot-check grading; fix a rubric and re-grade in place | Edit the rubric, approve the new sha (`--dry-run --approve-harness`, with the loop's `--skill`), then `hillclimb regrade <target> --flow <dir>`. See [what a re-grade can change](#what-a-re-grade-can-and-cannot-change) |
-| Verify the served model and retries | A run served by another model is an `errors.jsonl` row (`serving_substitution`), and so is one with no evidence of the pinned model, unless the agent itself failed first (then it is a scored agent failure). A run whose agent sent another effort than `--effort` asked for, or none, is one too (`effort_not_sent`) |
+| Verify the served model and retries | A run served by another model is an `errors.jsonl` row (`serving_substitution`), and so is one with no evidence of the pinned model, unless the agent itself failed first (then it is a scored agent failure). A run whose agent sent another effort than `--effort` asked for, or none, is one too (`effort_not_sent`). An undated pin also accepts its dated snapshot, so a variant's scored rows for one pin can come from two snapshots: that pass exits `1` and every later pass is refused (start a fresh flow dir and pin the dated id), unless `--allow-model-split`, which every row then records as `meta.model_split_allowed`; `hillclimb check` warns on it |
 | A probe or canary on one case | `hillclimb run … --case <id>`; it is the variant's first run, so it fixes that variant's snapshot |
 | Print the resolved scope every run | Every pass prints how many (case, rep) slots it will run and names the slots it re-runs after a failure; `--dry-run` adds the cost estimate |
 | `_state.json` and `harness_paths` | `hillclimb state-template … --flow <dir>`: save its stdout; after adding a metric, merge only the new `metrics` entries |
@@ -471,7 +471,7 @@ rows, and no fixed multiplier reproduces it. So:
 - **There is no spend cap on `hillclimb run`.** It takes no `--max-budget-usd`. Recompute spend from the files
   after every round, as the loop's guide does, and stop at your budget. (`--max-budget-usd` on `run` and `eval` is
   a pre-flight refusal priced from the agent's cost history, not a cap on spend: only a `--repeat` batch keeps a running
-  total, and an `eval` is never stopped mid-way.)
+  total, and the cap never stops an `eval` mid-way.)
 - **A ballpark before you start.** A round is cases × reps agent runs, plus the judge calls of every judged
   assertion on every row (a `semantic_pairwise` assert makes one per reference it is judged against, and `order: both` doubles it). One
   live run observed about 33 s per pairwise judge call. Price one case first: the optional one-case baseline run in
@@ -789,7 +789,7 @@ after search.
 | Code | When |
 |---|---|
 | `0` | every attempted (case, rep) was scored |
-| `1` | any attempt failed (an `errors.jsonl` row, `search_pool_mismatch` and `search_refused` included), the pass stopped mid-run, a reference freeze failed, or `summary.json` could not be written |
+| `1` | any attempt failed (an `errors.jsonl` row, `search_pool_mismatch` and `search_refused` included), the pass stopped mid-run (a judge or LLM decider call refused for its credential or model, or out of quota, stops it: the envelope's `stopped` names the slot), the variant's scored rows for one pin were served two model ids (without `--allow-model-split`), a reference freeze failed, or `summary.json` could not be written |
 | `2` | refused before spending: usage, the harness gate, a credential, and with `--search-corpus` a one-sided, mixed or unbounded pool, rows served from another pool, a pool that cannot be read, or a pool copy that cannot be written |
 
 `hillclimb check` exits `1` on any error finding, the frozen-corpus ones included.

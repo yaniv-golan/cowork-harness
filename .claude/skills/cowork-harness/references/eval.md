@@ -31,7 +31,7 @@ cowork-harness eval report <eval-dir>     # rebuild the report from the eval dir
   its power and cost. "Detectable" is not 80% power: read `power` / `nForPower80`. Covered JSON: `plan.cost`'s
   summary keys only.
 - `--max-budget-usd <x>` refuses before any run (exit 2, `error.code: "budget_exceeded"`) when the scenarios'
-  worst observed runs × 2 × `--reps` exceed x — pre-flight only, agent cost only, never a mid-run stop.
+  worst observed runs × 2 × `--reps` exceed x — pre-flight only, agent cost only; the cap never stops a run mid-way.
 - In a scenario directory, YAML with no `prompt:` (a session file) is skipped.
 - Run an A/A first (`--allow-identical-arms`, the same source twice) to see your scenarios' noise.
 - A directory arm's snapshot leaves out untracked files unless you pass `--include-untracked` (not with a
@@ -65,7 +65,7 @@ on a question is graded normally when the scenario asserts `allow_stall: true`, 
 under `allow_max_turns: true` (rule `turn_cap_allowed`; `result: success` still fails). Only after that
 are a pin the agent did not honour (false, or unknown on a rep that completed) and a snapshot that changed
 excluded and reported. A loud UNCLASSIFIED count means a termination the classifier does not know — read
-those runs. Per scenario: if EVERY rep of both arms errored, or every rep of one arm is infrastructure,
+those runs. Per scenario: if EVERY rep of both arms errored, or every rep of one arm is excluded,
 that scenario compared nothing — its rows are `insufficient` and the eval exits 1. If one arm's every rep
 is the agent's own failure and the other arm ran, the reps are scored (a real drop) — exit 0 unless
 `--fail-on`. Either way the header
@@ -81,7 +81,7 @@ rewrite the eval's `runs.jsonl` or report. Pruned run dirs are listed as not re-
 
 ## Refused before any run (exit 2)
 
-- a model or judge that is an alias (`opus`, `best`) rather than a concrete id;
+- a model or judge that is an alias (`opus`, `best`, `-latest`, `-0`) rather than a concrete id;
 - a judge credential the API refuses (401/403), a judge model it does not know (404), or a spent quota, found by one real call per grader (role, model)
   after every other check (`--no-judge-check` / `COWORK_HARNESS_JUDGE_CHECK=0` skip it; a dry run never makes it);
 - an eval dir inside any git work tree (the snapshots would mount empty);
@@ -141,8 +141,8 @@ rewrite the eval's `runs.jsonl` or report. Pruned run dirs are listed as not re-
 ## Exit codes
 
 `0` completed — no drop fails the eval unless you pass `--fail-on`. `1` a drop or a worse metric at the `--fail-on`
-level, every row `insufficient`, a scenario that compared nothing, a metric row `not compared`, or the judge model
-differed across reps, or a rep was not served from the pinned pool (an A/A run under `--fail-on possible`
+level, every row `insufficient`, a scenario that compared nothing, a metric row `not compared`, a job with no record (a refused grader stops the eval), the agent
+or judge model differing across reps, or a rep was not served from the pinned pool (an A/A run under `--fail-on possible`
 can exit 1 on noise). `2` usage or a refusal. `3` an arm snapshot or the pool copy could not be made or staged.
 
 ## Files

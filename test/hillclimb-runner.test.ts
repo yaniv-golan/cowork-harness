@@ -1053,6 +1053,17 @@ describe("one model per pin across a variant's scored rows", () => {
     expect(r.error?.message).toContain("its scores come from more than one model");
   });
 
+  it("--allow-model-split: the split pass exits 0 with a warning, a later pass runs, and its rows record the flag", async () => {
+    await approved();
+    behave = (id) => served(id === "alpha" ? `${MODEL}-20251001` : `${MODEL}-20251101`);
+    const first = await runHillclimb(args("--allow-model-split"), deps());
+    expect(first.exitCode).toBe(0);
+    expect(err.join("\n")).toContain("allowed (--allow-model-split)");
+    const r = await runHillclimb(args("--reps", "2", "--allow-model-split"), deps());
+    expect(r.exitCode).toBe(0);
+    expect(rows("baseline").every((x: { meta: Record<string, unknown> }) => x.meta.model_split_allowed === true)).toBe(true);
+  });
+
   it("(control) one snapshot on every row is fine", async () => {
     await approved();
     behave = () => served(`${MODEL}-20251001`);

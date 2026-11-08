@@ -913,7 +913,7 @@ function budgetGate(
     throw new EvalBudgetRefusal(
       `--max-budget-usd ${usd(cap)} refused before any run: this eval schedules ${basis}up to ${usd(c.estimate.known)} ` +
         `(plan.cost.budgetGateWorstUsd in the JSON envelope)${c.status.enforced === "lower_bound" ? `, and that is a LOWER BOUND: ${c.status.unpriced.length} scenario(s) have no priced run` : ""}.`,
-      `Raise the cap, lower --reps, or drop --max-budget-usd to run anyway. This is a PRE-flight estimate from history: the eval is never stopped mid-way, and judge spend is not counted.`,
+      `Raise the cap, lower --reps, or drop --max-budget-usd to run anyway. This is a PRE-flight estimate from history: the cap never stops a run mid-way, and judge spend is not counted.`,
       c.status,
       plan,
     );

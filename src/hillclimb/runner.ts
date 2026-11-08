@@ -328,6 +328,10 @@ async function run(
         `${mix.refusals.join("; ")} — one variant would mix two settings: run the change as a new variant (--variant v<N>), or keep the setting the rows ran with`,
       );
     for (const w of mix.warnings) say(w);
+    // One model per pin across the variant's scored rows, before spend (the pass itself is checked again after the pool).
+    const splits = servedModelSplits(existing.variants[v]?.results).map((sp) => servedModelSplitText(v, sp));
+    if (splits.length && !args.allowModelSplit) throw new UsageError(splits.join("; "));
+    for (const t of splits) say(`::warning:: ${t} — running anyway (--allow-model-split)`);
   }
 
   // The harness gate (runner-scaffold.mjs l.238-277). A --skill selection joins the digest as `skill:<name>`: it
@@ -541,6 +545,7 @@ async function run(
           ...(deps.skillTracked !== undefined ? { skillTracked: deps.skillTracked } : {}),
           ...(args.ablate ? { ablated: true } : {}),
           ...(c.scenario.on_unanswered === "llm" ? { nonDeterministic: true } : {}),
+          ...(args.allowModelSplit ? { modelSplitAllowed: true } : {}),
           ...(deps.searchCorpus ? { searchCorpus: deps.searchCorpus } : {}),
         },
       };
@@ -661,8 +666,11 @@ async function run(
     // earlier passes, so a snapshot that rolled DURING this pass is caught here.
     if (w)
       for (const sp of servedModelSplits(w.readVariantFile("results.jsonl"))) {
-        stepFailures++;
-        say(`[${v}] ${servedModelSplitText(v, sp)}`);
+        if (args.allowModelSplit) say(`::warning:: [${v}] ${servedModelSplitText(v, sp)} — allowed (--allow-model-split)`);
+        else {
+          stepFailures++;
+          say(`[${v}] ${servedModelSplitText(v, sp)}`);
+        }
       }
     // After the pool the rows are on disk: a failure here is reported but never loses the pass's counts.
     if (deps.afterPass && w)
@@ -910,7 +918,6 @@ function requestedMix(
           `warning: variant ${variant}'s rows for ${named(ids)} ran ${what} ${value}, and this pass runs ${what} ${[...thisPass].join(", ")} for ${named(byId.keys())}: the variant's cases ran different settings — compare across them only knowingly`,
         );
   }
-  for (const sp of servedModelSplits(snap.variants[variant]?.results)) refusals.add(servedModelSplitText(variant, sp));
   return { refusals: [...refusals], warnings };
 }
 

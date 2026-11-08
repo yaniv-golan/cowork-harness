@@ -76,7 +76,7 @@ scenario's `timeout_ms` is shorter (a tie goes to the runner; `timeout.source: r
 running finishes; reaching it is an `errors.jsonl` `timeout` row, while a shorter `timeout_ms` of the scenario's own
 firing first is a scored `errored_agent` row), `--model ID` and `--judge-model ID` (concrete ids; an alias is refused),
 `--effort LEVEL` (below),
-`--case ID`, `--skill NAME`, `--approve-harness`, `--ablate`, `--dry-run`, `--no-copy-inputs`, `--no-judge-check` (skip the
+`--case ID`, `--skill NAME`, `--allow-model-split` (rows served two snapshots of one pin; else exit 1, then refused), `--approve-harness`, `--ablate`, `--dry-run`, `--no-copy-inputs`, `--no-judge-check` (skip the
 one real call that checks the graders' credential before the first agent run), `--decider-cmd CMD` or
 `--decider-dir DIR`, `--output-format text|json`, `--dotenv FILE`, `--run-dir DIR`.
 
@@ -435,7 +435,7 @@ the session's `outputs/` before turn 1, so the prompt asks for the late step alo
 ## Exit codes
 
 - `run`: `0` every attempted (case, rep) was scored; `1` an attempt failed (an `errors.jsonl` row, or a scored
-  row whose trace or copies could not be written), the pass stopped mid-run (rows already written are kept),
+  row whose trace or copies could not be written), the pass stopped mid-run (rows already written are kept; a refused grader credential stops it),
   a baseline pass could not freeze a pairwise case's reference, or `summary.json` could not be written; `2`
   refused before spending (a frozen-corpus refusal or a pool copy that cannot be written included). `--dry-run`
   exits `0` unless a refusal fires; it verifies a `--search-corpus` pool but never copies it. The `done - N ok, M failed` line and

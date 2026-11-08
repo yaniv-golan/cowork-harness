@@ -100,6 +100,8 @@ export interface AttemptContext {
     skillTracked?: string;
     ablated?: boolean;
     nonDeterministic?: boolean;
+    /** The pass ran under `--allow-model-split`. */
+    modelSplitAllowed?: boolean;
     /** The pass's frozen search corpus: what every rep must have been served from, and how its records relate to the
      *  variants the flow compares. */
     searchCorpus?: {
@@ -611,6 +613,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       ...(toolCalls !== undefined ? { web_fetches: toolCalls.filter((t) => t.name === "WebFetch").length } : {}),
       ...(ctx.meta.ablated ? { ablated: true } : {}),
       ...(ctx.meta.nonDeterministic ? { non_deterministic: true } : {}),
+      ...(ctx.meta.modelSplitAllowed ? { model_split_allowed: true } : {}),
     },
   };
   return { dest: "results", row };
