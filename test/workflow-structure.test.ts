@@ -59,6 +59,8 @@ describe("the hang budgets of the sharded test jobs", () => {
   interface TimedStep {
     name?: string;
     run?: string;
+    env?: Record<string, string>;
+    with?: Record<string, string>;
     "timeout-minutes"?: number;
   }
   const budget = (id: string, preVitestS: number) => {
@@ -97,7 +99,24 @@ describe("the hang budgets of the sharded test jobs", () => {
     expect(job.strategy["fail-fast"]).toBe(false);
     const n = job.strategy.matrix.shard.length;
     expect(job.strategy.matrix.shard).toEqual(Array.from({ length: n }, (_, i) => i + 1));
-    expect(job.steps.map((s) => s.run ?? "").join("\n")).toContain(`--shard=\${{ matrix.shard }}/${n} `);
+    const shardStep = job.steps.find((s) => (s.run ?? "").includes("--shard="));
+    expect(shardStep?.run).toContain(`--shard=\${{ matrix.shard }}/${n} `);
+    expect(shardStep?.name).toContain(`shard \${{ matrix.shard }}/${n}`);
+  });
+
+  // Hang dumps written anywhere else are outside the uploaded artifact, so a captured hang would be lost silently.
+  it.each([
+    ["ci.yml", "test"],
+    ["ci.yml", "floor"],
+    ["floor-unsharded.yml", "floor-unsharded"],
+  ])("%s, %s: the suite watchdog, the job-level dump and the upload share one directory", (file, id) => {
+    const HANG_DIR = "${{ runner.temp }}/hangs";
+    const job = workflows().find((w) => w.file === file)!.doc.jobs?.[id] as unknown as { steps: TimedStep[] };
+    const vitest = job.steps.find((s) => /npx vitest run/.test(s.run ?? ""));
+    expect(vitest?.env?.COWORK_TEST_HANG_DIR).toBe(HANG_DIR);
+    expect(job.steps.map((s) => s.run ?? "").join("\n")).toMatch(/scripts\/ci\/hang-dump\.sh \d+ "\$RUNNER_TEMP\/hangs"/);
+    const upload = job.steps.find((s) => (s.with?.name ?? "").startsWith("hangs-"));
+    expect(upload?.with?.path).toBe(HANG_DIR);
   });
 });
 

@@ -604,8 +604,9 @@ jobs:
     # The dump is armed before the step, so 420 s on its clock is about 390 s into vitest; with its 120 s gdb budget it
     # ends before the kill at 600 s. Do not tighten the delay: gdb pauses every test process it attaches to, which can
     # fail a healthy test, so a dump must sit well above any healthy shard.
-    # Measured 2026-11-08 (`gh run view <id> --json jobs`, the "Unit tests" step of the 4-way `test` job, the last five
-    # main runs; a Node 22 shard costs about the same): worst shard 348 s, so ~230 s across six, 1.7x under the dump.
+    # Measured 2026-11-08 (`gh run view <id> --json jobs`, the "Unit tests" step of the 4-way `test` job on Node 24, the
+    # last five main runs): worst shard 348 s. No six-way figure follows from that: vitest's shard is a slice of the
+    # files in hash order, so shards are uneven. The six-way figure is measured from this job's run on its pull request.
     timeout-minutes: 18
     permissions:
       contents: read

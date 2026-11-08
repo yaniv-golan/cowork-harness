@@ -20,12 +20,12 @@ jobs:
     runs-on: ubuntu-latest
     # Hard backstop, same reason the sharded `test` job carries one: a test that spawns a CLI subprocess
     # which blocks hangs SYNCHRONOUSLY, and vitest's per-test timeout cannot interrupt a blocked sync
-    # call — only a wall-clock kill can. This job runs the suite UNSHARDED, the shape the `test` job's
-    # own header calls "the former `unit` 15-min pole", so 40 is a generous backstop, not a target.
+    # call — only a wall-clock kill can. This job runs the suite UNSHARDED, the shape the banner above
+    # ci.yml's `test` job calls "the former `unit` 15-min pole", so 45 is a generous backstop, not a target.
     #
     # Budget for the hang path: setup incl. gdb install <= 3 min [~0.75]  +  Build + test <= 37 (its step limit)
     #   + disarm <= 1 (the dump fires at 32 min with a 2.5-min gdb budget, so it is done by ~35)  +  upload <= 1
-    #   = 42 min, under this 45. A green Build + test takes ~9 min.
+    #   = 42 min, under this 45. A green Build + test took 10 to 16 min on the last eight main runs (2026-11-08).
     timeout-minutes: 45
     permissions:
       contents: read
