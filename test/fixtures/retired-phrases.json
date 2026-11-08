@@ -1,0 +1,27 @@
+{
+  "phrases": [
+    {
+      "phrase": "gate-needs-controlout",
+      "reason": "lint no longer reports this: every cassette this build reads carries controlOut"
+    },
+    {
+      "phrase": "controlout-missing",
+      "reason": "verify-cassettes no longer lists this: a gate key is always checkable"
+    },
+    {
+      "phrase": "l0HostConfigContamination",
+      "reason": "the field was renamed and later removed with the config-dir seal"
+    },
+    {
+      "phrase": "no spend cap",
+      "reason": "hillclimb run has a per-pass spend cap, --max-budget-usd"
+    }
+  ],
+  "allowlist": [
+    {
+      "phrase": "gate-needs-controlout",
+      "file": "test/skill-restructure-completeness.test.ts",
+      "reason": "a comment there records why the check that used this code was retired"
+    }
+  ]
+}

@@ -19,6 +19,8 @@ const ALLOWLIST = new Set<string>([
   "test/docs-present-tense.test.ts",
   "test/docs-index-sync.test.ts",
   "test/no-internal-doc-references.test.ts",
+  // Holds a known-positive for each public hygiene pattern, on purpose.
+  "test/fixtures/public-hygiene/samples.json",
 ]);
 
 const SKIP_DIRS = new Set(["node_modules", "dist", ".git"]);
@@ -59,6 +61,12 @@ describe("no docs/internal references leak into shipped files", () => {
   it("scanned a non-trivial number of files (a walk that finds nothing would false-green)", () => {
     // Floor well below the real count so a SKIP_DIRS typo or a wrong root can't silently pass.
     expect(shippedSurfaceFiles().length).toBeGreaterThan(50);
+  });
+
+  it("every allowlisted file exists and still has the string, so the list cannot rot", () => {
+    for (const rel of ALLOWLIST) {
+      expect(readFileSync(join(REPO_ROOT, rel), "utf8"), rel).toContain("docs/internal");
+    }
   });
 
   it("contains no `docs/internal` reference outside the allowlisted files", () => {

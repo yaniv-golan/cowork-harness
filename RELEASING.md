@@ -47,8 +47,8 @@ branch and opening a PR lets CI prove the exact SHA before anything lands on `ma
 
 ```
 Phase 1: git checkout -b release/X.Y.Z
-         git push origin release/X.Y.Z
-         gh pr create --base main --head release/X.Y.Z --title "release: X.Y.Z"
+         scripts/open-pr.sh <body-file> --title "release: X.Y.Z"   # checks what it publishes, then pushes and opens the PR
+         # <body-file> is a Markdown file holding the PR description; an empty one is refused.
          # CI runs on the PR. The live scenario job is SKIPPED whenever ANTHROPIC_API_KEY is
          #   unavailable — which is the case today; see "best-effort (not a publish gate)" above.
   ↓  CI passes
@@ -360,8 +360,7 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
 - [ ] **Phase 1 — branch + PR**:
       ```
       git checkout -b release/X.Y.Z
-      git push origin release/X.Y.Z
-      gh pr create --base main --head release/X.Y.Z --title "release: X.Y.Z"
+      scripts/open-pr.sh <body-file> --title "release: X.Y.Z"   # <body-file> holds the PR description; an empty one is refused
       gh run watch $(gh run list --branch release/X.Y.Z --limit 1 --json databaseId --jq '.[0].databaseId')
       ```
 - [ ] **Wait for CI green** on the PR. Fix any failures on the branch and push again; CI re-runs
