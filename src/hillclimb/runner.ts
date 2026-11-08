@@ -647,83 +647,35 @@ async function run(
         report = { thrown: e, events: [], children: [], attemptS: (now() - tStart) / 1000, runnerTimeout: false };
       }
       const graderFailure = graderCredentialFailure(report.result, report.thrown);
-      const ctx: AttemptContext = {
-        caseId: c.id,
-        ...(c.originalId !== undefined ? { originalId: c.originalId } : {}),
-        scenarioName: c.name,
-        prompt: c.scenario.prompt,
-        assertions: c.scenario.assert,
-        expectDenied: c.scenario.expect_denied ?? [],
+      const ctx = attemptContext(c, rep, report, {
         metrics,
-        ...(deps.pairwise ? { pairwise: deps.pairwise } : {}),
-        rep,
+        flowHash,
+        env: deps.virtual,
+        sig: sigOf(c),
         pin: deps.pin(c),
         requestedEffort: deps.requestedEffort(c),
         credentialEnv: deps.credentialEnv(c),
-        ...(sigOf(c) !== undefined ? { expectedContentSig: sigOf(c)! } : {}),
-        events: report.events,
-        ...(report.transcript !== undefined ? { transcript: report.transcript } : {}),
-        ...(report.transcriptWhere !== undefined ? { transcriptWhere: report.transcriptWhere } : {}),
-        attemptS: report.attemptS,
-        runnerTimeout: report.runnerTimeout,
-        tags: [basename(dirname(c.file))],
-        ...(report.skillInvoked !== undefined ? { skillInvoked: report.skillInvoked } : {}),
-        meta: {
-          flowHash,
-          env: deps.virtual,
-          ...(report.runDir !== undefined ? { runDir: report.runDir } : {}),
-          ...(sigOf(c) !== undefined ? { contentSig: sigOf(c)! } : {}),
-          // The skill hash the run itself staged (evidence), not one recomputed here.
-          ...(typeof report.result?.fingerprint?.skillHash === "string" ? { skillHash: report.result.fingerprint.skillHash } : {}),
-          ...(deps.skillTracked !== undefined ? { skillTracked: deps.skillTracked } : {}),
-          ...(args.ablate ? { ablated: true } : {}),
-          ...(c.scenario.on_unanswered === "llm" ? { nonDeterministic: true } : {}),
-          ...(args.allowModelSplit ? { modelSplitAllowed: true } : {}),
-          ...(deps.searchCorpus ? { searchCorpus: deps.searchCorpus } : {}),
-        },
-      };
-      let out: ReturnType<typeof attemptRow>;
-      try {
-        out = attemptRow(
-          { ...(report.result ? { result: report.result } : {}), ...(report.thrown !== undefined ? { thrown: report.thrown } : {}) },
-          ctx,
-        );
-      } catch (e) {
-        rethrowIfExit(e);
-        // A row that cannot be built is this attempt's failure, not the pass's.
-        out = {
-          dest: "errors",
-          row: {
-            prompt_id: c.id,
-            rep,
-            ...(c.originalId !== undefined ? { original_id: c.originalId } : {}),
-            failure_class: "error",
-            error: `could not build the row: ${message(e)}`,
-            retries: 0,
-            judge_retries: 0,
-            latency_s: report.attemptS,
-            // The attempt's spend stays countable; counters it could not report are said, not zeroed.
-            meta: {
-              failure_rule: "row_build",
-              // What the attempt asked for, as on every other error row.
-              ...(ctx.pin !== undefined ? { model_requested: ctx.pin } : {}),
-              ...(ctx.requestedEffort !== undefined ? { effort: ctx.requestedEffort.effort } : {}),
-              ...(ctx.requestedEffort?.noSelector ? { effort_selector: false } : {}),
-              retries_unrecorded: true,
-              judge_retries_unrecorded: true,
-              ...(typeof report.result?.cost?.usd === "number" ? { cost_usd: report.result.cost.usd } : {}),
-              ...(typeof report.result?.deciderCostUsd === "number" ? { decider_usd: report.result.deciderCostUsd } : {}),
-              ...fallbackBilling(report, ctx),
-              ...(report.runDir !== undefined ? { run_dir: report.runDir, run_id: basename(report.runDir) } : {}),
-            },
-          },
-        };
-      }
-      if (out.dest === "errors") {
+        ...(deps.pairwise ? { pairwise: deps.pairwise } : {}),
+        ...(deps.skillTracked !== undefined ? { skillTracked: deps.skillTracked } : {}),
+        ...(deps.searchCorpus ? { searchCorpus: deps.searchCorpus } : {}),
+        ablate: args.ablate,
+        allowModelSplit: args.allowModelSplit,
+      });
+      const rec = recordAttempt({
+        writer,
+        variant: v,
+        c,
+        rep,
+        report,
+        ctx,
+        secrets: deps.secrets,
+        uploads: deps.inputs?.(c) ?? [],
+        noCopyInputs: args.noCopyInputs,
+      });
+      if (rec.dest === "errors") {
         fail++;
-        writer.appendError(out.row);
-        say(`  [${v}] ${c.stem} rep${rep} FAILED: ${String(out.row.error)}`);
-        const meta = out.row.meta as Record<string, unknown> | undefined;
+        say(`  [${v}] ${c.stem} rep${rep} FAILED: ${String(rec.row.error)}`);
+        const meta = rec.row.meta as Record<string, unknown> | undefined;
         if (!authHinted && deps.authHint && meta?.failure_rule === "auth") {
           authHinted = true;
           say(`  [${v}] ${deps.authHint(c)}`);
@@ -733,67 +685,16 @@ async function run(
           judgeAuthHinted = true;
           say(`  [${v}] ${graderCredentialHint()}`);
         }
-        return { graderFailure, written: { row: out.row as Record<string, unknown>, scored: false } };
+        return { graderFailure, written: { row: rec.row, scored: false } };
       }
-      // The session's uploads: attached to the row now, copied after it (unless --no-copy-inputs).
-      const uploads = deps.inputs?.(c) ?? [];
-      let inputs: ReturnType<typeof planInputCopy> | undefined;
-      if (uploads.length && args.noCopyInputs) (out.row.meta as Record<string, unknown>).inputs_not_copied = true;
-      else if (uploads.length) {
-        inputs = planInputCopy(uploads, OUTPUT_CAPS);
-        if (inputs.copy.length) out.row.attachments = inputs.copy.map((i) => ({ kind: attachmentKind(i.name), ref: `inputs/${i.name}` }));
-        if (inputs.skipped.length) (out.row.meta as Record<string, unknown>).inputs_skipped = inputs.skipped;
-      }
-      // The trace is built (pure) BEFORE the row, so the row can say how complete it is; only the writes
-      // come after the row (runner-scaffold.mjs l.529-547).
-      const prefix = `${v}/out/${c.id}_rep${rep}/blobs/`;
-      let trace: ReturnType<typeof turnsFromEvents> | undefined;
-      let traceError: unknown;
-      let outputs: ReturnType<typeof planOutputCopy> | undefined;
-      try {
-        trace = turnsFromEvents({
-          events: report.events,
-          prompt: c.scenario.prompt,
-          system: report.system,
-          ...(report.subagentAppend !== undefined ? { subagentAppend: report.subagentAppend } : {}),
-          children: report.children,
-          sidecarPrefix: prefix,
-          redact: (t) => redactDeep(t, deps.secrets),
-        });
-        (out.row.meta as Record<string, unknown>).subagent_turns = trace.subagentTurns;
-        // The files the run authored: attached to the final assistant turn now, copied after the row.
-        if (report.result?.workDir) {
-          outputs = planOutputCopy(report.result.workDir, authoredOutputs(report.result), OUTPUT_CAPS);
-          const filesPrefix = `${v}/out/${c.id}_rep${rep}/files/`;
-          const last = [...trace.turns].reverse().find((t) => t.role === "assistant");
-          if (last && outputs.copy.length)
-            last.attachments = outputs.copy.map((o) => ({ kind: attachmentKind(o.rel), ref: filesPrefix + o.rel }));
-          if (outputs.skipped.length) (out.row.meta as Record<string, unknown>).outputs_skipped = outputs.skipped;
-        }
-      } catch (e) {
-        rethrowIfExit(e);
-        traceError = e;
-      }
-      writer.appendResult(out.row);
       scored++;
-      const written = { row: out.row as Record<string, unknown>, scored: true };
-      if (typeof out.row.model === "string") models.add(out.row.model);
-      // Past this point the attempt is scored: a failed post-row write counts as failed but writes no error
-      // row, which would double-count its spend (runner-scaffold.mjs l.529, 541-548).
-      try {
-        if (traceError !== undefined) throw traceError;
-        for (const s of trace!.sidecars) writer.writeUnderFlow(prefix + s.name, s.data);
-        for (const i of inputs?.copy ?? []) writer.writeUnderFlow(`inputs/${i.name}`, asFlowData(i.data));
-        // Text is redacted like every other byte in the flow; a binary is copied as it is.
-        for (const o of outputs?.copy ?? []) writer.writeUnderFlow(`${v}/out/${c.id}_rep${rep}/files/${o.rel}`, asFlowData(o.data));
-        writer.writeTrace(c.id, rep, trace!.turns);
-        ok++;
-      } catch (e) {
-        rethrowIfExit(e);
+      if (typeof rec.row.model === "string") models.add(rec.row.model);
+      if (rec.postWriteError === undefined) ok++;
+      else {
         fail++;
-        say(`  [${v}] ${c.stem} rep${rep} scored, but a post-row write failed: ${message(e)}`);
+        say(`  [${v}] ${c.stem} rep${rep} scored, but a post-row write failed: ${message(rec.postWriteError)}`);
       }
-      return { graderFailure, written };
+      return { graderFailure, written: { row: rec.row, scored: true } };
     }
     progress();
     // The variant's scored rows, this pass's included, must come from one model per pin: the pre-spend refusal sees only
@@ -860,6 +761,177 @@ function fallbackBilling(report: JobReport, ctx: AttemptContext): { billing?: Bi
   }
 }
 
+/** What an attempt's row context takes from the pass (the runner's deps and flags, or `hillclimb seed`'s). */
+export interface AttemptContextInput {
+  metrics: AttemptContext["metrics"];
+  flowHash: string;
+  env: AttemptContext["meta"]["env"];
+  /** The variant snapshot's content signature for the case. */
+  sig: string | undefined;
+  pin: string | undefined;
+  requestedEffort: AttemptContext["requestedEffort"];
+  credentialEnv: AttemptContext["credentialEnv"];
+  pairwise?: PairwiseDecls;
+  skillTracked?: string;
+  searchCorpus?: NonNullable<AttemptContext["meta"]["searchCorpus"]>;
+  ablate: boolean;
+  allowModelSplit: boolean;
+}
+
+/** One attempt's row context: the case, the pass's settings, and the attempt's own evidence. */
+export function attemptContext(c: HillclimbCase, rep: number, report: JobReport, i: AttemptContextInput): AttemptContext {
+  return {
+    caseId: c.id,
+    ...(c.originalId !== undefined ? { originalId: c.originalId } : {}),
+    scenarioName: c.name,
+    prompt: c.scenario.prompt,
+    assertions: c.scenario.assert,
+    expectDenied: c.scenario.expect_denied ?? [],
+    metrics: i.metrics,
+    ...(i.pairwise ? { pairwise: i.pairwise } : {}),
+    rep,
+    pin: i.pin,
+    requestedEffort: i.requestedEffort,
+    credentialEnv: i.credentialEnv,
+    ...(i.sig !== undefined ? { expectedContentSig: i.sig } : {}),
+    events: report.events,
+    ...(report.transcript !== undefined ? { transcript: report.transcript } : {}),
+    ...(report.transcriptWhere !== undefined ? { transcriptWhere: report.transcriptWhere } : {}),
+    attemptS: report.attemptS,
+    runnerTimeout: report.runnerTimeout,
+    tags: [basename(dirname(c.file))],
+    ...(report.skillInvoked !== undefined ? { skillInvoked: report.skillInvoked } : {}),
+    meta: {
+      flowHash: i.flowHash,
+      env: i.env,
+      ...(report.runDir !== undefined ? { runDir: report.runDir } : {}),
+      ...(i.sig !== undefined ? { contentSig: i.sig } : {}),
+      // The skill hash the run itself staged (evidence), not one recomputed here.
+      ...(typeof report.result?.fingerprint?.skillHash === "string" ? { skillHash: report.result.fingerprint.skillHash } : {}),
+      ...(i.skillTracked !== undefined ? { skillTracked: i.skillTracked } : {}),
+      ...(i.ablate ? { ablated: true } : {}),
+      ...(c.scenario.on_unanswered === "llm" ? { nonDeterministic: true } : {}),
+      ...(i.allowModelSplit ? { modelSplitAllowed: true } : {}),
+      ...(i.searchCorpus ? { searchCorpus: i.searchCorpus } : {}),
+    },
+  };
+}
+
+/** Build an attempt's row and write it with everything that goes beside it: an errors row, or a results row then its
+ *  trace, sidecars, input and output copies. A row that cannot be built is an errors row. `metaExtra` joins the
+ *  row's meta. `postWriteError` is a write after the results row that failed: the attempt stays scored. */
+export function recordAttempt(o: {
+  writer: FlowWriter;
+  variant: string;
+  c: HillclimbCase;
+  rep: number;
+  report: JobReport;
+  ctx: AttemptContext;
+  secrets: readonly string[];
+  uploads: readonly string[];
+  noCopyInputs: boolean;
+  metaExtra?: Record<string, unknown>;
+}): { dest: "results" | "errors"; row: Record<string, unknown>; postWriteError?: unknown } {
+  const { writer, variant: v, c, rep, report, ctx } = o;
+  let out: ReturnType<typeof attemptRow>;
+  try {
+    out = attemptRow(
+      { ...(report.result ? { result: report.result } : {}), ...(report.thrown !== undefined ? { thrown: report.thrown } : {}) },
+      ctx,
+    );
+  } catch (e) {
+    rethrowIfExit(e);
+    // A row that cannot be built is this attempt's failure, not the pass's.
+    out = {
+      dest: "errors",
+      row: {
+        prompt_id: c.id,
+        rep,
+        ...(c.originalId !== undefined ? { original_id: c.originalId } : {}),
+        failure_class: "error",
+        error: `could not build the row: ${message(e)}`,
+        retries: 0,
+        judge_retries: 0,
+        latency_s: report.attemptS,
+        // The attempt's spend stays countable; counters it could not report are said, not zeroed.
+        meta: {
+          failure_rule: "row_build",
+          // What the attempt asked for, as on every other error row.
+          ...(ctx.pin !== undefined ? { model_requested: ctx.pin } : {}),
+          ...(ctx.requestedEffort !== undefined ? { effort: ctx.requestedEffort.effort } : {}),
+          ...(ctx.requestedEffort?.noSelector ? { effort_selector: false } : {}),
+          retries_unrecorded: true,
+          judge_retries_unrecorded: true,
+          ...(typeof report.result?.cost?.usd === "number" ? { cost_usd: report.result.cost.usd } : {}),
+          ...(typeof report.result?.deciderCostUsd === "number" ? { decider_usd: report.result.deciderCostUsd } : {}),
+          ...fallbackBilling(report, ctx),
+          ...(report.runDir !== undefined ? { run_dir: report.runDir, run_id: basename(report.runDir) } : {}),
+        },
+      },
+    };
+  }
+  const row = out.row as Record<string, unknown>;
+  if (o.metaExtra) row.meta = { ...(row.meta as Record<string, unknown> | undefined), ...o.metaExtra };
+  if (out.dest === "errors") {
+    writer.appendError(out.row);
+    return { dest: "errors", row };
+  }
+  const meta = row.meta as Record<string, unknown>;
+  // The session's uploads: attached to the row now, copied after it (unless --no-copy-inputs).
+  let inputs: ReturnType<typeof planInputCopy> | undefined;
+  if (o.uploads.length && o.noCopyInputs) meta.inputs_not_copied = true;
+  else if (o.uploads.length) {
+    inputs = planInputCopy([...o.uploads], OUTPUT_CAPS);
+    if (inputs.copy.length) out.row.attachments = inputs.copy.map((i) => ({ kind: attachmentKind(i.name), ref: `inputs/${i.name}` }));
+    if (inputs.skipped.length) meta.inputs_skipped = inputs.skipped;
+  }
+  // The trace is built (pure) BEFORE the row, so the row can say how complete it is; only the writes
+  // come after the row (runner-scaffold.mjs l.529-547).
+  const prefix = `${v}/out/${c.id}_rep${rep}/blobs/`;
+  let trace: ReturnType<typeof turnsFromEvents> | undefined;
+  let traceError: unknown;
+  let outputs: ReturnType<typeof planOutputCopy> | undefined;
+  try {
+    trace = turnsFromEvents({
+      events: report.events,
+      prompt: c.scenario.prompt,
+      system: report.system,
+      ...(report.subagentAppend !== undefined ? { subagentAppend: report.subagentAppend } : {}),
+      children: report.children,
+      sidecarPrefix: prefix,
+      redact: (t) => redactDeep(t, o.secrets),
+    });
+    meta.subagent_turns = trace.subagentTurns;
+    // The files the run authored: attached to the final assistant turn now, copied after the row.
+    if (report.result?.workDir) {
+      outputs = planOutputCopy(report.result.workDir, authoredOutputs(report.result), OUTPUT_CAPS);
+      const filesPrefix = `${v}/out/${c.id}_rep${rep}/files/`;
+      const last = [...trace.turns].reverse().find((t) => t.role === "assistant");
+      if (last && outputs.copy.length)
+        last.attachments = outputs.copy.map((x) => ({ kind: attachmentKind(x.rel), ref: filesPrefix + x.rel }));
+      if (outputs.skipped.length) meta.outputs_skipped = outputs.skipped;
+    }
+  } catch (e) {
+    rethrowIfExit(e);
+    traceError = e;
+  }
+  writer.appendResult(out.row);
+  // Past this point the attempt is scored: a failed post-row write counts as failed but writes no error
+  // row, which would double-count its spend (runner-scaffold.mjs l.529, 541-548).
+  try {
+    if (traceError !== undefined) throw traceError;
+    for (const sc of trace!.sidecars) writer.writeUnderFlow(prefix + sc.name, sc.data);
+    for (const i of inputs?.copy ?? []) writer.writeUnderFlow(`inputs/${i.name}`, asFlowData(i.data));
+    // Text is redacted like every other byte in the flow; a binary is copied as it is.
+    for (const x of outputs?.copy ?? []) writer.writeUnderFlow(`${v}/out/${c.id}_rep${rep}/files/${x.rel}`, asFlowData(x.data));
+    writer.writeTrace(c.id, rep, trace!.turns);
+    return { dest: "results", row };
+  } catch (e) {
+    rethrowIfExit(e);
+    return { dest: "results", row, postWriteError: e };
+  }
+}
+
 /** Recompute the variant's spend keys in summary.json over its whole results.jsonl + errors.jsonl, and return the lines a
  *  pass prints: the cost line, and the different-model warning when it fires. `hillclimb regrade` calls it too. */
 export function writeCostSummary(writer: FlowWriter, variant: string): string[] {
@@ -896,12 +968,12 @@ export function readStateIfPresent(flowArg: string, cwd: string): Record<string,
 
 /** What a variant's rows say they tracked: a registered id, NONE (this pass tracks no skill), or UNRECORDED (a row with
  *  no `meta.skill_tracked`: one that tracked none, or one written before the field existed). */
-type Tracked = string;
-const NONE: Tracked = "";
+export type Tracked = string;
+export const NONE: Tracked = "";
 const UNRECORDED: Tracked = "\0unrecorded";
 
 /** Per variant with scored rows: what its rows' `meta.skill_tracked` says. */
-function skillTrackedByVariant(snap: ReturnType<typeof loadFlowSnapshot>): Map<string, Set<Tracked>> {
+export function skillTrackedByVariant(snap: ReturnType<typeof loadFlowSnapshot>): Map<string, Set<Tracked>> {
   const out = new Map<string, Set<Tracked>>();
   for (const [variant, vs] of Object.entries(snap.variants))
     for (const line of (vs.results ?? "").split("\n")) {
@@ -919,7 +991,7 @@ function skillTrackedByVariant(snap: ReturnType<typeof loadFlowSnapshot>): Map<s
   return out;
 }
 
-const trackedText = (s: ReadonlySet<Tracked>): string =>
+export const trackedText = (s: ReadonlySet<Tracked>): string =>
   [...s]
     .sort()
     .map((t) => (t === NONE ? "no skill" : t === UNRECORDED ? "unrecorded" : t))
@@ -1057,7 +1129,7 @@ function requestedMix(
 }
 
 /** A row in the flow whose `meta.ablated` disagrees with this run, named as `<variant>/<prompt_id>`. */
-function ablationMix(snap: ReturnType<typeof loadFlowSnapshot>, ablate: boolean): string | undefined {
+export function ablationMix(snap: ReturnType<typeof loadFlowSnapshot>, ablate: boolean): string | undefined {
   for (const [variant, vs] of Object.entries(snap.variants))
     for (const line of (vs.results ?? "").split("\n")) {
       if (!line.trim()) continue;

@@ -54,6 +54,8 @@ export const HILLCLIMB_STATE_TEMPLATE_VALUE_FLAGS = ["--flow", "--skill", "--out
 export const HILLCLIMB_FREEZE_REF_VALUE_FLAGS = ["--flow", "--variant", "--output-format"] as const;
 export const HILLCLIMB_FREEZE_REF_REPEATED_FLAGS = ["--case"] as const;
 export const HILLCLIMB_FREEZE_REF_NO_DASH_VALUE = ["--flow", "--variant", "--case"] as const;
+export const HILLCLIMB_SEED_VALUE_FLAGS = ["--flow", "--from-eval", "--arm"] as const;
+export const HILLCLIMB_SEED_NO_DASH_VALUE = ["--flow", "--from-eval", "--arm"] as const;
 
 /** Every hillclimb subcommand's own flag lists, as its parser takes them. The usage-guard registry's single
  *  `hillclimb` entry is their union, so a flag any subcommand accepts is checked against HILLCLIMB_USAGE. */
@@ -81,6 +83,7 @@ export const HILLCLIMB_SUBCOMMAND_FLAGS: Record<
     repeated: HILLCLIMB_FREEZE_REF_REPEATED_FLAGS,
     noDashValue: HILLCLIMB_FREEZE_REF_NO_DASH_VALUE,
   },
+  seed: { booleans: [], values: HILLCLIMB_SEED_VALUE_FLAGS, repeated: [], noDashValue: HILLCLIMB_SEED_NO_DASH_VALUE },
 };
 
 /** The union of every subcommand's lists of one kind, deduplicated (the usage-guard registry entry). */
@@ -169,6 +172,15 @@ export const HILLCLIMB_FREEZE_REF_USAGE = `usage: hillclimb freeze-ref <scenario
        key gains it from its own run only when this process's scrub set provably covers that run's (else the case is
        refused: re-run the variant). Exit 0 nothing refused, 1 a case refused, 2 usage.`;
 
+export const HILLCLIMB_SEED_USAGE = `usage: hillclimb seed <scenario.yaml | dir/> --from-eval <eval-dir> --arm <label|A|B> [--flow DIR] [--output-format text|json]
+       Starts a flow's baseline from an eval arm already run, with no agent run: the arm's plugin snapshot becomes the
+       baseline's, and each of its reps a baseline row built from its kept run dir. Refused (exit 2, nothing written)
+       unless every case matches the eval's scenario by name with the same scenario and session files, assertions,
+       baseline, agent and judge pins and plugin content, every rep of the arm has its run dir, and the flow's baseline
+       has no rows and no snapshot. Also refused: a frozen-search-corpus eval, an eval that stopped early, a
+       semantic_pairwise case, a protocol-tier case, a plugins.from_host eval. Seeding does not approve the harness.
+       Exit 0 seeded, 1 a write failed (what was written is removed), 2 refused.`;
+
 export const HILLCLIMB_REGRADE_USAGE = `usage: hillclimb regrade <scenario.yaml | dir/> [--flow DIR] [--variant all|baseline|vN] [--case ID]...
        [--judge-model ID] [--fill-refs | --rejudge] [--approve-harness] [--allow-doc-drift] [--allow-unchecked]
        [--allow-scrub-change] [--allow-metric-commands] [--output-format text|json] [--dotenv FILE] [--run-dir DIR]
@@ -199,7 +211,7 @@ export const HILLCLIMB_REGRADE_USAGE = `usage: hillclimb regrade <scenario.yaml 
        before any judge call.`;
 
 /** The whole family: `hillclimb --help`, and the usage guard's text (every flag of every subcommand). */
-export const HILLCLIMB_USAGE = `usage: hillclimb <run | check | state-template | freeze-ref | regrade> ...
+export const HILLCLIMB_USAGE = `usage: hillclimb <run | check | state-template | freeze-ref | regrade | seed> ...
 
 ${HILLCLIMB_RUN_USAGE}
 
@@ -209,4 +221,6 @@ ${HILLCLIMB_STATE_TEMPLATE_USAGE}
 
 ${HILLCLIMB_FREEZE_REF_USAGE}
 
-${HILLCLIMB_REGRADE_USAGE}`;
+${HILLCLIMB_REGRADE_USAGE}
+
+${HILLCLIMB_SEED_USAGE}`;

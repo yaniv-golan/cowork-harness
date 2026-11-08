@@ -27,7 +27,7 @@ export interface HeadroomRow {
 }
 
 /** `--arm`: an arm's label, or its role (A or B). A value that is one arm's label and the other's role is refused. */
-export function resolveHeadroomArm(report: Pick<EvalReport, "arms">, arm: string): "A" | "B" {
+export function resolveHeadroomArm(report: { arms: ReadonlyArray<{ label: string; role: "A" | "B" }> }, arm: string): "A" | "B" {
   const byLabel = report.arms.filter((a) => a.label === arm).map((a) => a.role);
   const byRole = arm === "A" || arm === "B" ? [arm] : [];
   const roles = [...new Set([...byLabel, ...byRole])];
