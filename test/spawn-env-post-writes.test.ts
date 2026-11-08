@@ -62,6 +62,11 @@ describe("scanSpawnEnvPostWrites — direct writes to the spawn env after W1 is 
     expect(r.flags[0]).toContain("TEST_BEFORE");
   });
 
+  it("flags a conditional whose two arms name different prompts", () => {
+    const r = scanSpawnEnvPostWrites(files(builder(), caller("", "let It=Pt({prompt:yn?pf(ge,vn):other,options:J});")), registryAll);
+    expect(r.flags.join("\n")).toMatch(/spawn call .* was not found/);
+  });
+
   it("flags a prompt expression it was not told about", () => {
     const r = scanSpawnEnvPostWrites(files(builder(), caller("", "let It=Pt({prompt:yn?pf(ge,vn,1):ge,options:J});")), registryAll);
     expect(r.flags.join("\n")).toMatch(/spawn call .* was not found/);

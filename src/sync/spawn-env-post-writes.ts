@@ -344,7 +344,7 @@ export function scanSpawnEnvPostWrites(
   const from = dm[0].index! + dm[0][0].length;
   // The prompt is an identifier, or (Desktop 4.23118.0) `<owed>?<wrap>(<prompt>,<signal>):<prompt>`, which holds the
   // first turn back while a plugin's MCP reconnect is pending. Any other expression is a change to re-derive.
-  const spawn = ch.slice(from).search(new RegExp(`\\(\\{prompt:(?:${ID}|${ID}\\?${ID}\\(${ID},${ID}\\):${ID}),options:${esc(J)}\\}\\)`));
+  const spawn = ch.slice(from).search(new RegExp(`\\(\\{prompt:(?:${ID}|${ID}\\?${ID}\\((${ID}),${ID}\\):\\1),options:${esc(J)}\\}\\)`));
   if (spawn < 0) return fail(`the spawn call \`({prompt:…,options:${J}})\` was not found after the caller destructure`);
   s.scan(tail, ch, [U], `the builder ${fn.name}`);
   s.scan(ch.slice(from, from + spawn), ch, [J], "its caller");

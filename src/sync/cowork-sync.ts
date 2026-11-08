@@ -5826,6 +5826,39 @@ function enclosingFunctionName(chunk: string, at: number): string | null {
  * drops the call or moves it off the startVM path, the agent stops being staged with nothing else noticing.
  * Fail closed.
  */
+/** The rejection handler of Desktop 4.23118.0's staging element, as text between the `.catch(` parens: true only for
+ *  `(<id>=>{…;return{ready:!1,…}})` or `(<id>=>({ready:!1,…}))`. The returned literal must be the one way out, lead with
+ *  `ready:!1`, and hold no spread that could override it; `ready:` appears nowhere else (a log line naming it refuses, the
+ *  safe side to err on), and the handler makes no dotted `prepareForVM(` call of its own. */
+function stagingHandlerReportsNotReady(handler: string): boolean {
+  if (!handler.startsWith("(") || matchClose(handler, 0) !== handler.length - 1) return false;
+  const inner = handler.slice(1, -1);
+  const arrow = inner.match(/^[\w$]+=>/);
+  if (!arrow) return false;
+  const body = inner.slice(arrow[0].length);
+  if (/[\w$]\.prepareForVM\(/.test(body)) return false;
+  if ((body.match(/ready:/g) ?? []).length !== 1) return false;
+  let open: number; // the returned literal's `{`
+  let closeWanted: number; // where that literal must end for it to be the handler's whole answer
+  if (body.startsWith("(")) {
+    if (matchClose(body, 0) !== body.length - 1 || body[1] !== "{") return false;
+    open = 1;
+    closeWanted = body.length - 2;
+  } else {
+    if (!body.startsWith("{") || matchClose(body, 0) !== body.length - 1) return false;
+    const returns = [...body.matchAll(/(?<![\w$.])return(?![\w$])/g)];
+    if (returns.length !== 1) return false;
+    const at = returns[0]!.index!;
+    if ((body[at - 1] !== "{" || at !== 1) && body[at - 1] !== ";") return false;
+    open = at + "return".length;
+    if (body[open] !== "{") return false;
+    closeWanted = body.length - 2;
+  }
+  if (matchClose(body, open) !== closeWanted) return false;
+  const members = splitTop(body.slice(open + 1, closeWanted)).map((m) => m.trim());
+  return members[0] === "ready:!1" && !members.some((m) => m.startsWith("..."));
+}
+
 /** True when exactly one element of the `Promise.all([...])` is `<ns>.prepareForVM(<one id>)`, bare or with a `.catch`
  *  that reports a not-ready result: a handler that reported ready would hide a failed staging. */
 function stagesAgentBinary(elements: string): boolean {
@@ -5838,8 +5871,7 @@ function stagesAgentBinary(elements: string): boolean {
   if (rest === "") return true;
   // The `.catch(…)` must be the whole remainder: anything chained after it could replace the result.
   if (!rest.startsWith(".catch(") || matchClose(rest, ".catch".length) !== rest.length - 1) return false;
-  const handler = rest.slice(".catch(".length, -1);
-  return handler.includes("ready:!1") && !handler.includes("ready:!0");
+  return stagingHandlerReportsNotReady(rest.slice(".catch(".length, -1));
 }
 
 export function checkVmAgentStagingFacts(files: Map<string, string>): string[] {

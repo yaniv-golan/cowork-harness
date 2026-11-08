@@ -571,6 +571,7 @@ describe.skipIf(!ASAR_BACKUPS)("checkPathHookFacts oracle over saved Desktop asa
     ["4.29.0", true],
     ["4.4212.0", true],
     ["4.16336.0", true],
+    ["4.23118.0", true],
   ])("%s: clean = %s", (version, clean) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
     expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
@@ -585,7 +586,7 @@ describe.skipIf(!ASAR_BACKUPS)("checkPathHookFacts oracle over saved Desktop asa
 // The scheduled-session facts over saved asars: the frame-tool list, its read-only export and the host loop's spread
 // have had the same shape in every build that has the frame-tools predicate, before and after the chat arm (4.29.0).
 describe.skipIf(!ASAR_BACKUPS)("checkScheduledSessionFacts oracle over saved Desktop asars (COWORK_ASAR_BACKUP_DIR)", () => {
-  it.each(["3.6556.2", "4.29.0", "4.4212.0", "4.16336.0"])("%s: clean", (version) => {
+  it.each(["3.6556.2", "4.29.0", "4.4212.0", "4.16336.0", "4.23118.0"])("%s: clean", (version) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
     expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
     const files = readAsarBuildFiles(asar);
@@ -600,6 +601,7 @@ describe.skipIf(!ASAR_BACKUPS)("readHostLoopFence + checkArtifactsMcpGuardFacts 
   it.each([
     ["4.4212.0", null],
     ["4.16336.0", { minCli: "2.1.315" }],
+    ["4.23118.0", { minCli: "2.1.315" }],
   ])("%s: fence %j, no flags; the Artifacts-key guard is clean", (version, fence) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
     expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
@@ -610,6 +612,69 @@ describe.skipIf(!ASAR_BACKUPS)("readHostLoopFence + checkArtifactsMcpGuardFacts 
     expect(r.flags).toEqual([]);
     expect(r.writers.length).toBe(fence ? 4 : 0);
     expect(checkArtifactsMcpGuardFacts(files)).toEqual([]);
+  });
+});
+
+// The spawn-contract and VM-staging sentinels over saved asars: 4.16336.0 holds the older shapes (Artifact predicates in
+// the spawn chunk, a bare prepareForVM element) and 4.23118.0 the newer ones (a shared chunk behind a namespace, a
+// rejection handler). The older builds in each table predate a shape the sentinel pins, so each oracle is able to fail,
+// and the real-byte mutations show the newer forms are read, not skipped.
+describe.skipIf(!ASAR_BACKUPS)("checkSpawnContractFacts + checkVmAgentStagingFacts oracle over saved Desktop asars", () => {
+  const read = (version: string) => {
+    const asar = join(ASAR_BACKUPS!, version, "app.asar");
+    expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
+    const files = readAsarBuildFiles(asar);
+    expect(files.size).toBeGreaterThan(50);
+    return files;
+  };
+  const spawnFlags = (files: Map<string, string>) => checkSpawnContractFacts([...files.values()].join(""), files);
+  /** Replace the single match of `re` in the single chunk holding it. */
+  const mutate = (files: Map<string, string>, re: RegExp, to: string) => {
+    const hits = [...files].filter(([, c]) => re.test(c));
+    expect(hits).toHaveLength(1);
+    const [name, chunk] = hits[0]!;
+    const next = chunk.replace(re, to);
+    expect(next).not.toBe(chunk);
+    files.set(name, next);
+  };
+
+  it.each([
+    ["2.9939.4", false],
+    ["4.16336.0", true],
+    ["4.23118.0", true],
+  ])("checkSpawnContractFacts %s: clean = %s", (version, clean) => {
+    const flags = spawnFlags(read(version));
+    if (clean) expect(flags).toEqual([]);
+    else expect(flags.length).toBeGreaterThan(0);
+  });
+  it.each([
+    ["1.40609.1", false],
+    ["4.16336.0", true],
+    ["4.23118.0", true],
+  ])("checkVmAgentStagingFacts %s: clean = %s", (version, clean) => {
+    const flags = checkVmAgentStagingFacts(read(version));
+    if (clean) expect(flags).toEqual([]);
+    else expect(flags.length).toBeGreaterThan(0);
+  });
+
+  it("4.23118.0 with the attended-turn term dropped from the shared-chunk wrapper flags S6c", () => {
+    const files = read("4.23118.0");
+    mutate(files, /(function [\w$]+\(([\w$]+),[\w$]+,[\w$]+\)\{return [\w$]+\(\2,[\w$]+,[\w$]+\))&&\2\._isUnattended!==!0\}/, "$1}");
+    expect(spawnFlags(files).join("\n")).toContain("S6c");
+  });
+  it("4.23118.0 with the shared-chunk block source re-pointed flags S6d", () => {
+    const files = read("4.23118.0");
+    mutate(
+      files,
+      /(=[\w$]+\.[\w$]+\()"cobalt_plinth"(\);function [\w$]+\([\w$]+,[\w$]+\)\{let [\w$]+=[\w$]+\.isBlocked\(\))/,
+      '$1"other_policy"$2',
+    );
+    expect(spawnFlags(files).join("\n")).toContain("S6d");
+  });
+  it("4.23118.0 with the staging handler reporting ready flags", () => {
+    const files = read("4.23118.0");
+    mutate(files, /(prepareForVM\([\w$]+\)\.catch\(\([^]{0,300}?return\{ready:)!1/, "$1!0");
+    expect(checkVmAgentStagingFacts(files).join("\n")).toContain("vm agent staging");
   });
 });
 
@@ -859,6 +924,7 @@ describe("checkAutoMemoryFacts (split resolver, Desktop 4.23118.0)", () => {
       "the wrapper forwards a fixed second argument",
       (r: string) => r.replace("this.resolveAutoMemory(e,t)", "this.resolveAutoMemory(e,!0)"),
     ],
+    ["the wrapper swaps its arguments", (r: string) => r.replace("this.resolveAutoMemory(e,t)", "this.resolveAutoMemory(t,e)")],
     ["a different gate id", (r: string) => r.replace('"123929380"', '"123929381"')],
     ["the ordinary arm no longer gated", (r: string) => r.replace('!r||!t.zrt("123929380")?null:', "!r?null:")],
     ["a non-scheduled typed session gets a directory", (r: string) => r.replace("?n_:null:t.H6", "?n_:t.H6(1):t.H6")],
@@ -961,6 +1027,8 @@ describe.skipIf(!ASAR_BACKUPS)("checkAutoMemoryFacts oracle over saved Desktop a
     ["2.9939.4", true],
     ["2.16120.0", true],
     ["2.19675.0", true],
+    ["4.16336.0", true],
+    ["4.23118.0", true],
   ])("%s: anchor clean = %s", (version, clean) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
     expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
@@ -3476,15 +3544,23 @@ describe("extractPromptFingerprint — the parameter form and the module-constan
 });
 
 describe.skipIf(!ASAR_BACKUPS)("extractPromptFingerprint over saved Desktop asars (COWORK_ASAR_BACKUP_DIR)", () => {
-  it.each(["3.6556.2", "4.29.0", "4.4212.0"])("%s: the rendered prompt is unchanged", (version) => {
+  const BEFORE = ["a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf", 37811, "e62bd9fa"] as const;
+  const FROM_4_23118 = ["dc803821f7a581398c81077584ccee8a6cca84e7182e7521450f97d1e75c0fa6", 38197, "e6834921"] as const;
+  it.each([
+    ["3.6556.2", BEFORE],
+    ["4.29.0", BEFORE],
+    ["4.4212.0", BEFORE],
+    ["4.16336.0", BEFORE],
+    ["4.23118.0", FROM_4_23118],
+  ] as const)("%s: the rendered prompt is the fingerprinted one", (version, [decoded, codePoints, rawPrefix]) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
     expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
     const files = readAsarBuildFiles(asar);
     const r = extractPromptFingerprint([...files.values()].join(""), files);
-    expect(r?.decodedSha256).toBe("a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf");
-    expect(r?.decodedCodePoints).toBe(37811);
+    expect(r?.decodedSha256).toBe(decoded);
+    expect(r?.decodedCodePoints).toBe(codePoints);
     expect(r?.sectionTags).toBe(43);
-    expect(r?.sha256.startsWith("e62bd9fa")).toBe(true);
+    expect(r?.sha256.startsWith(rawPrefix)).toBe(true);
     expect(checkPromptReaderFacts(files)).toEqual([]);
   });
 });
@@ -5915,8 +5991,25 @@ describe("checkVmAgentStagingFacts — startVM still stages the agent", () => {
   it("clean: prepareForVM with a not-ready rejection handler", () => {
     expect(checkVmAgentStagingFacts(vmChunk(withCatch(CATCH)))).toEqual([]);
   });
+  it("clean: the handler as a bare object expression", () => {
+    expect(checkVmAgentStagingFacts(vmChunk(withCatch('EG.prepareForVM(t).catch((e=>({ready:!1,error:"x"})))')))).toEqual([]);
+  });
   it.each([
     ["the handler reports ready", CATCH.replace("ready:!1", "ready:!0")],
+    ["the handler reports ready on one arm", CATCH.replace('return{ready:!1,error:"x"}', "return e.soft?{ready:!1}:{ready:!0}")],
+    ["a conditional expression handler", "EG.prepareForVM(t).catch((e=>e.soft?{ready:!1}:{ready:!!e}))"],
+    ["a spread beside not-ready", "EG.prepareForVM(t).catch((e=>({ready:!1,...e.result})))"],
+    ["a spread in a block handler", 'EG.prepareForVM(t).catch((e=>{Z.error("x");return{ready:!1,...e.result}}))'],
+    ["not-ready only in a log string", 'EG.prepareForVM(t).catch((e=>{Z.error("ready:!1");return{ready:true}}))'],
+    ["a log line naming ready beside a real not-ready", 'EG.prepareForVM(t).catch((e=>{Z.error("ready:");return{ready:!1}}))'],
+    ["a comma expression after the literal", "EG.prepareForVM(t).catch((e=>({ready:!1}),{ready:1}))"],
+    ["the handler re-runs staging", "EG.prepareForVM(t).catch((e=>EG.prepareForVM(t,{force:!0}).catch(()=>({ready:!1}))))"],
+    ["a block handler re-runs staging", "EG.prepareForVM(t).catch((e=>{EG.prepareForVM(t,{force:!0});return{ready:!1}}))"],
+    ["an early return", "EG.prepareForVM(t).catch((e=>{if(e.x)return{ok:1};return{ready:!1}}))"],
+    ["the return is not the last statement", "EG.prepareForVM(t).catch((e=>{return{ready:!1};f()}))"],
+    ["the return sits under a condition", "EG.prepareForVM(t).catch((e=>{if(e.x)return{ready:!1}}))"],
+    ["ready is not the first member", "EG.prepareForVM(t).catch((e=>({error:1,ready:!1})))"],
+    ["a function reference handler", "EG.prepareForVM(t).catch(notReady)"],
     ["an options object beside the handler", CATCH.replace("prepareForVM(t)", "prepareForVM(t,{skip:!0})")],
     ["something chained after the handler", `${CATCH}.then(e=>({ready:!0}))`],
     ["an innocuous-looking chain after the handler", `${CATCH}.then(e=>e)`],
