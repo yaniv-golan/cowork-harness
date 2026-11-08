@@ -78,6 +78,21 @@ All notable changes to this project are documented here. The format is based on
 - **`eval` reports the agent's served model.** `summary.agentModelDisagreements` lists each scenario whose scored reps,
   across both arms, were served more than one model id, and `summary.modelMismatch` the reps of each arm and scenario
   that were excluded because the agent was not served its pin (`pinned X · served Y` in `report.md`).
+- **`hillclimb run --gate-cmd <cmd>`** runs a verifier once per pass, before any rep, on a throwaway copy of the
+  variant's plugin snapshot (`sh -c`, with `COWORK_HARNESS_VARIANT_DIR` and `COWORK_HARNESS_VARIANT_ID` set). A
+  non-zero exit, a signal or `--gate-timeout` (default 600 s) writes a `gate_failed` errors row per open slot at no
+  agent cost and exits 1. The command's text joins the harness sha, so it needs `--approve-harness`; only its hash
+  is recorded.
+- **`hillclimb run --max-budget-usd <x>`** caps one pass: no slot starts whose estimate would take the pass's spend,
+  plus the slots in flight, past `x`. A stop exits 1 with `stopped.reason: "budget"` and `error.code:
+  "budget_stopped"`, and keeps the rows already written; a cap below every open slot's estimate is refused before
+  spending. Unlike `run` and `eval`, where the flag is a pre-flight refusal, this one stops mid-pass.
+- **`hillclimb seed --from-eval <dir> --arm <label>`** starts a flow's baseline from an eval arm already run, at no
+  cost: the arm's plugin snapshot becomes the baseline's and each kept rep a baseline row, built as a live attempt
+  builds it and marked `meta.seeded_from`. It refuses unless the scenarios, sessions, assertions, baseline and pins
+  match the eval's.
+- **`eval report --headroom [--arm <label>]`** lists the rows an arm passed on some reps but not all, most headroom
+  first, and any row with fewer than 4 reps. It never changes the exit code.
 
 ### Fixed
 
@@ -212,6 +227,11 @@ All notable changes to this project are documented here. The format is based on
   nothing.
 - **Breaking: `hillclimb run` exits 1 when it stops on a grader failure or a variant is served two models for one pin**
   (see Added). A later pass of such a variant is refused (exit 2) unless `--allow-model-split`.
+- **`--dry-run` cost estimates survive a baseline change.** A scenario with no priced run on its own baseline is
+  now priced from the nearest older baseline with priced runs (else the nearest newer one), labelled `priced from
+  baseline <b>` (`pricedFromBaseline` in JSON). The total is a LOWER BOUND only when a scenario has no priced run on
+  any baseline.
+- **`hillclimb check` no longer notes `judge_invalid` or `gate_failed` rows** as an unknown failure class.
 
 ### Removed
 

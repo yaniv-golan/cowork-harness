@@ -11,6 +11,7 @@ cowork-harness hillclimb run evals/ --flow .claude/hillclimb/flow --dry-run --ap
 cowork-harness hillclimb run evals/ --flow .claude/hillclimb/flow --variant baseline --reps 3
 cowork-harness hillclimb run evals/ --flow .claude/hillclimb/flow --variant v1 --reps 3
 cowork-harness hillclimb check --flow .claude/hillclimb/flow
+cowork-harness hillclimb seed evals/ --flow .claude/hillclimb/flow --from-eval E --arm after   # baseline from an eval arm, $0
 ```
 
 Run the baseline and every variant at the same `--reps`: two variants compare only at matching rep counts, and
@@ -76,7 +77,7 @@ scenario's `timeout_ms` is shorter (a tie goes to the runner; `timeout.source: r
 running finishes; reaching it is an `errors.jsonl` `timeout` row, while a shorter `timeout_ms` of the scenario's own
 firing first is a scored `errored_agent` row), `--model ID` and `--judge-model ID` (concrete ids; an alias is refused),
 `--effort LEVEL` (below),
-`--case ID`, `--skill NAME`, `--allow-model-split` (rows served two snapshots of one pin; else exit 1, then refused), `--approve-harness`, `--ablate`, `--dry-run`, `--no-copy-inputs`, `--no-judge-check` (skip the
+`--gate-cmd CMD`, `--gate-timeout S`, `--max-budget-usd X`, `--case ID`, `--skill NAME`, `--allow-model-split` (rows served two snapshots of one pin; else exit 1, then refused), `--approve-harness`, `--ablate`, `--dry-run`, `--no-copy-inputs`, `--no-judge-check` (skip the
 one real call that checks the graders' credential before the first agent run), `--decider-cmd CMD` or
 `--decider-dir DIR`, `--output-format text|json`, `--dotenv FILE`, `--run-dir DIR`.
 
@@ -115,8 +116,7 @@ one real call that checks the graders' credential before the first agent run), `
   re-run after a failed attempt, and a cost estimate (`plan.cost` under `--output-format json`, the object
   `eval --dry-run` emits). The estimate prices each scenario from this machine's run history with every
   `hillclimb` run excluded, so on a machine that has run only `hillclimb` every scenario is listed in
-  `plan.cost.unpriced`. A dry run writes nothing, unless `--approve-harness` is also given: then it records
-  the harness sha.
+  `plan.cost.unpriced`.
 - One runner per variant: a `.lock` in the variant dir refuses a second live runner.
 - **`--effort LEVEL` sets the main loop's effort for the pass** (`low|medium|high|xhigh|max`; `extra` is read as
   `xhigh`). Without it each case runs its session's `effort:`, else the baseline default (`medium`). Like `--model`
@@ -143,8 +143,8 @@ one real call that checks the graders' credential before the first agent run), `
 - **`model:` / `effort:` in the tuned skill's own `SKILL.md` frontmatter move the main loop**, not a sub-agent. An
   `effort:` that changes it makes the rows `effort_not_sent` errors (seen for a slash-command invocation); a
   `model:` is expected to make every row `serving_substitution` (inferred). Put sub-agent settings in `agents/*.md`.
-- **No spend cap.** `run` takes no `--max-budget-usd`: recompute spend from the flow's files after every round and
-  stop at the budget. `--dry-run` estimates the agent spend only.
+- **`--max-budget-usd X` caps one pass** (exit 1, `stopped.reason: budget`): recompute spend from the flow's files
+  after every round and stop at the budget. `--dry-run` estimates the agent spend only.
 - **Spend, copied, never derived from `model` × `usage`** (`usage` is the main model and its same-model sub-agents
   only). Rows: `cost_usd` (the agent's own total, every model, judge excluded), `judge_usd` (the live judge's spend
   over the assertions that called it; absent when none did, and when it was called but recorded no cost, which
@@ -188,7 +188,8 @@ sha256 per hashed entry (`_state.json` `harness_files`), so a refusal names the 
 evals/a.yaml; and 13 unchanged`, a new one marked `(new)`, a gone one `(removed)`), as does the dry run's gate
 line; an approval recorded without them still loads, and its refusal says `changed: unknown (older approval)` and
 lists every file. It is a change detector, not a security boundary: the permission allowlist on the loop's command
-is what bounds an unattended run.
+is what bounds an unattended run. `--gate-cmd CMD` checks a copy of the variant before any rep
+(failing: `gate_failed` rows, exit 1); its text is in the sha.
 
 `regrade` applies the same gate: a rubric fix is a scenario edit, so `regrade` refuses (exit 2) until the new sha
 is approved. `--approve-harness` on `regrade` records it, and is yours there too. `regrade` also applies the scenario's

@@ -36,7 +36,7 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   scored agent failure from the scenario's own shorter `timeout_ms` is the skill's limit.
 - **Workspace fixture, fresh conversation:** a fixture case resumes from saved outputs without the earlier
   conversation; don't credit or blame the skill for context it never had.
-- **`harness_skill` in `_state.json`:** written beside `harness_sha` by the user's `--approve-harness`; leave both.
+- **`harness_skill` in `_state.json`:** written beside `harness_sha` (and `harness_gate_sha`) by the user's `--approve-harness`; leave all three.
 - **`tags` = the scenario's directory name:** a flat directory is one stratum for a stratified split.
 - **No refusal class:** a refusal is graded like any answer; if refusals matter, ask the user for an assertion or
   metric that counts them.
@@ -150,9 +150,7 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   re-grade file under `turns/<N>/regrade/` (never its per-assertion values: it also lists the grades it kept, at
   their original cost). A re-grade with no judge call writes no file. A row's `judge_model`/`judge_usage` describe its current grades only (a re-grade
   replaces them): never sum them as spend.
-- `hillclimb run` has no spend cap: check the total against the budget every round.
-- `--dry-run` estimates agent spend for the slots it would run (judge spend not included; a scenario with no
-  run history is listed as unpriced).
+- `--max-budget-usd X` caps one pass (`stopped.reason: budget`): check the total against the budget every round.
 - **Copy the variant's spend from `F/vN/summary.json`**, recomputed after every pass: `cost_usd_mean` is `$/run`
   (add `judge_usd_mean`, which shares its denominator, when `$/run` includes the judge); `cost_usd_total` +
   `judge_usd_total` + `decider_usd_total` is the round's spend (judge spend from the live judge;

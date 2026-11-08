@@ -313,7 +313,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   eval <scenario.yaml | dir/> --arm [<label>=]<source> --arm [<label>=]<source>
                                EXPERIMENTAL — paired A/B evaluation of a skill edit: runs each scenario with
                                each arm's plugin, interleaved, and compares per-claim pass rates (see 'eval --help')
-  eval report <eval-dir>       rebuild an eval's report from its directory ($0)
+  eval report <eval-dir>       rebuild an eval's report from its directory ($0); --headroom lists the rows an arm can still move
   hillclimb run <scenario.yaml | dir/> [--flow DIR]   the runner for /claude-api hillclimb: every scenario
                                --reps times into <flow>/<variant>/ under the runner-scaffold contract (see 'hillclimb --help')
   hillclimb check [<scenario.yaml | dir/>] [--flow DIR]   check a flow dir against our reading of the hillclimb schema
@@ -321,6 +321,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                with --flow, also write <flow>/metrics.md. Pass the same --flow to every hillclimb command
   hillclimb freeze-ref <scenario.yaml | dir/> --variant ID [--flow DIR]   freeze a variant's pairwise references (win_<vN>)
   hillclimb regrade <scenario.yaml | dir/> [--flow DIR]   re-grade a flow's rows from their kept runs (--rejudge: every judged assert; --fill-refs: add win_<vN>)
+  hillclimb seed <scenario.yaml | dir/> --from-eval DIR --arm LABEL [--flow DIR]   seed the baseline variant from an eval arm's kept runs ($0)
 
 ── Cassette lifecycle ─────────────────────────────────────────────────────────
   record <scenario.yaml>       run + save a control-protocol cassette   [--model <id>] [--timeout <ms>]

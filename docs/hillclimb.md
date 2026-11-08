@@ -64,6 +64,7 @@ each step of the loop) and [`references/hillclimb.md`](../.claude/skills/cowork-
 - [When hillclimb pays off](#when-hillclimb-pays-off)
 - [Terms](#terms)
 - [Quick start](#quick-start)
+- [Starting the baseline from an eval](#starting-the-baseline-from-an-eval)
 - [Where the flow dir goes](#where-the-flow-dir-goes)
 - [How the loop's steps map to commands](#how-the-loops-steps-map-to-commands)
 - [What each row measures](#what-each-row-measures)
@@ -155,6 +156,30 @@ Requirements:
   the same one in every case ([session.md](./session.md));
 - concrete model ids for the agent and the judge (an alias such as `sonnet` is refused, because the loop compares
   rounds by the model that served them).
+
+## Starting the baseline from an eval
+
+When an `eval` already measured the plugin version the loop should start from, `hillclimb seed` turns that arm into
+the flow's baseline without running the agent again:
+
+```bash
+cowork-harness hillclimb seed evals/ --from-eval <eval-dir> --arm after --flow ~/hc/my-skill
+```
+
+`--arm` takes an arm's label or its role (`A`, `B`). The arm's plugin snapshot becomes the baseline's snapshot, and
+each of its kept reps a baseline row, built by the same code a live attempt uses: the rows are graded under the
+current scenario and carry `meta.seeded_from` (the eval id, arm, eval rep and run id). The baseline's next pass
+finds every (case, rep) present and runs nothing. A seeded rep that a live pass would also have rejected (another
+served model, an unconfirmed effort) is written as an `errors.jsonl` row, and the next pass re-runs it.
+
+It refuses (exit 2, nothing written) unless each case matches the eval's scenario of the same name (scenario and
+session files, assertions, Desktop baseline, agent and judge pins), every rep of the arm kept its run dir, and the
+baseline has no rows and no snapshot yet. An eval served from a frozen search corpus, an eval that stopped early,
+a `semantic_pairwise` or protocol-tier case and a `plugins.from_host` eval are refused too. It does not approve
+the harness: run `--dry-run --approve-harness` as usual. Exit 1 means a write failed; what it wrote is removed.
+
+`eval report <eval-dir> --headroom` helps pick the cases: it lists the rows the arm passed on some reps but not
+all, which is where a round has room to move ([eval.md](./eval.md)).
 
 ## Where the flow dir goes
 
@@ -472,10 +497,17 @@ rows, and no fixed multiplier reproduces it. So:
   `outDir` (`<runs root>/<scenario slug>/<run_id>`, the dir `hillclimb regrade` reads; the root is `~/.cowork-harness/runs`, or `--run-dir` /
   `COWORK_HARNESS_RUNS_DIR`). A row's `meta.run_dir` is a pointer for reading one rep, and it is redacted
   when the runs root is outside your home directory.
-- **There is no spend cap on `hillclimb run`.** It takes no `--max-budget-usd`. Recompute spend from the files
-  after every round, as the loop's guide does, and stop at your budget. (`--max-budget-usd` on `run` and `eval` is
-  a pre-flight refusal priced from the agent's cost history, not a cap on spend: only a `--repeat` batch keeps a running
-  total, and the cap never stops an `eval` mid-way.)
+- **`--max-budget-usd X` caps one pass, not the loop.** A slot starts only while the pass's spend so far, plus
+  the estimates of the slots in flight, plus its own estimate, stays within `X`; the next pass starts again from
+  zero, so recompute the loop's total from the files after every round, as the loop's guide does. A slot's
+  estimate is the variant's p95 cost for that case (agent, judge and decider), else the runs index's worst observed
+  agent run (which leaves judge spend out), else 0 (the pass says so once). A slot whose row records no cost is
+  charged its estimate. Spend in flight can still go past `X` when a slot costs more than its estimate: the cap
+  bounds what starts, not what a started slot spends. The grader probe's cost counts from the start. A stop exits 1
+  with the envelope's `stopped.reason: "budget"` (`spentUsd`, `capUsd`, and the slot it stopped at) and
+  `error.code: "budget_stopped"`; the slots it did not start stay open for the next pass. It refuses before
+  spending (exit 2) only when every open slot's estimate is over `X`, and `--dry-run` prints the cap.
+  (`--max-budget-usd` on `run` and `eval` is a pre-flight refusal only.)
 - **A ballpark before you start.** A round is cases × reps agent runs, plus the judge calls of every judged
   assertion on every row (a `semantic_pairwise` assert makes one per reference it is judged against, and `order: both` doubles it). One
   live run observed about 33 s per pairwise judge call. Price one case first: the optional one-case baseline run in
@@ -606,7 +638,8 @@ that the loop and the lite report builder read, with these differences:
   outputs the way re-invoking the skill in the same Cowork session does, except that in Cowork the earlier
   conversation is still in context and here it is not.
 - **`_state.json` gains `harness_skill`** beside `harness_sha` when you pass `--skill`, and `harness_files` (a
-  sha256 per hashed entry, so a gate refusal names what changed); all are written only by `--approve-harness`. An
+  sha256 per hashed entry, so a gate refusal names what changed), and `harness_gate_sha` (the hash of a
+  `--gate-cmd`'s text) when you pass one; all are written only by `--approve-harness`. An
   approval without `harness_files` still loads: its refusal says `changed: unknown (older approval)` and lists
   every file.
 - **`tags`** on a row is the scenario file's directory name. The loop stratifies a split by its first tag, so
@@ -679,7 +712,7 @@ the scenarios' directory when it holds exactly them, else the case's own file (o
 - **The harness gate.** `hillclimb run` and `hillclimb regrade` refuse until `_state.json` holds an approved
   sha, and again whenever it changes. The sha covers every scenario file (all cases, whatever `--case`
   selects), each session file, its uploads and workspace fixtures, the lockfiles in the current directory, the
-  `harness_paths` entries, the `--skill` selection, and the harness version and baseline. It never covers the
+  `harness_paths` entries, the `--skill` selection, a `--gate-cmd`'s text, and the harness version and baseline. It never covers the
   plugin the loop edits. Upgrading `cowork-harness`, or a `sync` that moves a case's Desktop baseline (not the
   `baseline` variant), therefore trips it: that is the loop's
   re-baseline signal. With no lockfile in the current directory, dependency changes are outside the sha (a pass
@@ -695,6 +728,17 @@ the scenarios' directory when it holds exactly them, else the case's own file (o
   so too (`meta.effort_selector: false`): that effort is only the baseline default, which a `sync` may move.
   Another variant is free to differ: that is the lever. A `--case` pass whose flag value differs from what the
   variant's other cases ran prints one warning per distinct value those cases ran.
+- **A verifier gate (`--gate-cmd CMD`).** Once per pass, after the dry-run and before any rep, the pass runs
+  `CMD` with `sh -c` on a throwaway copy of the variant's plugin snapshot (the git-tracked files only, when the
+  plugin is in a git tree), with the full environment plus `COWORK_HARNESS_VARIANT_DIR` (the copy) and
+  `COWORK_HARNESS_VARIANT_ID`. A non-zero exit, a signal, or `--gate-timeout` (default 600 s; the gate's process
+  group is killed) writes one `gate_failed` row to `errors.jsonl` per open slot, at no agent cost and with the
+  output's last 4 KiB (secrets scrubbed), and the pass exits 1; the slots stay open. Use it to reject a variant
+  that breaks a build, a lint or a schema before any rep is paid for. The gate pins the command's text, never the
+  files of a verifier it calls: `_state.json` keeps only the text's hash (`harness_gate_sha`), so a changed text
+  needs `--approve-harness`, and every `run` pass must pass the same text (`regrade` never runs the gate and keeps
+  the approved hash). The grader probe has
+  already run, and been paid for, when the gate runs.
 - **No answer key in reach.** A pass is refused when the agent could read the flow dir, a scenario or session
   file, a `harness_paths` file or the runs root through a mount, a workspace fixture or the plugin. A file
   listed in `harness_paths` that sits inside a workspace fixture counts as an input and is not refused, so keep
@@ -793,8 +837,8 @@ after search.
 | Code | When |
 |---|---|
 | `0` | every attempted (case, rep) was scored |
-| `1` | any attempt failed (an `errors.jsonl` row, `search_pool_mismatch` and `search_refused` included), the pass stopped mid-run (a judge or LLM decider call refused for its credential or model, or out of quota, stops it: the envelope's `stopped` names the slot), the variant's scored rows for one pin were served two model ids (without `--allow-model-split`), a reference freeze failed, or `summary.json` could not be written |
-| `2` | refused before spending: usage, the harness gate, a credential, a variant whose existing scored rows for one pin were served two model ids (without `--allow-model-split`), and with `--search-corpus` a one-sided, mixed or unbounded pool, rows served from another pool, a pool that cannot be read, or a pool copy that cannot be written |
+| `1` | any attempt failed (an `errors.jsonl` row, `search_pool_mismatch`, `search_refused` and `gate_failed` included), the pass stopped mid-run (a judge or LLM decider call refused for its credential or model, or out of quota, stops it, and so does `--max-budget-usd`: the envelope's `stopped` names the slot and the reason), the variant's scored rows for one pin were served two model ids (without `--allow-model-split`), a reference freeze failed, or `summary.json` could not be written |
+| `2` | refused before spending: usage, the harness gate, a credential, a `--max-budget-usd` below every open slot's estimate, a variant whose existing scored rows for one pin were served two model ids (without `--allow-model-split`), and with `--search-corpus` a one-sided, mixed or unbounded pool, rows served from another pool, a pool that cannot be read, or a pool copy that cannot be written |
 
 `hillclimb check` exits `1` on any error finding, the frozen-corpus ones included.
 
