@@ -382,9 +382,42 @@ describe("semantic_pairwise: a judge call failure is reported as one", () => {
       q.mockRestore();
     }
     const [r] = evaluate([a], c);
-    expect(calls()).toBe(2);
-    expect(r!.pairwise![0]).toMatchObject({ ref: "v3", gate: false, status: "invalid" });
+    // The 401 fails every later call the same way, so the gate reference is not judged: it is invalid with the same cause.
+    expect(calls()).toBe(1);
+    expect(r!.pairwise![0]).toMatchObject({ ref: "v3", gate: false, status: "invalid", callStatus: 401, callRetryable: false });
     expect(r!.pairwise![0]!.why).toContain("judge call failed (API 401, first_party: Invalid API key");
+    expect(r!.judgeInvalid).toBe(true);
+    expect((r as { judgeError?: unknown }).judgeError).toMatchObject({ kind: "call", status: 401, retryable: false });
+  });
+
+  it("after a credential failure, later metric-only references make no call and say why", async () => {
+    freeze("v4");
+    const q = quiet();
+    const c = ctx({ finalMessage: "CANDIDATE" });
+    try {
+      await runPairwiseJudges([a], c, { ...opts(["v3", "v4"]), gateRefs: new Set<string>() });
+    } finally {
+      q.mockRestore();
+    }
+    const [r] = evaluate([a], c);
+    expect(calls()).toBe(1);
+    expect(r!.pairwise![1]).toMatchObject({ ref: "v4", status: "invalid", callStatus: 401, callRetryable: false });
+    expect(r!.pairwise![1]!.why).toMatch(/^judge not called: an earlier comparison's call failed \(API 401/);
+  });
+
+  it("(control) a server error does not stop later comparisons: each reference is still judged", async () => {
+    freeze("v4");
+    serve(REAL_401, 1, { api_error_status: 500, result: "Internal server error" });
+    const q = quiet();
+    const c = ctx({ finalMessage: "CANDIDATE" });
+    try {
+      await runPairwiseJudges([a], c, { ...opts(["v3", "v4"]), gateRefs: new Set<string>() });
+    } finally {
+      q.mockRestore();
+    }
+    const [r] = evaluate([a], c);
+    expect(r!.pairwise!.map((o) => o.why?.startsWith("judge call failed"))).toEqual([true, true]);
+    expect(r!.pairwise![1]).toMatchObject({ callStatus: 500, callRetryable: true });
   });
 
   it("(control) error_max_structured_output_retries (is_error, no API status) stays malformed", async () => {

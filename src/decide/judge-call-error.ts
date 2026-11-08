@@ -15,6 +15,14 @@ export interface JudgeCallInfo {
   retryable: boolean;
 }
 
+/** Would every later grader call fail the same way? Only the credential (401/403), the model (404) or a spent usage
+ *  quota — the 429 that is not retryable; a plain rate limit is. The one rule the pre-spend probe refuses on and an
+ *  eval or hillclimb pass stops on. `retryable` must be KNOWN false for a 429: a 429 recorded without it (a result
+ *  written before the field existed) does not count. */
+export function failsEveryLaterCall(status: number | undefined, retryable: boolean | undefined): boolean {
+  return status === 401 || status === 403 || status === 404 || (status === 429 && retryable === false);
+}
+
 export class JudgeCallError extends Error {
   readonly status: number | undefined;
   readonly origin: string | undefined;

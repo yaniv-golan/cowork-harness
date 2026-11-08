@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { COMPOSER_ID, composeJudgedDocument, judgedOpts, recordJudgeCallError, semanticRefusal, type AssertContext } from "../assert.js";
 import { finalizeRationale } from "../decide/semantic-judge.js";
 import { PAIRWISE_PROMPT_HASH, PairwiseJudgeInvalid, type PairwiseJudge } from "../decide/pairwise-judge.js";
+import { failsEveryLaterCall, type JudgeCallError } from "../decide/judge-call-error.js";
 import { addCost, addTokenUsage } from "../decide/usage.js";
 import { warn } from "../io.js";
 import { scrub } from "../secrets.js";
@@ -57,6 +58,12 @@ export interface PairwisePrepassOpts {
 }
 
 type Outcome = NonNullable<RunResult["assertions"][number]["pairwise"]>[number];
+
+/** What a metric-only outcome records about a failed judge call: its status and whether it could succeed again. */
+const callFields = (c: JudgeCallError): { callStatus?: number; callRetryable: boolean } => ({
+  ...(c.status !== undefined ? { callStatus: c.status } : {}),
+  callRetryable: c.retryable,
+});
 
 /** Scrub markers in a text. */
 const markers = (t: string): number => t.split(REDACTION_MARK).length - 1;
@@ -114,6 +121,9 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
   const task = secrets.length ? scrub(opts.task, secrets) : opts.task;
   const taskSha256 = createHash("sha256").update(opts.task, "utf8").digest("hex");
   const warnedWeakerRef = new Set<string>();
+  // A judge call that failed the way every later one will (a rejected credential, an unknown model, a spent quota):
+  // once seen, no further comparison in this run calls the judge.
+  let deadCall: JudgeCallError | undefined;
   for (let i = 0; i < assertions.length; i++) {
     const a = assertions[i]!;
     const p = a.semantic_pairwise;
@@ -191,6 +201,16 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
         ctx.deadlinePassed = true;
         break;
       }
+      if (deadCall !== undefined) {
+        const why = `judge not called: an earlier comparison's call failed (${scrub(deadCall.summary(), secrets)})`;
+        if (!gate) {
+          outcomes.push({ ref: ref.name, ...tag, status: "invalid", why, ...callFields(deadCall) });
+          continue;
+        }
+        ctx.judgeInvalid.add(a);
+        recordJudgeCallError(ctx, a, deadCall, secrets);
+        break;
+      }
       const resolved = opts.modelFor(a);
       if (!warnedSelfJudge && opts.mainModels?.some((m) => sameModelKey(m) === sameModelKey(resolved))) {
         warnedSelfJudge = true;
@@ -253,6 +273,7 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
         // The message can quote the judge's reply, which can quote either output: scrubbed before it is stored or warned.
         // A failed call names its cause (it never quotes an output); anything else is a reply that could not be read.
         const why = e.call ? `judge call failed (${scrub(e.call.summary(), secrets)})` : scrub(e.message.split("\n")[0]!, secrets);
+        if (e.call && failsEveryLaterCall(e.call.status, e.call.retryable)) deadCall ??= e.call;
         if (!gate) {
           // A metric-only reference: this comparison is lost, the verdict is not.
           outcomes.push({
@@ -260,6 +281,7 @@ export async function runPairwiseJudges(assertions: Assertion[], ctx: AssertCont
             ...tag,
             status: "invalid",
             why,
+            ...(e.call ? callFields(e.call) : {}),
             refDocSha256: got.sha256,
             refSentSha256: createHash("sha256").update(reference, "utf8").digest("hex"),
           });

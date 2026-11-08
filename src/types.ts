@@ -2954,6 +2954,11 @@ export interface RunResult {
       /** The reference was frozen without a live fingerprint to check it against (`ref freeze --allow-unchecked`). */
       unchecked?: boolean;
       why?: string;
+      /** `invalid` from a failed judge CALL (not a malformed reply): the API status, when one was reported, and whether
+       *  the same call could succeed again (false for a rejected credential, an unknown model or a spent quota). An
+       *  outcome whose judge was not called because an earlier call in the run failed that way carries that call's. */
+      callStatus?: number;
+      callRetryable?: boolean;
     }>;
     /** WHY a `semantic_matches` assert refused its verdict, or WHAT it graded — as a typed reason rather
      *  than prose. There are TEN distinct evidence-unavailable causes (four of them `fork_*`) with different fixes, and one

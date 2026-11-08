@@ -10,6 +10,7 @@ import type { Complete, CompleteResult } from "./decider.js";
 import type { CompleteStructured } from "./pairwise-judge.js";
 import { EFFORT_THINKING_ENV_KEYS } from "../effort-env.js";
 import { modelIdMatches } from "../run/model-provenance.js";
+import { failsEveryLaterCall } from "./judge-call-error.js";
 
 /** Every `claude -p` the harness runs (the LLM judge, the LLM decider, the critique evaluator) runs ISOLATED from most
  *  of the operator's own setup. The model reads untrusted agent output, so it must be able to call no tool
@@ -936,11 +937,7 @@ export async function probeGraderCredential(model: string, role: GraderRole = "j
       err instanceof ApiExitError
         ? `API ${err.status ?? "error"}${err.apiMessage ? `: ${err.apiMessage}` : ""}`
         : (err.message ?? String(e)).split("\n")[0]!;
-    // Only what fails every later grade the same way: the credential (401/403), the model (404), a spent quota.
-    // A spent usage quota is the 429 that is not retryable (a plain rate limit is, and only warns).
-    const refuse =
-      err instanceof ApiExitError &&
-      (err.status === 401 || err.status === 403 || err.status === 404 || (err.status === 429 && !err.retryable));
+    const refuse = err instanceof ApiExitError && failsEveryLaterCall(err.status, err.retryable);
     return {
       status: refuse ? "refuse" : "warn",
       model,
