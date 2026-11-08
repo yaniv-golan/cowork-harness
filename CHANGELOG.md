@@ -199,7 +199,8 @@ All notable changes to this project are documented here. The format is based on
 - **Breaking: a rolling model alias is not a concrete pin.** An id ending in `-latest` or `-0` can roll to a new
   snapshot mid-run, so `eval`, `hillclimb run` and `regrade` (including `--judge-model`) now refuse it before spending,
   as they refuse `opus` or `best`. Pin the dated id: the agent reports it as `models[0]` in a run's `result.json`. On
-  `run`, such a pin's `modelPinHonored` is now unset rather than compared.
+  `run`, which still accepts such a pin, a run whose main loop reports no live model now leaves `modelPinHonored`
+  unset instead of reading the usage key as the pin served.
 - **Breaking: `eval` exits 1 on more outcomes.** A scheduled job with no record (the eval was interrupted, killed,
   ended on a requested exit, or stopped on a grader failure) and an agent served more than one model across one arm's
   scored reps of a scenario now exit 1, on `eval` and on `eval report`. An (arm, scenario) all of whose reps were

@@ -82,3 +82,18 @@ describe("hillclimb cost: usage keyed by the requested id is the main model's", 
     expect(s?.share).toBeCloseTo(0.1);
   });
 });
+
+// `run` with a rolling `-latest` / `-0` pin (eval, hillclimb and regrade refuse one before spending; plain `run` does not).
+describe("deriveModelProvenance under a rolling-alias pin", () => {
+  const LATEST = "claude-3-5-sonnet-latest";
+  const DATED = "claude-3-5-sonnet-20241022";
+  it("no live model: the usage key cannot vouch for a rolling pin, so the pin is unset, not compared", () => {
+    expect(deriveModelProvenance(LATEST, ["<synthetic>"], [], { [LATEST]: { costUSD: 0.07 } }).modelPinHonored).toBeUndefined();
+    // (control) the same evidence under a concrete pin is compared
+    expect(deriveModelProvenance(PIN, ["<synthetic>"], [], { [PIN]: { costUSD: 0.07 } }).modelPinHonored).toBe(true);
+  });
+  it("a live model is still compared: served its dated snapshot is honored, another model is not", () => {
+    expect(deriveModelProvenance(LATEST, [DATED], [], {}).modelPinHonored).toBe(true);
+    expect(deriveModelProvenance(LATEST, ["claude-sonnet-5"], [], {}).modelPinHonored).toBe(false);
+  });
+});
