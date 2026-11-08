@@ -5919,6 +5919,7 @@ describe("checkVmAgentStagingFacts — startVM still stages the agent", () => {
     ["the handler reports ready", CATCH.replace("ready:!1", "ready:!0")],
     ["an options object beside the handler", CATCH.replace("prepareForVM(t)", "prepareForVM(t,{skip:!0})")],
     ["something chained after the handler", `${CATCH}.then(e=>({ready:!0}))`],
+    ["an innocuous-looking chain after the handler", `${CATCH}.then(e=>e)`],
     ["the call only in the handler", `Promise.resolve().catch((e=>EG.prepareForVM(t)))`],
   ])("flags: %s", (_n, el) => {
     expect(checkVmAgentStagingFacts(vmChunk(withCatch(el))).join("\n")).toContain("vm agent staging");

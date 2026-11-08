@@ -5831,9 +5831,15 @@ function enclosingFunctionName(chunk: string, at: number): string | null {
 function stagesAgentBinary(elements: string): boolean {
   const hits = splitTop(elements).filter((e) => /^[\w$]+(?:\.[\w$]+)?\.prepareForVM\(/.test(e.trim()));
   if (hits.length !== 1) return false;
-  const m = hits[0]!.trim().match(/^[\w$]+(?:\.[\w$]+)?\.prepareForVM\([\w$]+\)(?:\.catch\((.*)\))?$/s);
-  if (!m) return false;
-  return m[1] === undefined || (m[1].includes("ready:!1") && !m[1].includes("ready:!0"));
+  const el = hits[0]!.trim();
+  const call = el.match(/^[\w$]+(?:\.[\w$]+)?\.prepareForVM\([\w$]+\)/);
+  if (!call) return false;
+  const rest = el.slice(call[0].length);
+  if (rest === "") return true;
+  // The `.catch(…)` must be the whole remainder: anything chained after it could replace the result.
+  if (!rest.startsWith(".catch(") || matchClose(rest, ".catch".length) !== rest.length - 1) return false;
+  const handler = rest.slice(".catch(".length, -1);
+  return handler.includes("ready:!1") && !handler.includes("ready:!0");
 }
 
 export function checkVmAgentStagingFacts(files: Map<string, string>): string[] {
