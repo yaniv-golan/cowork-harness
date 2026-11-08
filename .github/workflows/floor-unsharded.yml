@@ -1,0 +1,98 @@
+name: floor-unsharded
+
+# The unit suite once, unsharded, on Node 22, on every push to main. It is the instrument for a hang seen only on Node 22
+# when the whole suite runs in one vitest process; the `floor` job in ci.yml is what gates a merge, in shards.
+# A separate workflow on purpose: the publish gate (require-ci-success) reads only ci.yml's run, so this can neither
+# block a release nor lengthen the wait for one, and its red shows as a red run. Remove it when that hang is captured.
+# No `concurrency`: a later push to main must never cancel a capture in progress.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  floor-unsharded:
+    name: floor check, unsharded (node 22)
+    runs-on: ubuntu-latest
+    # Hard backstop, same reason the sharded `test` job carries one: a test that spawns a CLI subprocess
+    # which blocks hangs SYNCHRONOUSLY, and vitest's per-test timeout cannot interrupt a blocked sync
+    # call — only a wall-clock kill can. This job runs the suite UNSHARDED, the shape the `test` job's
+    # own header calls "the former `unit` 15-min pole", so 40 is a generous backstop, not a target.
+    #
+    # Budget for the hang path: setup incl. gdb install <= 3 min [~0.75]  +  Build + test <= 37 (its step limit)
+    #   + disarm <= 1 (the dump fires at 32 min with a 2.5-min gdb budget, so it is done by ~35)  +  upload <= 1
+    #   = 42 min, under this 45. A green Build + test takes ~9 min.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Pinned to the ENGINES FLOOR, deliberately behind the other jobs. Without this, the floor in
+      # package.json is an unverified claim: everything green on 24 says nothing about whether the
+      # package still runs where it says it does.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "22", cache: npm }
+      - run: npm ci
+      # Hang evidence. A test process that hangs must leave stacks behind, not just a time-limit kill with the log
+      # lost. The suite's own watchdog dumps a fork blocked on a synchronous child; this job-level dump, armed to
+      # fire 5 min before Build + test's own 37-min limit, covers everything else (vitest main, an idle fork, an orphaned child). gdb lets both
+      # dumps record all-thread backtraces; an apt outage must not fail the job, so its install may fail.
+      - name: Install gdb (stack dumps if a test process hangs)
+        continue-on-error: true
+        run: |
+          if ! { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends gdb; }; then
+            echo "::warning::gdb install failed: a hang on this run will be dumped WITHOUT backtraces"
+            exit 1
+          fi
+      - name: Arm the job-level hang dump
+        run: |
+          mkdir -p "$RUNNER_TEMP/hangs"
+          HANG_DUMP_GDB_BUDGET=150 nohup scripts/ci/hang-dump.sh 1920 "$RUNNER_TEMP/hangs" >"$RUNNER_TEMP/hangs/hang-dump.out" 2>&1 &
+          echo $! >"$RUNNER_TEMP/hang-dump.pid"
+      - name: Build + test
+        # A step limit under the job's 45 (see its budget), so a hang fails this step and the upload below still runs.
+        timeout-minutes: 37
+        # The hillclimb lite-contract test fetches pinned upstream files; on CI a fetch failure must fail, not skip.
+        env:
+          COWORK_HARNESS_CONTRACT_FETCH: required
+          COWORK_TEST_HANG_DIR: ${{ runner.temp }}/hangs
+        # `npm run ci`'s three steps, inlined so the test run can carry reporters: `hanging-process` names what keeps
+        # vitest alive after the run, and the JSON report gives per-file wall time (the next step). `npm run ci` itself
+        # stays as it is: it is also prepublishOnly and runs locally, where $RUNNER_TEMP is unset.
+        run: |
+          set -o pipefail
+          { npm run typecheck && npm run build && npx vitest run --reporter=default --reporter=hanging-process \
+              --reporter=json --outputFile.json="$RUNNER_TEMP/hangs/vitest-files.json"; } 2>&1 | tee "$RUNNER_TEMP/hangs/vitest.log"
+      - name: Per-file wall time
+        if: always()
+        continue-on-error: true
+        run: |
+          [ -s "$RUNNER_TEMP/hangs/vitest-files.json" ] || { echo "no JSON report (the test run did not finish)"; exit 0; }
+          npx tsx scripts/ci/vitest-file-timing.ts "$RUNNER_TEMP/hangs/vitest-files.json" 40 | tee -a "$RUNNER_TEMP/hangs/vitest.log"
+      - name: Disarm the job-level hang dump (let a dump already under way finish)
+        if: always()
+        run: |
+          pid=$(cat "$RUNNER_TEMP/hang-dump.pid" 2>/dev/null) || exit 0
+          if [ -e "$RUNNER_TEMP/hangs/.dump-started" ]; then timeout 60 tail --pid="$pid" -f /dev/null || true; else kill "$pid" 2>/dev/null || true; fi
+      - name: Upload hang evidence and the test log (only when the test step did not pass)
+        if: ${{ always() && !success() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: hangs-floor
+          path: ${{ runner.temp }}/hangs
+          if-no-files-found: ignore
+          retention-days: 14
+      - name: Upload the test log and per-file timing (passing run)
+        if: ${{ success() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: timing-floor
+          path: |
+            ${{ runner.temp }}/hangs/vitest.log
+            ${{ runner.temp }}/hangs/vitest-files.json
+          if-no-files-found: ignore
+          retention-days: 7
