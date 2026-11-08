@@ -160,6 +160,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     contextEvents: record.contextEvents,
     hookFailureBlocks: opts.hookFailureBlocks,
     deviceBridge: undefined, // chat never sets device_bridge
+    hostInputs: undefined, // chat's inline session cannot set plugins.from_host
     mcpErrors: record.mcpErrors,
     hookEvents: record.hookEvents,
     fileToolAttempts: record.fileToolAttempts,

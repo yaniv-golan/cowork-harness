@@ -33,6 +33,12 @@ describe("fingerprintShapeKeys — parse-or-error, never parse-and-pass", () => 
 
   // M3 — the extractor must fail LOUDLY when the shape is renamed. A regex that stops matching and
   // yields an empty key set would make every site trivially satisfiable.
+  it("a conditional spread NESTED inside a member is that member's, not a key of its own", () => {
+    const nested = src.replace("    plugins: {\n", "    plugins: {\n      ...(x ? { nested_only: 1 } : {}),\n");
+    expect(nested).not.toBe(src);
+    expect(fingerprintShapeKeys(nested).keys).toEqual(REAL_KEYS);
+  });
+
   it("M3: errors when the `shape` literal cannot be found", () => {
     const { error } = fingerprintShapeKeys(src.replace("const shape = {", "const shp = {"));
     expect(error).toMatch(/could not find/);

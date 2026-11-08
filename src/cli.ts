@@ -343,6 +343,8 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   verify-cassettes <file|dir>  CI gate (no token): privacy + staleness + scenario-drift — exit 1 = verified & failed, exit 2 = usage (incl. an empty dir, unless --allow-empty), exit 3 = could not verify
       [--skip-privacy|--skip-staleness|--skip-scenario-drift] [--margins]  skip a check / print per-assert budget margins
       [--allow-empty]              an EXISTING but cassette-free dir exits 0 (a missing path still fails)
+      [--host-inputs [--strict]]   compare a plugins.from_host recording with THIS machine's installed set (a note;
+                                   --strict fails on that drift only, never on the agent-version or other notes)
       [--session <file>]           resolve skill sources from THIS session (a MOVED cassette); one cassette at a time
       [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-host-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]
       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow

@@ -16,6 +16,18 @@ import { readSkillDescription, type PluginSkillRoot } from "./run/skill-metadata
 import { pluginRootsWithRunnableHooks } from "./run/hook-events.js";
 import { scanWorkspaceFixture, type ScannedWorkspaceFixture } from "./fixture/workspace.js";
 import { pathsInsideMounts } from "./hillclimb/answer-key.js";
+import {
+  hostConfigDir,
+  hostPluginMountPath,
+  hostStageFilter,
+  hostInputsSummary,
+  readHostSnapshot,
+  QUALIFIED_PLUGIN_KEY,
+  selectHostInputs,
+  stageHostInputs,
+  type HostInputs,
+  type HostSelection,
+} from "./host-inputs.js";
 
 /** Expand a leading `~` the way a shell would for THE CURRENT user only, then resolve whatever's left
  *  against `base`. `~` and `~/x` become `homedir()` / `join(homedir(), "x")`; a bare absolute path is
@@ -149,6 +161,23 @@ export const SessionConfig = z.strictObject({
       enabled: z.array(z.string().min(1)).default([]), // enabledPlugins (name@marketplace)
       local_plugins: z.array(z.string().min(1)).default([]), // host plugin dirs -> mnt/.local-plugins/marketplaces/<marketplace>/<plugin> (>=1.14271.0; older baselines: mnt/.local-plugins/cache) (--plugin-dir)
       remote_plugins: z.array(z.string().min(1)).default([]), // host plugin dirs -> mnt/.remote-plugins
+      // The operator's installed set as a recorded run input: `true` (every enabled user-scope plugin and every
+      // user skill) or the named ones. See src/host-inputs.ts and docs/session.md.
+      from_host: z
+        .union([
+          z.literal(true),
+          z.strictObject({
+            plugins: z
+              .array(
+                z.string().min(1).regex(QUALIFIED_PLUGIN_KEY, {
+                  message: "a from_host plugin is <name>@<marketplace>; a bare name is ambiguous, since two marketplaces can each have one",
+                }),
+              )
+              .default([]),
+            skills: z.array(z.string().min(1)).default([]),
+          }),
+        ])
+        .optional(),
     })
     .default({ config_dir: null, marketplaces: [], local_marketplaces: [], enabled: [], local_plugins: [], remote_plugins: [] }),
 
@@ -392,6 +421,9 @@ export interface Mount {
    * chat labels) keys off the KIND rather than fragile `mountPath` string prefixes like `.projects/`.
    */
   kind: "folder" | "project" | "upload" | "local-plugin" | "remote-plugin" | "marketplace-plugin";
+  /** Set on a `plugins.from_host` plugin: its `<name>@<marketplace>` key. `buildLaunchPlan` points `hostPath` at the
+   *  run's own copy before anything stages it. */
+  hostInputKey?: string;
   /**
    * The realpath of `hostPath`, set for `folder` mounts. Production's sub-agent folder manifest renders
    * `resolvedFolders[i].canonical` (`gg()`), NOT the path as the user declared it, so a manifest built
@@ -431,6 +463,8 @@ export interface LaunchPlan {
    *  sources. Read by the host-path input provenance, which treats a staged skill as input and its source
    *  location as never exempt. Absent when none were staged (and on resume, which stages nothing). */
   stagedSkills?: { src: string; dest: string }[];
+  /** `plugins.from_host`: what this run took from the host, hashed over its staged copy (`RunResult.hostInputs`). */
+  hostInputs?: HostInputs;
   mcpConfig: string | null; // host path to --mcp-config file, if any
   model?: string;
   // Already validated against the resolved model's per-model config (see `validateEffort`) but NOT
@@ -846,6 +880,9 @@ export interface LaunchSources {
   hostOnlyFolders: Mount[];
   /** The scenario's `workspace_fixture`, scanned and validated (absent on resume — nothing is re-staged). */
   workspaceFixture?: ScannedWorkspaceFixture;
+  /** `plugins.from_host`: what was picked from the host (absent when a later leg reuses the run's snapshot), and
+   *  the inputs a scenario plugin or skill of the same name replaces. */
+  fromHost?: { selection?: HostSelection; shadowed: string[] };
 }
 
 export function resolveLaunchSources(
@@ -1251,6 +1288,58 @@ export function resolveLaunchSources(
     warn(`::warning:: [plugins] enabled "${en}" did not resolve in local marketplace "${pMkt}" (COWORK_HARNESS_SOFT_MISSING)\n`);
   }
 
+  // plugins.from_host. Read from the host only on a run's first leg; a later leg reuses the run's snapshot, so every
+  // leg sees the same bytes. A scenario plugin or skill of the same name replaces the host's (recorded as shadowed).
+  let fromHost: LaunchSources["fromHost"];
+  if (session.plugins.from_host !== undefined) {
+    if (resume) throw new UsageError("plugins.from_host does not support --resume: a resumed turn re-stages nothing from the host");
+    if (pinnedConfigDir)
+      throw new UsageError(
+        "plugins.from_host cannot be combined with plugins.config_dir: from_host delivers your installed plugins and skills into the run's own config dir. Drop one",
+      );
+    const prior = opts.runRoot ? readHostSnapshot(opts.runRoot) : undefined;
+    if (prior) {
+      for (const p of prior.plugins)
+        mounts.push({
+          hostPath: p.dir,
+          mountPath: p.mountPath,
+          mode: "r",
+          kind: "local-plugin",
+          hostInputKey: p.key,
+          stageFilter: hostStageFilter,
+        });
+      fromHost = { shadowed: prior.hostInputs.shadowed ?? [] };
+    } else {
+      const selection = selectHostInputs(session.plugins.from_host, hostConfigDir(), warn);
+      const scenarioPlugins = new Set<string>([
+        ...[...session.plugins.local_plugins, ...session.plugins.remote_plugins].map((p) => pluginNameOf(expand(p))),
+        ...session.plugins.enabled.map((e) => (e.lastIndexOf("@") > 0 ? e.slice(0, e.lastIndexOf("@")) : e)),
+        ...mountedBareNames,
+      ]);
+      const shadowed = [
+        // By its key's name or by its manifest name: either is the name the agent loads it under.
+        ...selection.plugins
+          .filter((p) => scenarioPlugins.has(p.name) || scenarioPlugins.has(pluginNameOf(p.installPath)))
+          .map((p) => p.key),
+        ...selection.skills.filter((s) => skillDests.has(s.name)).map((s) => `skill:${s.name}`),
+      ];
+      for (const p of selection.plugins) {
+        if (shadowed.includes(p.key)) continue;
+        mounts.push({
+          hostPath: p.installPath,
+          mountPath: hostPluginMountPath(p.marketplace, p.name, bareNames),
+          mode: "r",
+          kind: "local-plugin",
+          hostInputKey: p.key,
+          // Set, never left to the runtimes' git fallback: a host plugin delivers its whole install (as Claude Code loads
+          // it), so a copy filtered to a git tracked set would not be the bytes that were hashed.
+          stageFilter: hostStageFilter,
+        });
+      }
+      fromHost = { selection, shadowed };
+    }
+  }
+
   const missing = mounts.filter((mt) => !existsSync(mt.hostPath));
   if (missing.length) {
     const list = missing.map((m) => `${m.hostPath} → ${m.mountPath}`).join("; ");
@@ -1313,7 +1402,19 @@ export function resolveLaunchSources(
     mounts: presentMounts,
     hostOnlyFolders,
     ...(workspaceFixture ? { workspaceFixture } : {}),
+    ...(fromHost ? { fromHost } : {}),
   };
+}
+
+/** A plugin dir's name: its `.claude-plugin/plugin.json` `name`, else the dir's basename. */
+function pluginNameOf(dir: string): string {
+  try {
+    const n = (JSON.parse(readFileSync(join(dir, ".claude-plugin", "plugin.json"), "utf8")) as { name?: unknown }).name;
+    if (typeof n === "string" && n) return n;
+  } catch {
+    // no manifest, or not JSON: the basename names it
+  }
+  return basename(dir);
 }
 
 /** A later leg's staging. `persistent`: the same tree, nothing re-copied, the agent config kept. `cowork-task`: a new
@@ -1417,7 +1518,8 @@ export function buildLaunchPlan(
   opts: { deviceBridge?: boolean; workBase?: string; legStage?: LegStage; runRoot?: string } = {},
 ): LaunchPlan {
   const expand = (p: string) => p.replace(/^~(?=$|\/)/, homedir());
-  const { pinnedConfigDir, createPinnedConfigDir, skills, mounts: presentMounts, hostOnlyFolders } = sources;
+  const { pinnedConfigDir, createPinnedConfigDir, skills, hostOnlyFolders } = sources;
+  let presentMounts = sources.mounts;
   // Beside the session tree: a `workdir: persistent` multi-leg run shares one config dir across legs, as it shares the
   // tree (protocol's agent reads it directly; the sandbox tiers copy it into mnt/.claude on the first leg only).
   const configDir = pinnedConfigDir ?? join(resolve(opts.workBase ?? outDir), "claude-config");
@@ -1472,6 +1574,23 @@ export function buildLaunchPlan(
   for (const sk of skills)
     cpSync(sk.src, join(configDir, "skills", sk.dest), { recursive: true, ...(sk.filter ? { filter: sk.filter } : {}) });
 
+  // 4. plugins.from_host: copy the picked inputs into the run's snapshot and hash the copies; every tier then stages
+  // from the snapshot, so the recorded hash covers what the agent reads. A later leg re-hashes the snapshot instead.
+  let hostInputs: HostInputs | undefined;
+  if (sources.fromHost) {
+    const runRoot = opts.runRoot ?? outDir;
+    const mountPaths = new Map(presentMounts.filter((m) => m.hostInputKey).map((m) => [m.hostInputKey!, m.mountPath]));
+    const firstLeg = sources.fromHost.selection !== undefined;
+    const staged = stageHostInputs(sources.fromHost.selection, sources.fromHost.shadowed, runRoot, mountPaths);
+    hostInputs = staged.hostInputs;
+    presentMounts = presentMounts.map((m) => (m.hostInputKey ? { ...m, hostPath: staged.pluginDirs.get(m.hostInputKey)! } : m));
+    // A `workdir: persistent` later leg keeps the config dir its earlier legs used; the staging step re-hashes the skills
+    // there instead (verifyStagedHostInputs), so a re-copy must not paper over an edit.
+    if (opts.legStage?.workdir !== "persistent")
+      for (const [name, dir] of staged.skillDirs) cpSync(dir, join(configDir, "skills", name), { recursive: true, verbatimSymlinks: true });
+    if (firstLeg) warnToStderr(`::notice:: ${hostInputsSummary(hostInputs)}\n`);
+  }
+
   // 5. base env — L0 only. effort/thinking are passed as CLI FLAGS at L1/L2 (the
   // CLAUDE_EFFORT env var is a no-op; real Cowork uses --effort/--max-thinking-tokens),
   // so they are NOT set here as env.
@@ -1512,6 +1631,7 @@ export function buildLaunchPlan(
     webFetchVendorDeny: baseline.network.webFetchVendorDeny ?? [],
     ...(sources.workspaceFixture ? { workspaceFixture: sources.workspaceFixture } : {}),
     ...(skills.length ? { stagedSkills: skills.map(({ src, dest }) => ({ src, dest })) } : {}),
+    ...(hostInputs ? { hostInputs } : {}),
   };
 }
 

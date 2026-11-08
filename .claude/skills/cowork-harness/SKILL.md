@@ -67,6 +67,7 @@ CI-grade scenario, and the post-hoc debug loop; the rest are narrower tools that
   no scenario file.
 - **Repeatable, asserted regression** → author a `scenarios/*.yaml` and run `cowork-harness run`.
   This is the CI-grade path and most of this skill.
+- **Against the plugins and skills you have installed** → `plugins.from_host` ([schema](references/scenario-schema.md)).
 - **A run failed — or greened and you don't trust it** (the debugging loop) → **Read
   [`references/debugging.md`](references/debugging.md) before touching the run.** Its *Triage* table first
   splits "the skill misbehaved" from "a green you don't trust" — they need different tools — then names the

@@ -582,6 +582,8 @@ outside `$HOME` redacted, the count in the header). With `--search-corpus`, also
 rep was served from), the manifest's `pins.searchCorpus` and `searchCorpusProvenance` (`schemaVersion: 1`, so an
 older harness refuses the dir rather than report it without its label), each `runs.jsonl` line's `searchCorpus`
 counts, and `report.json`'s `searchCorpus` and `summary.searchPoolMismatch` / `summary.confounded`.
+A rep whose session sets `plugins.from_host` also carries `hostInputs`, the set hash of what it took from your
+machine (`result.json`'s `hostInputs.setHash`).
 
 The runs themselves are ordinary run dirs under the runs root, labelled `eval:<eval-id>:<arm>`, so
 `prune`'s `--keep-last` applies to them: at the defaults an eval leaves 10 runs per scenario and a bare

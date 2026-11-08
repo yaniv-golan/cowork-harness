@@ -99,6 +99,7 @@ plugins:
     - ./skills/my-skill
   remote_plugins: []             # UI-installed / org-remote plugin dirs → mnt/.remote-plugins/plugin_<id> (migrated-Cowork shape)
                                  #   — use this to mirror a plugin installed through Cowork's UI
+  # from_host: true              # your installed plugins and skills as a recorded input (see "Your installed set")
 skills:
   local: []                      # extra host skill dirs → CLAUDE_CONFIG_DIR/skills
   # Overrides for the skill-discovery SDK-MCP gates (container/hostloop only — see fidelity-gaps.md
@@ -288,6 +289,7 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 | `skills.suggest_enabled` | gate `245679952` (`suggestSkillsEnabled`) override | `container`/`hostloop` (and `cowork`) only. `true` (or unset, if the synced baseline gate is on/absent) declares the `skills` SDK-MCP server's `suggest_skills` tool; `false` omits it and drops `list_skills`' fallback-to-`suggest_skills` clause. See [fidelity-gaps.md](./fidelity-gaps.md). |
 | `skills.proactive_suggest_enabled` | gate `1598976391` (`proactiveSkillSuggestEnabled`) override | Only consulted when `suggest_enabled` (effective) is true. `true` swaps `suggest_skills` to the proactive description, adds an optional `trigger` enum param (`user_asked` \| `proactive`), and chains the empty-catalog `note` into `search_plugins`. Omit to follow the baseline: from the `1.46388.3` baseline Desktop does not read the gate and proactive mode is **always on**, so the gate row is ignored; for an older baseline the synced gate decides (**on** from `1.24012.11`; `false` for a baseline predating the gate). On a baseline from `1.46388.3`, `false` builds a non-proactive `suggest_skills` that production does not ship there; use it only to exercise the older surface. |
 | `mcp.config` / `mcp.enabled[]` | `--mcp-config` / `enabledMcpjsonServers` | the supported way to attach an MCP server to a session under test. |
+| `plugins.from_host` | your installed plugins and skills | `true`, or `{plugins: ["<name>@<marketplace>", …], skills: ["<name>", …]}`. Copied into the run, hashed, recorded as `RunResult.hostInputs`. See [Your installed set](#your-installed-set-pluginsfrom_host). |
 
 > Inside a git repo, `folders[]` and `skills.local[]` stage only **git-tracked** files into the mount (matching
 > real Cowork's install-from-repo behavior). A skill dir with SOME untracked files stages the tracked ones
@@ -299,6 +301,79 @@ See [discovery.md](./discovery.md) for the full model. In short: the harness bui
 > working tree, so uncommitted edits to a tracked file are tested without committing; but commit before
 > recording the locking cassette, since real Cowork ships the committed tree. See
 > [docs/cli.md → Test a local skill in one command](./cli.md#test-a-local-skill-in-one-command).
+
+### Your installed set (`plugins.from_host`)
+
+Every tier gives the agent its own config dir, so it never reads your `~/.claude`. To test against the plugins and
+skills you have installed, name them as an input:
+
+```yaml
+plugins:
+  from_host: true                 # every enabled user-scope plugin, and every skill in <config>/skills
+# or
+plugins:
+  from_host:
+    plugins: [my-plugin@my-marketplace]   # <name>@<marketplace>; a bare name is refused as ambiguous
+    skills: [my-skill]
+```
+
+`<config>` is `CLAUDE_CONFIG_DIR`, else `~/.claude`. It is only read. Plugins come from
+`plugins/installed_plugins.json` (version 2; another version is refused), one `scope: "user"` entry per key,
+delivered from that entry's `installPath`. Under `true`, `settings.json`'s `enabledPlugins` picks the set.
+
+**What is skipped, what refuses.** Under `true`, an enabled plugin that is not installed, or installed only at
+project or local scope, is skipped. Each skip is named in the run's `[from_host]` line and in
+`hostInputs.skipped`. A missing `settings.json` or `installed_plugins.json` gives an empty set with a warning. Under
+an explicit list, each of those refuses. Both forms refuse:
+
+- a file that cannot be read or parsed;
+- an `installPath` that is missing or outside `<config>/plugins`;
+- two user-scope entries for one key;
+- two plugins with the same name;
+- a symlink inside a plugin or skill tree that points outside it.
+
+A symlinked skill is followed and copied; a dangling one refuses. `from_host` refuses alongside
+`plugins.config_dir`, and on `--resume`.
+
+**How it is delivered.** Each input is copied into the run (`<run>/host-inputs/`), and the copy is what every
+tier stages. The copy leaves out Claude Code's `.in_use` / `.orphaned_at` markers and OS metadata
+(`.DS_Store` and the like), and applies no git filter: a plugin is delivered as Claude Code loads it. A plugin
+mounts at `mnt/.local-plugins/marketplaces/<marketplace>/<name>` as a local plugin (`--plugin-dir`); a skill goes
+into the run's config dir. A later leg of the same run uses the same copy, re-hashed first; a copy that changed
+refuses. A scenario plugin (`local_plugins`, `remote_plugins`, an `enabled` name) or `skills.local` skill with the
+same name replaces the host's, which is not delivered and is listed in `hostInputs.shadowed`. A plugin's name here is
+its key's name or its manifest name (`.claude-plugin/plugin.json`): either one matching replaces it. On a
+`workdir: persistent` run, a later leg reuses the tree the earlier legs used, and the agent could have written into a
+host plugin or skill there; each is re-hashed before the leg starts, and one that changed refuses.
+
+**Disk.** A run dir holds about twice your installed set: the snapshot under `host-inputs/`, and the copy each tier
+stages from it. `true` takes everything enabled, so name what you need on a large install, and clear old run dirs with
+`cowork-harness prune`.
+
+**What it records.** `RunResult.hostInputs`: each plugin's key, version, `gitCommitSha` (information only) and a
+sha256 over its staged copy (every file's bytes and executable bit, every directory, every in-tree symlink); each
+skill's name and sha256; and `setHash` over the delivered set. A change to any delivered file moves `setHash`.
+`hillclimb` adds `setHash` to its gate, so a host change re-gates the loop, and its rows carry it as
+`meta.host_inputs`. `eval`'s runs lines carry it as `hostInputs`. A cassette freezes `hostInputs`; replay never
+reads the host. `verify-cassettes --host-inputs` compares it with this machine: a difference is a note, and
+`--strict` makes it a failure (exit 1) and escalates nothing else; `--strict` refuses alongside `--skip-staleness`.
+
+**What rides along.** A plugin brings its hooks and its `.mcp.json` MCP servers. Hooks turn on
+`--include-hook-events`, which changes the frame stream. A plugin MCP server that needs a host toolchain, or an
+env var from your shell, may not start at `container` or `microvm`. At `protocol` and `hostloop` the agent runs on
+your machine, so those MCP servers start there, with your shell's environment (less the variables the harness
+strips). At `protocol` a plugin's hooks run as your own processes too: a run whose installed set has a plugin with
+hooks is refused until the scenario sets `allow_host_hooks: true`. At `hostloop`, `CLAUDE_PLUGIN_ROOT` is set
+only when exactly one plugin is mounted, so with `from_host` it is unset for your own plugin too. **Not
+included:** MCP servers from `~/.claude.json`, `settings.json` hooks, project- and local-scope plugins, and
+`<config>/skills` entries whose name starts with `.`.
+
+**Privacy.** A cassette with `hostInputs` publishes the names of your installed plugins and skills.
+`verify-cassettes` reports each as a `host-inventory` finding at every tier (a skipped or replaced name too), and
+`record` runs its host-inventory pre-flight at every tier. Under `verify-cassettes --host-inputs`, the local check
+on the machine the names come from, the names that appear only in `hostInputs` are a note instead; any other
+finding still fails, and a plain `verify-cassettes` (as CI runs it) still fails on them. Keep `from_host` recordings out of committed fixtures. A kept run dir holds
+copies of your installed plugins and skills: don't publish it.
 
 ### Egress
 `extra_allow` adds hosts to the release allowlist for this session; `unrestricted: true` reproduces Cowork's `"*"` (allow-all). One exception on web_fetch's Path B: from baseline `desktop-4.4212.0`, the hosts in the baseline's `network.webFetchVendorDeny` are refused even when `extra_allow` names them, as Cowork does; only `unrestricted: true` lets web_fetch reach them. The allowlist is enforced at `container`/`microvm`/`hostloop` fidelity (and `cowork`, which resolves to one of those) — only `protocol` has no egress boundary; see [boundary.md](./boundary.md).

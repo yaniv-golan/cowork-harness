@@ -1,3 +1,4 @@
+import { HostInputsShape, currentHostInputs, hostConfigDir, type FromHost, type HostInputs } from "../host-inputs.js";
 import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
 import { turnCapReached } from "./turn-cap.js";
 import { hasHookFailureBlocks, resolveHookFailureBlocks, type HookFailureBlocks } from "./hook-failure-blocks.js";
@@ -183,6 +184,7 @@ import {
   DEFAULT_SCAN_PATTERNS,
   MANIFEST_SCAN_PATTERNS,
   HOST_INVENTORY_CLS,
+  hostInputsFindings,
   KNOWN_BUILTIN_SKILLS,
   type ScanFinding,
   type AllowInput,
@@ -446,6 +448,12 @@ export interface Cassette {
   // reader may safely ignore); a non-empty one stamps v16, so an older reader refuses the cassette rather than read
   // a failed frame as "no decision". ABSENT (an older recording): replay decides from the recorded agent version.
   hookFailureBlocks?: { events: string[] } | { unknown: true; why: string };
+  // What `plugins.from_host` took from the recording host (RunResult.hostInputs): keys, versions and hashes only, never
+  // a file body. Replay never reads the host; `verify-cassettes --host-inputs` compares it with this machine on request.
+  // An optional property with no stamp bump: an older reader ignores an unknown top-level key, and replay's verdict
+  // does not depend on it. HostInputsShape is strict, so ADDING a field inside it later is a stamp bump: a reader
+  // without the field would refuse every cassette that carries it.
+  hostInputs?: HostInputs;
   // v17: what a device_bridge run modeled (RunResult.deviceBridge). FROZEN so replay reports what the recording
   // modeled, not what this build would. Present only with `device_bridge: true`, which stamps v18 by itself (v17 before the delete card).
   deviceBridge?: DeviceBridgeRecord;
@@ -1581,6 +1589,15 @@ export function buildSessionFingerprint(
       enabled: [...cfg.plugins.enabled].sort(),
       local_plugins: [...cfg.plugins.local_plugins].sort(),
       remote_plugins: [...cfg.plugins.remote_plugins].sort(),
+      // Only when set, so every session without it keeps its recorded hash.
+      ...(cfg.plugins.from_host !== undefined
+        ? {
+            from_host:
+              cfg.plugins.from_host === true
+                ? true
+                : { plugins: [...cfg.plugins.from_host.plugins].sort(), skills: [...cfg.plugins.from_host.skills].sort() },
+          }
+        : {}),
     },
     skills: { local: [...cfg.skills.local].sort() },
     mcp: { config: cfg.mcp.config, enabled: [...cfg.mcp.enabled].sort() },
@@ -2027,6 +2044,14 @@ export interface ScannableCassette {
   // VALID lane gets it free (it passes the whole `Cassette`), which is exactly why a valid-only regression
   // passes with half the fix missing.
   folderPrefixMap?: Array<{ from?: string; mount?: string }>;
+  // `plugins.from_host`'s record: the recording host's installed plugin keys and skill names. Inventory by
+  // definition, and a sign the host's set reached the agent at ANY tier.
+  hostInputs?: {
+    plugins?: Array<{ key?: unknown }>;
+    skills?: Array<{ name?: unknown }>;
+    skipped?: Array<{ key?: unknown }>;
+    shadowed?: unknown[];
+  };
   // `fidelity` is a plain string here, NOT the Scenario literal union — a malformed document can carry
   // anything, and the projection is responsible for refusing to pass through a value it cannot vouch for
   // (see `knownTier` in `readCassetteForScan`). `answers`/`assert` are only ever JSON.stringify'd by the
@@ -2075,12 +2100,27 @@ export function scanCassette(cassette: ScannableCassette, allow: AllowInput[]): 
   // entirely — a silent fail-open on exactly the file a leak would arrive in. Only a tier we can positively
   // identify as sealed (`container`, `microvm`) is exempt. Same fail-closed reasoning as `cowork`.
   const tier = (cassette.effectiveFidelity ?? cassette.scenario.fidelity) as string | undefined;
-  if (tier === undefined || HOST_INHERITING_TIERS.has(tier)) {
+  // plugins.from_host delivers the host's installed set at every tier, so its names are findings wherever they
+  // appear, and the structural scan runs even at a sealed tier.
+  const hostNames = [
+    ...(cassette.hostInputs?.plugins ?? []).map((p) => p?.key).filter((k): k is string => typeof k === "string"),
+    ...(cassette.hostInputs?.skills ?? []).map((s) => s?.name).filter((n): n is string => typeof n === "string"),
+    // A skipped or shadowed entry was not delivered, but its name is still the host's: enabled in its settings, or
+    // installed and replaced by the scenario's own (`skill:<name>` for a skill).
+    ...(cassette.hostInputs?.skipped ?? []).map((s) => s?.key).filter((k): k is string => typeof k === "string"),
+    ...(cassette.hostInputs?.shadowed ?? []).filter((k): k is string => typeof k === "string").map((k) => k.replace(/^skill:/, "")),
+  ];
+  if (cassette.hostInputs) findings.push(...hostInputsFindings(hostNames, "hostInputs", allow));
+  if (tier === undefined || HOST_INHERITING_TIERS.has(tier) || cassette.hostInputs) {
     // Harvest the plugin names the SCENARIO mounted, once, across the whole event stream — then hand them
     // to every scan. `system/init` carries `plugins[]` beside `agents[]` so it is self-sufficient, but the
     // registry `control_response` lists agents with no plugin array of its own; without this pre-pass that
     // surface keeps flagging the scenario's own plugin agents. See scanHostInventory's A4.
-    const declaredPlugins = collectDeclaredPlugins(cassette.events);
+    const declaredPlugins = [
+      ...collectDeclaredPlugins(cassette.events),
+      ...(cassette.hostInputs?.plugins ?? []).flatMap((p) => (typeof p?.key === "string" ? [p.key.slice(0, p.key.indexOf("@"))] : [])),
+    ];
+    const declaredSkills = (cassette.hostInputs?.skills ?? []).flatMap((s) => (typeof s?.name === "string" ? [s.name] : []));
     const structural = (lines: string[] | undefined, key: string) =>
       lines?.forEach((l, i) => {
         let decoded: unknown;
@@ -2090,7 +2130,7 @@ export function scanCassette(cassette: ScannableCassette, allow: AllowInput[]): 
           rethrowIfExit(caught);
           return; // a non-JSON transcript line has no name fields to read
         }
-        findings.push(...scanHostInventory(decoded, `${key}[${i}]`, allow, declaredPlugins));
+        findings.push(...scanHostInventory(decoded, `${key}[${i}]`, allow, declaredPlugins, declaredSkills));
       });
     structural(cassette.events, "events");
     structural(cassette.controlOut, "controlOut");
@@ -3857,6 +3897,8 @@ export function replayMetrics(ctx: MetricsContext, frozen: unknown, frozenComman
  *  strict authoring-time ScenarioObject) so a forward-compatible cassette carrying unknown keys still replays. */
 const CassetteShape = z.looseObject({
   events: z.array(z.string()),
+  // What plugins.from_host took from the recording host: names and hashes only. Strict, so a body is refused here.
+  hostInputs: HostInputsShape.optional(),
   // The device_bridge record replay reports: a malformed one is a clean refusal, not a crash.
   deviceBridge: z
     .strictObject({
@@ -4003,6 +4045,19 @@ export function readCassetteForScan(path: string): { scannable: ScannableCassett
         return el === undefined ? [] : [{ from: str(el.from), mount: str(el.mount) }];
       }),
       scenarioSource: str(o.scenarioSource),
+      // plugins.from_host's names: carried even from a malformed document, which is where a leak arrives.
+      hostInputs: (() => {
+        const h = obj(o.hostInputs);
+        if (h === undefined) return undefined;
+        const list = (v: unknown, k: string) =>
+          Array.isArray(v) ? v.flatMap((e) => (obj(e) === undefined ? [] : [{ [k]: obj(e)![k] }])) : [];
+        return {
+          plugins: list(h.plugins, "key"),
+          skills: list(h.skills, "name"),
+          skipped: list(h.skipped, "key"),
+          shadowed: Array.isArray(h.shadowed) ? h.shadowed : [],
+        };
+      })(),
       // This reader REBUILDS `environment` field by field, so anything not named here is dropped before
       // the privacy scan ever sees it — a scanner reading a field this line forgot would report `0
       // findings` from an instrument that never received the data. Both sub-objects are carried, and each
@@ -4345,11 +4400,22 @@ export function resolvePreflightTier(scenario: Scenario): string {
 /** Tiers whose RECORDING inherits the host environment. Mirrors HOST_INHERITING_TIERS but resolves `cowork`
  *  for real via resolvePreflightTier, which is cheap and exact pre-spawn. */
 function isHostInheritingRecord(scenario: Scenario): boolean {
+  if (usesFromHost(scenario)) return true; // the host's installed set reaches the agent at every tier
   const tier = resolvePreflightTier(scenario);
   // "unresolvable" = the baseline failed to load. Stay quiet and let the record itself fail loudly on the
   // same load moments later — the precedent resolvePreflightTier already documents. Guessing a tier here
   // would mis-refuse a run that was never going to start.
   return tier === "protocol" || tier === "hostloop";
+}
+
+/** Does the scenario's session set `plugins.from_host`? A session that does not load says no: the record reports it. */
+function usesFromHost(scenario: Scenario): boolean {
+  try {
+    return loadSession(parseSessionFile(scenario.session)).plugins.from_host !== undefined;
+  } catch (caught) {
+    rethrowIfExit(caught);
+    return false;
+  }
 }
 
 /** Is `p` inside a git work tree AND not ignored? Tracked-ness is the wrong test: a brand-new
@@ -4515,9 +4581,11 @@ export function hostInventoryPreflight(
   if (!isHostInheritingRecord(scenario)) return { kind: "ok" };
   if (!isRepoVisiblePath(plannedCassettePath)) return { kind: "ok" };
   const tier = resolvePreflightTier(scenario);
-  const why =
-    `fidelity '${tier}' inherits the host environment, so the recording will freeze THIS machine's ` +
-    `MCP servers, agents and account metadata into the cassette`;
+  const why = usesFromHost(scenario)
+    ? `its session sets plugins.from_host, so the recording will freeze the names of THIS machine's installed ` +
+      `plugins and skills into the cassette (and whatever they add to the transcript)`
+    : `fidelity '${tier}' inherits the host environment, so the recording will freeze THIS machine's ` +
+      `MCP servers, agents and account metadata into the cassette`;
   if (existsSync(plannedCassettePath)) {
     return {
       kind: "warn",
@@ -4537,14 +4605,17 @@ export function hostInventoryPreflight(
   //     circle. Read the set from assert.ts rather than restating it here — a hand list is how the
   //     previous advice rotted.
   const blocked = HOSTLOOP_ONLY_KEYS.filter((k) => (scenario.assert ?? []).some((a) => a[k] !== undefined));
-  const fix = blocked.length
-    ? `  Fix: this scenario asserts ${blocked.join(", ")}, which only evaluate at hostloop — 'container' is not ` +
-      `available to it. Re-run with --allow-host-inventory-fixture to get past THIS check — you do not have ` +
-      `to audit the session by hand: the finished recording is still scanned, and a real finding still ` +
-      `refuses the write and quarantines it (--allow-host-inventory-findings is the separate consent to ` +
-      `write a flagged one).\n`
-    : `  Fix: record at 'container' fidelity (sealed, HOME=/tmp) — it inherits nothing from this machine, so the ` +
-      `cassette stays committable AND verifiable.\n`;
+  const fix = usesFromHost(scenario)
+    ? `  Fix: a recording of your installed set is not a committable fixture at any tier. Mount the plugins and skills ` +
+      `under test with plugins.local_plugins / skills.local instead, or record this one somewhere git ignores.\n`
+    : blocked.length
+      ? `  Fix: this scenario asserts ${blocked.join(", ")}, which only evaluate at hostloop — 'container' is not ` +
+        `available to it. Re-run with --allow-host-inventory-fixture to get past THIS check — you do not have ` +
+        `to audit the session by hand: the finished recording is still scanned, and a real finding still ` +
+        `refuses the write and quarantines it (--allow-host-inventory-findings is the separate consent to ` +
+        `write a flagged one).\n`
+      : `  Fix: record at 'container' fidelity (sealed, HOME=/tmp) — it inherits nothing from this machine, so the ` +
+        `cassette stays committable AND verifiable.\n`;
   return {
     kind: "refuse",
     message:
@@ -6650,6 +6721,7 @@ export async function freezeRecordedRun(
     ...(result.timeout ? { timeout: result.timeout } : {}),
     ...(result.hookFailureBlocks ? { hookFailureBlocks: result.hookFailureBlocks } : {}),
     ...(result.deviceBridge ? { deviceBridge: result.deviceBridge } : {}),
+    ...(result.hostInputs ? { hostInputs: result.hostInputs } : {}),
     ...freezeCommandMetrics(scenario.metrics, result.metrics),
     // v9: record-time connected-folder host-path -> mount-name map (Finding 24) — undefined when the
     // zip against `recordRoots` doesn't line up (inline scenario, no folders, unreadable session);
@@ -6909,6 +6981,7 @@ function replayErrorResult(file: string): RunResult {
     contextEvents: undefined, // no rec to read from on this early-bail lane
     hookFailureBlocks: undefined, // no frames to read on this early-bail lane
     deviceBridge: undefined, // no cassette to read it from on this early-bail lane
+    hostInputs: undefined, // likewise
     mcpErrors: undefined, // live-only — this early-bail lane never drives a session
     hookEvents: undefined, // no rec to read from on this early-bail lane
     fileToolAttempts: undefined, // no rec to read from on this early-bail lane
@@ -7144,6 +7217,55 @@ function recordedBefore(harnessVersion: string | undefined, [major, minor]: [num
   if (!m) return true;
   const [ma, mi] = [Number(m[1]), Number(m[2])];
   return ma < major || (ma === major && mi < minor);
+}
+
+/**
+ * `verify-cassettes --host-inputs`: compare a cassette's frozen `hostInputs` with what this machine would deliver
+ * now. A local check: it reads this host, and its answer is about this host, not about the recording. The current
+ * set comes from the session's `plugins.from_host` when the session file resolves, else from the recorded names.
+ * `notRecorded` is a cassette whose session sets `from_host` but which froze no `hostInputs`: nothing to compare,
+ * which is not drift.
+ */
+export function hostInputsDrift(
+  cassette: Pick<Cassette, "hostInputs" | "scenario">,
+  cassetteDir: string,
+  sessionOverride?: string,
+  configDir: string = hostConfigDir(),
+): { drift: string[]; note?: string } {
+  let fromHost: FromHost | undefined;
+  if (cassette.scenario.session !== "(inline)") {
+    const { path: resolved } = resolveCassetteSessionPath(cassette.scenario.session, cassetteDir, sessionOverride);
+    try {
+      if (existsSync(resolved)) fromHost = loadSession(parseSessionFile(resolved)).plugins.from_host;
+    } catch (caught) {
+      rethrowIfExit(caught);
+    }
+  }
+  const frozen = cassette.hostInputs;
+  if (!frozen)
+    return fromHost === undefined
+      ? { drift: [] }
+      : { drift: [], note: "host-inputs: not recorded (the cassette froze no hostInputs), so there is nothing to compare" };
+  const want: FromHost = fromHost ?? { plugins: frozen.plugins.map((p) => p.key), skills: frozen.skills.map((s) => s.name) };
+  let now: Pick<HostInputs, "plugins" | "skills" | "setHash">;
+  try {
+    // What the recording's scenario replaced is left out of both sides, so it never reads as "added".
+    now = currentHostInputs(want, configDir, frozen.shadowed ?? []);
+  } catch (caught) {
+    rethrowIfExit(caught);
+    return { drift: [`host-inputs: this host cannot deliver the recorded set: ${(caught as Error).message}`] };
+  }
+  if (now.setHash === frozen.setHash) return { drift: [] };
+  const diff = (kind: string, a: Map<string, string>, b: Map<string, string>): string[] => [
+    ...[...a.keys()].filter((k) => !b.has(k)).map((k) => `${kind} ${k} removed`),
+    ...[...b.keys()].filter((k) => !a.has(k)).map((k) => `${kind} ${k} added`),
+    ...[...a.keys()].filter((k) => b.has(k) && a.get(k) !== b.get(k)).map((k) => `${kind} ${k} changed`),
+  ];
+  const changes = [
+    ...diff("plugin", new Map(frozen.plugins.map((p) => [p.key, p.sha256])), new Map(now.plugins.map((p) => [p.key, p.sha256]))),
+    ...diff("skill", new Map(frozen.skills.map((s) => [s.name, s.sha256])), new Map(now.skills.map((s) => [s.name, s.sha256]))),
+  ];
+  return { drift: [`host-inputs: this host's set differs from the recording's (${changes.join(", ")})`] };
 }
 
 export function sessionFingerprintDrift(
@@ -8076,6 +8198,8 @@ export const VERIFY_CASSETTES_BOOLEAN_FLAGS = [
   "--skip-scenario-drift",
   "--margins",
   "--allow-empty",
+  "--host-inputs",
+  "--strict",
   "--quiet",
   "--verbose",
 ] as const;
@@ -8102,9 +8226,10 @@ export const VERIFY_CASSETTES_ALLOWLIST: readonly UsageAllowlistEntry[] = [
 // (cli.ts's "recorded-vs-budget + margin per count-bound assert…" vs. this file's "reports
 // recorded-vs-budget for each count-bound assert…"); the cli.ts wording is kept as the single source.
 export const VERIFY_CASSETTES_USAGE =
-  "usage: verify-cassettes <file|dir> [--session <file>] [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow-empty] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-host-inventory <regex>]... [--allow-patterns-file <path>]... [--output-format json]\n" +
+  "usage: verify-cassettes <file|dir> [--session <file>] [--skip-privacy|--skip-staleness] [--skip-scenario-drift] [--margins] [--allow-empty] [--allow <regex>]... [--allow-domain <regex>]... [--allow-email <regex>]... [--allow-path <regex>]... [--allow-machine-inventory <regex>]... [--allow-host-inventory <regex>]... [--allow-patterns-file <path>]... [--host-inputs [--strict]] [--output-format json]\n" +
   "       --allow <regex> is a PATTERN (matched against a finding); --allow-patterns-file <path> is a FILE of patterns, one regex per line — not a path to allow.\n" +
   "       --margins: recorded-vs-budget + margin per count-bound assert (adds a per-cassette replay cost; single-sample estimate). Diagnostic only — never changes the gate verdict.\n" +
+  "       --host-inputs: for a cassette recorded with plugins.from_host, compare its frozen hostInputs (names and hashes) with this machine's installed set; a difference is a note. --strict (only with --host-inputs) makes that difference a failure (exit 1); it escalates host-inputs drift only, never the other notes. A cassette that froze no hostInputs is 'not recorded': a note, never a failure.\n" +
   "       --allow-empty: a directory that EXISTS but holds no cassettes exits 0 instead of the default loud 2 — for a repo that deliberately commits none. A missing/typo'd path still fails.\n" +
   "       --session <file>: resolve the cassette's skill sources from THIS session instead of the recorded cassette-relative path. The escape hatch for a MOVED cassette: a cassette stores `session:` relative to its own directory, so any relocation (git mv, a repo reorg, a copy into another project) leaves staleness unverifiable with no way to say where the tree went. Supplies a SESSION, not bare directories, so the session-level `staleness.hash_ignore` and the rest of the hash boundary survive the override. One cassette at a time — refused for a directory batch, since each cassette may have been recorded against a different source. The resolved path is echoed on stderr: an override that silently pinned the wrong tree would manufacture false greens.\n" +
   "       text mode writes its report to STDERR and nothing to stdout: text is for humans and not a contract, and the exit code is its only signal. For a scriptable result use --output-format json, or COWORK_HARNESS_OUTPUT_FORMAT=json to set it for a whole CI job, and gate on the envelope with jq -e '.ok'.";
@@ -8235,6 +8360,28 @@ export async function cmdVerifyCassettes(args: string[]) {
   const doStaleness = !skipStaleness;
   const doScenarioDrift = !(p.flags["--skip-scenario-drift"] ?? false);
   const doMargins = p.flags["--margins"] ?? false; // diagnostic only — never affects the gate verdict/exit
+  // --host-inputs: compare each plugins.from_host recording with THIS machine (a local check). Drift is a note: it
+  // is the operator's machine that moved, not the recording that is wrong. --strict makes it a failure.
+  const doHostInputs = p.flags["--host-inputs"] ?? false;
+  const strictHostInputs = p.flags["--strict"] ?? false;
+  if (strictHostInputs && !doHostInputs)
+    return fail(
+      "verify-cassettes",
+      "usage",
+      "verify-cassettes: --strict applies to --host-inputs only; add --host-inputs",
+      undefined,
+      asJson,
+    );
+  // --strict reports host-inputs drift as staleness, which --skip-staleness turns off: together they would check less
+  // than --strict promises.
+  if (strictHostInputs && skipStaleness)
+    return fail(
+      "verify-cassettes",
+      "usage",
+      "verify-cassettes: --strict reports host-inputs drift as staleness, which --skip-staleness turns off; drop one",
+      undefined,
+      asJson,
+    );
   // Allow model: each entry is whole-token anchored + class-scoped. A bare `--allow <regex>` is a single
   // PATTERN applied to every class (back-compat); `--allow-domain`/`--allow-email`/`--allow-path`/
   // `--allow-machine-inventory` scope a pattern to one class so a domain allow can't bleed into the
@@ -8488,7 +8635,12 @@ export async function cmdVerifyCassettes(args: string[]) {
         privacyScanned: doPrivacy && "scannable" in scanOnly,
       };
     }
-    const findings = doPrivacy ? scanCassette(rc.cassette, allow) : [];
+    let findings = doPrivacy ? scanCassette(rc.cassette, allow) : [];
+    // Under --host-inputs the operator is checking a from_host recording on the machine it names, so the names
+    // carried ONLY by `hostInputs` (your installed set, by design) are a note here, not a privacy failure. Every other
+    // finding still gates, and a plain verify-cassettes (CI) still fails on these.
+    const hostInputsOnly = doHostInputs ? findings.filter((x) => x.cls === HOST_INVENTORY_CLS && x.where.startsWith("hostInputs ")) : [];
+    if (hostInputsOnly.length) findings = findings.filter((x) => !hostInputsOnly.includes(x));
     // Direct computeStaleness call (not the checkStaleness string adapter) so the NON-failing `notes`
     // channel reaches the envelope — a note (e.g. pre-effectiveFidelity explicit-tier) must be surfaced,
     // never dropped, and must never red the gate.
@@ -8501,6 +8653,10 @@ export async function cmdVerifyCassettes(args: string[]) {
     const staleness = stale.findings.filter((s) => !s.class.startsWith("unverifiable-")).map((s) => s.message);
     const unverifiable = stale.findings.filter((s) => s.class.startsWith("unverifiable-")).map((s) => s.message);
     const notes = [...stale.notes];
+    if (hostInputsOnly.length)
+      notes.push(
+        `host-inputs: ${hostInputsOnly.length} name(s) of your installed set in hostInputs — a note under --host-inputs; a plain verify-cassettes reports each as a host-inventory finding`,
+      );
     // Session-shape fingerprint drift (Finding 23): gated by the SAME --skip-staleness toggle (it's a
     // staleness concept — session SHAPE, not skill content) but computed and hard-failed HERE ONLY, never
     // through computeStaleness/checkStaleness — so it can never affect the default `replay` verdict. A
@@ -8519,7 +8675,7 @@ export async function cmdVerifyCassettes(args: string[]) {
       const sfd = sessionFingerprintDrift(rc.cassette, dirname(f), sourceVia, vcSessionOverride);
       if (sfd.drifted)
         staleness.push(
-          "session-shape fingerprint differs from the current session file (pinned model/connected folders/plugins/skills/mcp/egress/web_fetch config changed since record; projects, agent_env, answer_channel and agent_env.artifacts_root are hashed only when set, permission_mode only when not default) — re-record",
+          "session-shape fingerprint differs from the current session file (pinned model/connected folders/plugins/skills/mcp/egress/web_fetch config changed since record; projects, agent_env, answer_channel, agent_env.artifacts_root and plugins.from_host are hashed only when set, permission_mode only when not default) — re-record",
         );
       if (sfd.note) notes.push(sfd.note);
     }
@@ -8543,6 +8699,11 @@ export async function cmdVerifyCassettes(args: string[]) {
         // Only when a resolvable source failed to parse — the common "no committed source" case is silent.
         notes.push(`scenario-drift: ${drift.reason}`);
       }
+    }
+    if (doHostInputs) {
+      const h = hostInputsDrift(rc.cassette, dirname(f), vcSessionOverride);
+      if (h.note) notes.push(h.note);
+      (strictHostInputs ? staleness : notes).push(...h.drift);
     }
     // a cassette written by a NEWER harness version may carry semantics this version can't correctly
     // interpret. This is a FORMAT/version failure, NOT staleness — bucket it under its own `version`
@@ -9947,6 +10108,7 @@ export async function replayCassette(
       contextEvents: rec.contextEvents, // the re-drive reproduces system_event via parseMessage — powers compaction_occurred
       hookFailureBlocks: replayHookFailureBlocks,
       deviceBridge: cassette.deviceBridge, // what the recording modeled, as frozen
+      hostInputs: cassette.hostInputs, // what the recording took from its host, as frozen (replay never reads the host)
       mcpErrors: undefined, // live-only — the re-drive never produces mcp_error
       hookEvents: replayHookEvents, // reconstructed above from cassette.events + controlOut
       // Content-class: the tool_use blocks live in the ordinary events stream (not controlOut), so the

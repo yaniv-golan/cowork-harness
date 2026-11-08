@@ -265,14 +265,26 @@ const ACCOUNT_IDENTITY_KEYS = ["email", "organization", "subscriptionType"] as c
  * necessarily one the scenario attached on purpose via `mcp.config` — a documented, supported feature —
  * and flagging it would red CI on a legitimate fixture.
  */
+/** One host-inventory finding per name a `plugins.from_host` recording froze in `hostInputs`: the names of the
+ *  recording host's installed plugins and skills ARE its inventory. Cleared only by an allow scoped to the class. */
+export function hostInputsFindings(names: readonly string[], where: string, allow: AllowInput[]): ScanFinding[] {
+  const norm = allow.map(normAllow);
+  return names
+    .filter((n) => !allowed(n, HOST_INVENTORY_CLS, norm))
+    .map((n) => ({ where: `${where} ${n}`, cls: HOST_INVENTORY_CLS, sample: n }));
+}
+
 export function scanHostInventory(
   decoded: unknown,
   where: string,
   allow: AllowInput[],
   declaredPlugins: readonly string[] = [],
+  declaredSkills: readonly string[] = [],
 ): ScanFinding[] {
   const out: ScanFinding[] = [];
   const norm = allow.map(normAllow);
+  // Skills the recording declares as inputs (a `plugins.from_host` skill): reported once, by the hostInputs lane.
+  const declaredSkillSet = new Set(declaredSkills);
   const push = (sample: string, detail: string) => {
     if (!allowed(sample, HOST_INVENTORY_CLS, norm)) out.push({ where: `${where} ${detail}`, cls: HOST_INVENTORY_CLS, sample });
   };
@@ -280,6 +292,10 @@ export function scanHostInventory(
   // notably the registry `control_response`, whose agents arrive as `{name,description,model}` with no
   // plugin list beside them; the caller harvests those names from the events array and passes them here.
   const declared = new Set(declaredPlugins);
+  const declaredPluginServer = (name: string): boolean => {
+    const m = /^plugin:([^:]+):/.exec(name);
+    return m !== null && declared.has(m[1]);
+  };
 
   const visit = (node: unknown): void => {
     if (Array.isArray(node)) {
@@ -289,11 +305,12 @@ export function scanHostInventory(
     if (node === null || typeof node !== "object") return;
     const o = node as Record<string, unknown>;
 
-    // A1 — foreign MCP server name. The axis that caught the real leak.
+    // A1 — foreign MCP server name. The axis that caught the real leak. A plugin's own servers (its `.mcp.json`)
+    // reach the agent as `plugin:<plugin>:<server>`; one whose plugin the recording declares is the fixture.
     if (Array.isArray(o.mcp_servers)) {
       for (const s of o.mcp_servers) {
         const name = (s as Record<string, unknown> | null)?.name;
-        if (typeof name === "string" && !KNOWN_COWORK_SERVERS.has(name)) push(name, "mcp_servers[].name");
+        if (typeof name === "string" && !KNOWN_COWORK_SERVERS.has(name) && !declaredPluginServer(name)) push(name, "mcp_servers[].name");
       }
     }
     // A2 — a prefixed tool naming a foreign server. Cheap defence-in-depth: it contributed nothing to the
@@ -353,7 +370,7 @@ export function scanHostInventory(
         for (const s of o.skills) {
           const name = typeof s === "string" ? s : (s as Record<string, unknown> | null)?.name;
           if (typeof name !== "string" || KNOWN_BUILTIN_SKILLS.has(name)) continue;
-          if (fromDeclaredPlugin(name)) continue;
+          if (fromDeclaredPlugin(name) || declaredSkillSet.has(name)) continue;
           push(name, "skills[]");
         }
     }

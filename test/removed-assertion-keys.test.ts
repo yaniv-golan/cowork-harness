@@ -24,7 +24,7 @@ function file(name: string, body: string): string {
 describe("removed assertion keys", () => {
   it("the removal text says why and what to do", () => {
     expect(WHY).toBe(
-      "removed in 5.0.0: fidelity protocol always gives the agent a managed config dir, so it never reads your installed plugins, skills or MCP servers and there is nothing left to allow. Delete the line",
+      "removed in 5.0.0: fidelity protocol always gives the agent a managed config dir, so it never reads your installed plugins, skills or MCP servers and there is nothing left to allow. To test against your installed set, use `plugins.from_host`. Delete the line",
     );
   });
 

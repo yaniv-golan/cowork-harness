@@ -2,6 +2,7 @@
 // tunes, the model pins, and the tier the trace needs. It composes the existing pieces (the session loader,
 // eval's pin resolvers, the protocol tier's managed-config rule); nothing here is a second copy of them.
 
+import { hostSelectionSetHash } from "../host-inputs.js";
 import { commandMetricFiles } from "../metric-command/resolve.js";
 import { closeSync, openSync, realpathSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
@@ -160,6 +161,20 @@ export function prepareCases(
       return null;
     }
   };
+  // plugins.from_host's set hash, read from the host now (no copy). Cached per distinct selection: every case with the
+  // same `from_host` and the same scenario plugins hashes the same trees.
+  const hostHashCache = new Map<string, string>();
+  const hostSetHashOf = (c: HillclimbCase): string | undefined => {
+    const x = sessions.get(c.id);
+    if (x?.plugins.from_host === undefined) return undefined;
+    const tier = (TIERS as readonly string[]).includes(c.scenario.fidelity) ? (c.scenario.fidelity as MountTier) : "hostloop";
+    const src = resolveLaunchSources(x, baselines.get(c.id)!, tier, false, { stageFilters: false, quiet: true });
+    const fh = src.fromHost!;
+    const key = JSON.stringify([fh.selection, fh.shadowed]);
+    let h = hostHashCache.get(key);
+    if (h === undefined) hostHashCache.set(key, (h = hostSelectionSetHash(fh.selection!, fh.shadowed)));
+    return h;
+  };
   const pinOf = new Map(sel.map((c, i) => [c.id, pins[i]?.model]));
   // Every selected case has a session, so the first one is there (selectCases never returns an empty set).
   const first = sessions.get(sel[0]?.id ?? "") ?? [...sessions.values()][0];
@@ -199,7 +214,18 @@ export function prepareCases(
       Object.fromEntries(
         cs.flatMap((c) => {
           const fixture = fixtureOf(c);
-          return fixture ? [[`workspace-fixture:${c.id}`, fixture.sig]] : [];
+          // As fixtureOf: a selected case's refusal stands; an unselected case contributes nothing it cannot read.
+          let host: string | undefined;
+          try {
+            host = hostSetHashOf(c);
+          } catch (e) {
+            if (chosen.has(c.id)) throw e;
+          }
+          return [
+            ...(fixture ? [[`workspace-fixture:${c.id}`, fixture.sig] as const] : []),
+            // plugins.from_host: a change on the host is a change of input, so it re-gates.
+            ...(host ? [[`host-inputs:${c.id}`, host] as const] : []),
+          ];
         }),
       ),
     // A command metric's script and deps stay out of every mount too: the agent must not read (or game) its scorer.
@@ -219,6 +245,7 @@ export function prepareCases(
             ...src.mounts.map((m) => m.hostPath),
             ...src.hostOnlyFolders.map((m) => m.hostPath),
             ...src.skills.map((k) => k.src),
+            ...(src.fromHost?.selection?.skills.map((k) => k.src) ?? []),
             // A workspace_fixture is copied into outputs/, where the agent reads: a root like a connected folder.
             ...(c.scenario.workspace_fixture !== undefined ? [c.scenario.workspace_fixture] : []),
           ];

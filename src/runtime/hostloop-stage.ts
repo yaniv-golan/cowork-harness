@@ -9,6 +9,7 @@ import type { HostLoopBindMount } from "./argv.js";
 import { resolveDeclaredSource } from "../staging/resolve.js";
 import { crossTierFixtureWarning, stageWorkspaceFixture } from "../fixture/workspace.js";
 import type { SessionRoots } from "../fixture/session-tokens.js";
+import { verifyStagedHostInputs } from "../host-inputs.js";
 
 export type { HostLoopBindMount };
 
@@ -40,6 +41,9 @@ export function resolveHostLoopBindMounts(plan: LaunchPlan, sessionRoot: string)
 export function stageHostLoopWorkspace(plan: LaunchPlan, mntHost: string, fixtureRoots: SessionRoots): { mcpHostPath?: string } {
   for (const d of ["uploads", "outputs", ".local-plugins", ".remote-plugins"]) mkdirSync(join(mntHost, d), { recursive: true });
   mkdirSync(join(plan.configDir, "projects"), { recursive: true }); // production: Dr(join(c,"projects"))
+  // A `workdir: persistent` later leg reuses the config dir (and its host skills) the earlier legs used: re-hash what it
+  // reuses before staging, as container and protocol do.
+  if (plan.legStage?.workdir === "persistent") verifyStagedHostInputs(plan, mntHost, join(plan.configDir, "skills"));
   if (!plan.resume) {
     const mntHostReal = realpathSync(mntHost);
     for (const mt of plan.mounts) {
@@ -50,7 +54,14 @@ export function stageHostLoopWorkspace(plan: LaunchPlan, mntHost: string, fixtur
         throw new BoundaryError(`cowork-harness: staged mount path "${mt.mountPath}" resolves outside the session tree (symlink escape)`);
       if (existsSync(mt.hostPath)) {
         const f = mt.stageFilter ?? null; // uploads are single files; plugins carry stageFilter from plan-build
-        cpSync(mt.hostPath, dest, { recursive: true, dereference: false, ...(f ? { filter: f } : {}) });
+        // A host input keeps its symlinks as written (a relative in-tree link stays relative), exactly as the hashed
+        // snapshot holds them; without this Node rewrites each link to an absolute pointer into the snapshot.
+        cpSync(mt.hostPath, dest, {
+          recursive: true,
+          dereference: false,
+          ...(mt.hostInputKey ? { verbatimSymlinks: true } : {}),
+          ...(f ? { filter: f } : {}),
+        });
       } else {
         // buildLaunchPlan validated every source present (or filtered it under COWORK_HARNESS_SOFT_MISSING);
         // absent here is a TOCTOU vanish. Fail loud instead of silently staging an incomplete workspace.

@@ -64,6 +64,7 @@ export const SESSION_ARGV_FIELDS = {
   webFetchVendorDeny: { argv: false, why: "enforced by the harness's web_fetch handling" },
   capturePreRun: { argv: false, why: "a harness snapshot before the run" },
   workspaceFixture: { argv: false, why: "staged into outputs/ before the run" },
+  hostInputs: { argv: false, why: "a record of what plugins.from_host took from the host (RunResult.hostInputs)" },
 } satisfies Record<keyof LaunchPlan, SessionArgvDisposition>;
 
 /** The per-tier table in docs/session.md, between its `session-argv-fields` markers. Generated from the record above;

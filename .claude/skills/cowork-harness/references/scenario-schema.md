@@ -323,6 +323,9 @@ plugins:
                                        #   (the marketplace segment is that fixed synthetic name; ≥1.14271.0 —
                                        #   older baselines use mnt/.local-plugins/cache)
   remote_plugins: []             # → mnt/.remote-plugins/plugin_<id> — how Cowork serves a UI-installed plugin
+  from_host: true                # or {plugins: [name@mkt], skills: [name]}: copy YOUR installed set (user scope) into
+                                 #   the run, snapshotted + hashed (RunResult.hostInputs); the scenario's own wins a name.
+                                 #   Not with config_dir; never commit a cassette of it (it names your plugins)
 skills:
   local: []                      # extra host skill dirs
   suggest_enabled: true          # gate 245679952 override — `mcp__skills__suggest_skills` on/off (default true)

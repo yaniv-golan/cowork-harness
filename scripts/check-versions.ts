@@ -362,7 +362,17 @@ export function fingerprintShapeKeys(cassetteSrc: string): { keys: string[]; err
   if (end < 0) return { keys: [], error: "could not find the end of the `shape` literal in src/run/cassette.ts" };
   const block = cassetteSrc.slice(start, end);
   const literal = [...block.matchAll(/^    ([a-z_]+):/gm)].map((m) => m[1]);
-  const spread = [...block.matchAll(/\?\s*\{\s*([a-z_]+):/g)].map((m) => m[1]);
+  // A spread's key counts only when the spread is itself a top-level member (indent 4): a conditional spread
+  // nested inside a member (e.g. `plugins.from_host`) is part of that member, not a fingerprint key of its own.
+  const lines = block.split("\n");
+  const spread: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^    \.\.\.\(/.test(lines[i]!)) continue;
+    let j = i + 1;
+    while (j < lines.length && !/^ {0,4}\S/.test(lines[j]!)) j++;
+    const k = /\?\s*\{\s*([a-z_]+):/.exec(lines.slice(i, j).join("\n"))?.[1];
+    if (k) spread.push(k);
+  }
   const keys = [...new Set([...literal, ...spread])].sort();
   if (keys.length < 6)
     return {

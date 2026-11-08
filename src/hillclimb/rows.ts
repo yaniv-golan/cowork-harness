@@ -390,6 +390,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
         ...(typeof r?.deciderCostUsd === "number" ? { decider_usd: r.deciderCostUsd } : {}),
         ...(billing !== undefined ? { billing } : {}),
         ...(Object.keys(models).length ? { models } : {}),
+        ...(r?.hostInputs ? { host_inputs: r.hostInputs.setHash } : {}),
         ...(retriesUnrecorded ? { retries_unrecorded: true } : {}),
         ...(jr.unrecorded ? { judge_retries_unrecorded: true } : {}),
         // The variant's snapshot signature, so a variant whose every row errored still names what it was.
@@ -577,6 +578,8 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       env: { ...ctx.meta.env, ...(ev.agentVersion !== undefined ? { agentVersion: ev.agentVersion } : {}) },
       flow_hash: ctx.meta.flowHash,
       ...(ctx.meta.contentSig !== undefined ? { content_sig: ctx.meta.contentSig } : {}),
+      // plugins.from_host: the host set the row ran against. A change re-gates the loop; this says which set it was.
+      ...(r?.hostInputs ? { host_inputs: r.hostInputs.setHash } : {}),
       // The pool the row was served from: its own meta key, keyed by the mixed-row refusal, never in metric_sigs.
       ...scMeta,
       ...(ctx.meta.skillHash !== undefined ? { skill_hash: ctx.meta.skillHash } : {}),

@@ -6,6 +6,7 @@ import { join, dirname } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import type { LaunchPlan } from "../session.js";
 import { SCRUBBED_AGENT_ENV_KEYS, workBaseOf, assertProtocolConfigSealed } from "../session.js";
+import { verifyStagedHostInputs } from "../host-inputs.js";
 import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
 import { containedRealPath } from "../boundary-paths.js";
 import { BoundaryError, UsageError } from "../errors.js";
@@ -65,6 +66,47 @@ export function protocolOperatorEnv(plan: Pick<LaunchPlan, "baseEnv" | "agentEnv
 }
 
 /**
+ * Copy the plan's mounts into the protocol work dir. A later leg of a `workdir: persistent` run copies nothing (the
+ * earlier legs' tree stays), and instead re-hashes the host inputs it reuses (`plugins.from_host`).
+ */
+export function stageProtocolMounts(plan: LaunchPlan, work: string, workReal = realpathSync(work)): void {
+  if (plan.legStage?.workdir === "persistent") verifyStagedHostInputs(plan, work, join(plan.configDir, "skills"));
+  // A later leg of a `workdir: persistent` multi-leg run uses the same work dir: re-copying the sources would revert
+  // what the earlier legs wrote into a folder.
+  if (plan.legStage?.workdir === "persistent") return;
+  for (const m of plan.mounts) {
+    const dest = join(work, m.mountPath);
+    mkdirSync(dirname(dest), { recursive: true });
+    if (!containedRealPath(workReal, dirname(dest)))
+      throw new BoundaryError(`cowork-harness: staged mount path "${m.mountPath}" resolves outside the work directory (symlink escape)`);
+    // preserve symlinks as-is during staging; do not copy out-of-tree content
+    // prefer the filter precomputed at plan-build (same tracked snapshot used for the staged-set
+    // counts ⇒ delivered == counted). Fall back to a fresh gitCpFilter for non-plugin mounts.
+    if (existsSync(m.hostPath)) {
+      const f = m.stageFilter ?? (gitModeEnabled() ? gitCpFilter(m.hostPath) : null);
+      // A host input keeps its symlinks as written (a relative in-tree link stays relative), exactly as the hashed
+      // snapshot holds them; without this Node rewrites each link to an absolute pointer into the snapshot.
+      cpSync(m.hostPath, dest, {
+        recursive: true,
+        dereference: false,
+        ...(m.hostInputKey ? { verbatimSymlinks: true } : {}),
+        ...(f ? { filter: f } : {}),
+      });
+    } else if ((process.env.COWORK_HARNESS_SOFT_MISSING ?? "") === "") {
+      // The source vanished between plan-build (which already validated existence for a REQUIRED mount)
+      // and staging — a TOCTOU race. Silently skipping would stage an empty tree, then a file_exists /
+      // no_unexpected_files assertion would run against nothing (a masked failure). Fail loud unless the
+      // caller opted into softMissing (where a missing source is an intended skip).
+      throw new BoundaryError(
+        `cowork-harness: mount source "${m.hostPath}" (→ ${m.mountPath}) is missing at staging time — set COWORK_HARNESS_SOFT_MISSING=1 to skip missing sources`,
+      );
+    } else {
+      warn(`::warning:: [mount] source missing at staging, skipped (COWORK_HARNESS_SOFT_MISSING): ${m.hostPath} → ${m.mountPath}\n`);
+    }
+  }
+}
+
+/**
  * L0 — protocol-only runtime. Spawns the host `claude` with the stream-json
  * control protocol — WITHOUT `--cowork` (a guest-only flag the host CLI rejects;
  * see the note in spawnProtocol below). No VM, no container, no egress control.
@@ -85,31 +127,7 @@ export function spawnProtocol(
   mkdirSync(join(work, "outputs"), { recursive: true });
   const workReal = realpathSync(work);
 
-  // A later leg of a `workdir: persistent` multi-leg run uses the same work dir: re-copying the sources would revert
-  // what the earlier legs wrote into a folder.
-  for (const m of plan.legStage?.workdir === "persistent" ? [] : plan.mounts) {
-    const dest = join(work, m.mountPath);
-    mkdirSync(dirname(dest), { recursive: true });
-    if (!containedRealPath(workReal, dirname(dest)))
-      throw new BoundaryError(`cowork-harness: staged mount path "${m.mountPath}" resolves outside the work directory (symlink escape)`);
-    // preserve symlinks as-is during staging; do not copy out-of-tree content
-    // prefer the filter precomputed at plan-build (same tracked snapshot used for the staged-set
-    // counts ⇒ delivered == counted). Fall back to a fresh gitCpFilter for non-plugin mounts.
-    if (existsSync(m.hostPath)) {
-      const f = m.stageFilter ?? (gitModeEnabled() ? gitCpFilter(m.hostPath) : null);
-      cpSync(m.hostPath, dest, { recursive: true, dereference: false, ...(f ? { filter: f } : {}) });
-    } else if ((process.env.COWORK_HARNESS_SOFT_MISSING ?? "") === "") {
-      // The source vanished between plan-build (which already validated existence for a REQUIRED mount)
-      // and staging — a TOCTOU race. Silently skipping would stage an empty tree, then a file_exists /
-      // no_unexpected_files assertion would run against nothing (a masked failure). Fail loud unless the
-      // caller opted into softMissing (where a missing source is an intended skip).
-      throw new BoundaryError(
-        `cowork-harness: mount source "${m.hostPath}" (→ ${m.mountPath}) is missing at staging time — set COWORK_HARNESS_SOFT_MISSING=1 to skip missing sources`,
-      );
-    } else {
-      warn(`::warning:: [mount] source missing at staging, skipped (COWORK_HARNESS_SOFT_MISSING): ${m.hostPath} → ${m.mountPath}\n`);
-    }
-  }
+  stageProtocolMounts(plan, work, workReal);
 
   // workspace_fixture: turn-1 state. Protocol re-copies its mounts on EVERY turn (no resume guard above), so the
   // fixture needs its own: re-staging on a resumed turn would overwrite what turn 1 wrote over the fixture (and

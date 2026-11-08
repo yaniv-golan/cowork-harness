@@ -23,6 +23,23 @@ All notable changes to this project are documented here. The format is based on
   `lint examples/sessions/` exits 0. Before, it reported every session key as an unknown scenario key, and the
   loader check rejected the file.
 - **`docs/session.md` lists which session keys reach the agent as flags, per tier.**
+- **`plugins.from_host`** runs a session against the plugins and skills installed on your machine. `true` takes
+  every user-scope plugin enabled in your Claude config dir (`CLAUDE_CONFIG_DIR`, else `~/.claude`) and every skill in
+  its `skills/`; `{plugins: [name@marketplace], skills: [name]}` takes only those. Each input is copied into the run
+  dir once, hashed, and reused unchanged by the run's later legs. A plugin or skill of the same name declared by the
+  scenario's own session replaces the host copy. A missing, unreadable, ambiguous or escaping input is refused before
+  the run starts, as is `from_host` together with `plugins.config_dir` or with `--resume`. `result.json` records what
+  was taken as `hostInputs` (keys, versions and hashes, never contents); `hillclimb` rows carry its set hash as
+  `meta.host_inputs`, and `eval`'s `runs.jsonl` as `hostInputs`. A cassette recorded with it freezes the same field.
+  Its names are your installed inventory, so `record` refuses to write such a cassette into a repo-visible path at
+  any tier, and `verify-cassettes` reports each name as a host-inventory finding.
+- **`verify-cassettes --host-inputs`** compares a `from_host` cassette's recorded `hostInputs` with this machine's
+  installed set and reports a difference as a note. **`--strict`**, valid only with `--host-inputs`, makes that
+  difference a failure (exit 1); it does not escalate any other note, and together with `--skip-staleness` it is a
+  usage error (exit 2). A cassette that recorded no `hostInputs` is reported as "not recorded", a note. Under
+  `--host-inputs`, the installed names a cassette carries only as its recorded inputs are one note rather than
+  privacy findings, so the check can pass on the machine they come from; every other finding still fails, and a plain
+  `verify-cassettes` still fails on those names.
 
 ### Fixed
 
@@ -47,6 +64,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **The cassette privacy scan no longer reports the scenario's own plugin's MCP servers as `host-inventory`.** This
+  applies to every cassette, not only `plugins.from_host` ones: a server named `plugin:<name>:<server>` is part of the
+  fixture when `<name>` is a plugin the recording declares (or a `from_host` input). Any other plugin's server is still
+  a finding.
 - **Cassette format 19.** A recording whose `assert:` uses `allow_max_turns` stamps 19; every other recording stamps
   what it did before. A cassette also freezes `turnCap` and `timeout`. An older harness refuses a v19 cassette.
 - **`hillclimb` passes its `--timeout-s` ceiling to the run as its budget** (`timeout.source: runner`) instead of
@@ -125,7 +146,8 @@ All notable changes to this project are documented here. The format is based on
   `plugins.config_dir` is single-run.
 - **Breaking: the `allow_l0_host_config_contamination` modifier, the `l0_host_config_contamination` verdict signal and
   the `RunResult.l0HostConfigContamination` field.** A `protocol` run can no longer read your config dir, so there is
-  nothing left to signal. A scenario that still uses the modifier is refused at load, naming it; a cassette that
+  nothing left to signal. To test against your installed set, use `plugins.from_host`. A scenario that still uses the
+  modifier is refused at load, naming it; a cassette that
   froze it is refused as re-recordable, so `record <dir/> --rerecord-stale` re-records it once the line is deleted
   from the scenario.
 

@@ -1,3 +1,4 @@
+import type { HostInputs } from "./host-inputs.js";
 import { z } from "zod";
 import { KNOWN_HOOK_EVENTS } from "./agent/session.js";
 import { isArtifactGlob } from "./glob.js";
@@ -1695,7 +1696,7 @@ export const SKILL_RESULT_ASSERT_CAP = 32_768;
  *  (scenario YAML and cassette alike) instead of Zod's bare "unrecognized key". */
 export const REMOVED_ASSERTION_KEYS: Readonly<Record<string, string>> = {
   allow_l0_host_config_contamination:
-    "removed in 5.0.0: fidelity protocol always gives the agent a managed config dir, so it never reads your installed plugins, skills or MCP servers and there is nothing left to allow. Delete the line",
+    "removed in 5.0.0: fidelity protocol always gives the agent a managed config dir, so it never reads your installed plugins, skills or MCP servers and there is nothing left to allow. To test against your installed set, use `plugins.from_host`. Delete the line",
 };
 
 /** The removed assertion keys `asserts` (an `assert:` list as written) uses, or [] — a key at the top of any item. */
@@ -3511,6 +3512,11 @@ export interface RunResult {
    *  (`divergences`). Frozen into the cassette, so replay reports what the recording modeled. Folder names and
    *  modes only, never a path. Absent when the scenario has no bridge. */
   deviceBridge?: DeviceBridgeRecord;
+  /** What `plugins.from_host` took from the host: each plugin's key, version, `gitCommitSha` (information only) and
+   *  sha256 over its staged copy; each skill's name and sha256; what was skipped (not installed, or not at user scope)
+   *  and what a scenario plugin or skill of the same name replaced; and `setHash` over the delivered set. Names and
+   *  hashes only, never a file body. Absent when the session has no `from_host`. */
+  hostInputs?: HostInputs;
   /** MCP round-trips the harness answered with a JSON-RPC error (no handler, or the handler threw).
    *  Live-only — MCP round-trips are harness-computed, not in the SDK stdout stream, so absent on
    *  replay (the assertion then fails evidence-unavailable, never vacuously passes). */

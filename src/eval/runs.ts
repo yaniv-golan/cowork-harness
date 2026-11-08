@@ -59,6 +59,8 @@ export interface RunsLine {
   errorSource?: string;
   resultErrorKind?: string;
   models?: string[];
+  /** `plugins.from_host`: the `setHash` of the host set the rep ran against. Absent without `from_host`. */
+  hostInputs?: string;
   judge?: { models: string[]; promptHashes: string[] };
   evidence?: EvidenceFacts;
   grades: Grade[];
@@ -212,6 +214,7 @@ export function buildRunsLine(args: {
           ...(r.errorSource !== undefined ? { errorSource: r.errorSource } : {}),
           ...(r.resultErrorKind !== undefined ? { resultErrorKind: r.resultErrorKind } : {}),
           ...(r.models !== undefined ? { models: r.models } : {}),
+          ...(r.hostInputs !== undefined ? { hostInputs: r.hostInputs.setHash } : {}),
           judge: { models: uniq(semantic.map((a) => a.judgeModel)), promptHashes: uniq(semantic.map((a) => a.judgePromptHash)) },
         }
       : {}),

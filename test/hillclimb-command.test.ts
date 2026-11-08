@@ -1,13 +1,14 @@
 // `hillclimb run`'s pre-spend preparation: each case's session and baseline, the one lever the loop tunes
 // (exactly one local plugin, the same in every case), the model pins, and the tier the trace needs. Built
 // over the repo's own eval scenarios (test/evals/scenarios), whose session installs the companion skill.
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { prepareCases } from "../src/hillclimb/command.js";
 import { loadCases } from "../src/hillclimb/cases.js";
 import { UsageError } from "../src/errors.js";
+import { fakeHostConfig } from "./helpers/fake-host-config.js";
 
 const EVALS = resolve(import.meta.dirname, "evals", "scenarios");
 const SKILL = resolve(import.meta.dirname, "..", ".claude", "skills", "cowork-harness");
@@ -38,6 +39,22 @@ describe("prepareCases", () => {
     scenario("a.yaml");
     const { cases } = loadCases(join(dir, "a.yaml"));
     expect(() => prepareCases(cases, { env: {}, noAgentRun: true })).not.toThrow();
+  });
+
+  it("plugins.from_host: the host set's hash joins the gate's derived values, and moves when the host does", () => {
+    const cfg = fakeHostConfig([{ key: "hostp@mk" }], { hs: { "SKILL.md": "v1" } });
+    vi.stubEnv("CLAUDE_CONFIG_DIR", cfg);
+    session("_session.yaml", `model: claude-sonnet-5\nplugins:\n  from_host: true\n  local_plugins:\n    - ${SKILL}\n`);
+    scenario("a.yaml");
+    const { cases } = loadCases(join(dir, "a.yaml"));
+    const p = prepareCases(cases, { env: {} });
+    const v1 = p.derivedValues(cases)[`host-inputs:${cases[0]!.id}`];
+    expect(v1).toMatch(/^[0-9a-f]{64}$/);
+    // the host skill is a mount root: a hidden path inside it would be exposed to the agent
+    expect(p.mountRoots(cases)).toContain(realpathSync(join(cfg, "skills", "hs")));
+    writeFileSync(join(cfg, "skills", "hs", "SKILL.md"), "v2");
+    expect(prepareCases(cases, { env: {} }).derivedValues(cases)[`host-inputs:${cases[0]!.id}`]).not.toBe(v1);
+    vi.unstubAllEnvs();
   });
 
   it("the repo's own eval scenarios: one lever (the companion skill), a concrete pin per case", () => {
