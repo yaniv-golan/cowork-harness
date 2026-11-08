@@ -38,10 +38,6 @@ import { agentSpawnOptions, agentTreeAgent } from "./agent-tree.js";
 import { AUTO_MEMORY_ENV_KEY } from "../loop-decision.js";
 import { runtimeAuthEnv, SECRET_ENV_KEYS, SESSIONS_OAUTH_TOKEN_KEY, TOKEN_PATH_DROPPED_ENV_KEYS } from "./host-env.js";
 import { hostInheritedKeys } from "../sync/spawn-env-registry.js";
-
-/** Desktop passes its own `CLAUDE_CODE_TMPDIR` into the host-loop spawn when it is set (spawn-env registry, class
- *  `host-derived`); the harness passes the operator's the same way. */
-export const HOST_TMPDIR_KEY = "CLAUDE_CODE_TMPDIR";
 import { resolveHostLoopBindMounts, stageHostLoopWorkspace } from "./hostloop-stage.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
 import { checkHostLoopPathGate, PATH_GATE_TOOL_NAMES, type HostLoopPathGateConfig } from "../hostloop/pretooluse-path-hook.js";
@@ -56,6 +52,10 @@ import {
 } from "../hostloop/process-cwd.js";
 import { stripComments } from "../prompt.js";
 import { resolveAgentImage, resolveContainerRuntime } from "./agent-image.js";
+
+/** Desktop passes its own `CLAUDE_CODE_TMPDIR` into the host-loop spawn when it is set (spawn-env registry, class
+ *  `host-derived`); the harness passes the operator's the same way. */
+export const HOST_TMPDIR_KEY = "CLAUDE_CODE_TMPDIR";
 
 /** The path-gate's own PreToolUse hook callback id — exported so RunRecord.pathDenials' pretooluse
  *  producer (run.ts) and its replay reconstruction (cassette.ts) can filter to THIS gate's own
