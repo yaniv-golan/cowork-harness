@@ -831,6 +831,45 @@ describe("checkAutoMemoryFacts (auto-memory anchor)", () => {
 });
 
 // Desktop 4.16336.0 adds a claude.ai memory-reset check as a second conjunct of the spawn's switch. Synthetic shapes.
+// Desktop 4.23118.0: resolveAutoMemoryDir became a wrapper over resolveAutoMemory, which can return a module-level symbol
+// (scheduled sessions on a deployment that cannot sync memory remotely). Synthetic shape.
+describe("checkAutoMemoryFacts (split resolver, Desktop 4.23118.0)", () => {
+  const SPAWN =
+    "let gt=s.memoryEnabled===!1?null:r.getAutoMemoryDirForSession(a),_t=g&&gt?t.Dz(gt):gt;" +
+    '...R?(()=>{return{CLAUDE_COWORK_MEMORY_PATH_OVERRIDE:R}})():{CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"},' +
+    'e.env?.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE||(e.env={...e.env,CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"});';
+  const RESOLVER =
+    'n_=Symbol("account memory, by tools");class Q{getAutoMemoryDirForSession(e){return this.resolveAutoMemoryDir(e,!1)}getAutoMemoryDirForDisplay(e){return this.resolveAutoMemoryDir(e,!0)}' +
+    "resolveAutoMemoryDir(e,t){let n=this.resolveAutoMemory(e,t);return n===n_?null:n}" +
+    "resolveAutoMemory(e,n){if(!this.currentAccountId||!this.currentOrgId)return null;let r=this.sessions.get(e);" +
+    'return r?.sessionType==="agent"?t.V6(this.currentAccountId,this.currentOrgId):!r||!t.zrt("123929380")?null:r.sessionType?r.sessionType==="scheduled"&&!t.Cmt().canSyncCoworkMemoryRemotely()?n_:null:t.H6(this.currentAccountId,this.currentOrgId)}' +
+    "buildMountedProjects(e){return 1}}";
+  const files = (resolver = RESOLVER) =>
+    new Map([
+      ["index.chunk-SPAWN.js", SPAWN],
+      ["index.chunk-RESOLVER.js", resolver],
+    ]);
+  it("the split shape is clean", () => {
+    expect(checkAutoMemoryFacts(files())).toEqual([]);
+  });
+  it.each([
+    ["the wrapper lets the symbol through", (r: string) => r.replace("return n===n_?null:n}", "return n}")],
+    ["the wrapper compares a different symbol", (r: string) => r.replace("return n===n_?null:n}", "return n===m_?null:n}")],
+    [
+      "the wrapper forwards a fixed second argument",
+      (r: string) => r.replace("this.resolveAutoMemory(e,t)", "this.resolveAutoMemory(e,!0)"),
+    ],
+    ["a different gate id", (r: string) => r.replace('"123929380"', '"123929381"')],
+    ["the ordinary arm no longer gated", (r: string) => r.replace('!r||!t.zrt("123929380")?null:', "!r?null:")],
+    ["a non-scheduled typed session gets a directory", (r: string) => r.replace("?n_:null:t.H6", "?n_:t.H6(1):t.H6")],
+    ["the symbol is no longer a Symbol", (r: string) => r.replace('n_=Symbol("account memory, by tools");', "n_=1;")],
+  ])("flags: %s", (_n, mutate) => {
+    const m = mutate(RESOLVER);
+    expect(m).not.toBe(RESOLVER);
+    expect(checkAutoMemoryFacts(files(m)).join("\n")).toMatch(/ordinary-task arm gated/);
+  });
+});
+
 describe("checkAutoMemoryFacts (reset-checked switch)", () => {
   const SITE =
     "let gt=s.memoryEnabled!==!1&&await z.t(r.getCurrentAccountId(),r.getCurrentOrgId())?r.getAutoMemoryDirForSession(a):null,_t=g&&gt?t.Dz(gt):gt;";
@@ -1765,6 +1804,51 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     HIPAA_DEF;
   const fixtureSplit = () =>
     `HEADER;${W3};${W2};${W1_1289290}${SPLIT_DEF + STIER.replace('"AskUserQuestion","ToolSearch"', '"AskUserQuestion",...zoe?["Artifact"]:[],"ToolSearch"')};${MODELCFG}TAIL`;
+  // Desktop 4.23118.0 moved the wrapper, predicate and verdict check into a shared chunk reached through a namespace.
+  describe("S6c/S6d predicates in a shared chunk (Desktop 4.23118.0)", () => {
+    const PRED =
+      'function zPo(e,t,n){return e.frameArtifactsEnabled===!0&&(e.sessionType===void 0||e.sessionType==="scheduled")&&!t.isBridgeSession&&!t.isDispatchChild&&!n}' +
+      "function zFo(e,t,n){return zPo(e,t,n)&&e._isUnattended!==!0}";
+    const VERDICT = 'var zDi=zt.XF("cobalt_plinth");function zOi(e,n){let r=zDi.isBlocked();return r||!zA.r()?r:!n||e==null||e!==zt.ZF()}';
+    const shared = () =>
+      'Object.defineProperty(exports,"v",{enumerable:!0,get:function(){return zFo}});Object.defineProperty(exports,"_",{enumerable:!0,get:function(){return zOi}});' +
+      PRED +
+      VERDICT +
+      HIPAA_DEF;
+    const main = () =>
+      'const Vv=require("./index.chunk-shared.js");' +
+      fixtureSplit().replace(PRED, "").replace(VERDICT, "").replace("zFo(i,", "Vv.v(i,").replace("zOi(h?.orgId", "Vv._(h?.orgId");
+    const run = (mutateShared?: (s: string) => string, mutateMain?: (s: string) => string) => {
+      const m = mutateMain ? mutateMain(main()) : main();
+      const sh = mutateShared ? mutateShared(shared()) : shared();
+      const files = new Map([
+        ["index.chunk-main.js", m],
+        ["index.chunk-shared.js", sh],
+      ]);
+      return checkSpawnContractFacts(`${m}\n${sh}`, files).join("\n");
+    };
+    it("the moved shape is clean", () => {
+      expect(main()).toContain("Vv._(h?.orgId");
+      expect(main()).not.toContain("function zFo");
+      expect(run()).toBe("");
+    });
+    it.each([
+      ["the attended-turn term dropped", (s: string) => s.replace("&&e._isUnattended!==!0", ""), "S6c"],
+      ["a predicate term dropped", (s: string) => s.replace("&&!t.isDispatchChild", ""), "S6c"],
+      ["the wrapper widened", (s: string) => s.replace("return zPo(e,t,n)&&", "return !0||zPo(e,t,n)&&"), "S6c"],
+      ["the verdict check widened", (s: string) => s.replace("return r||!zA.r()?r:", "return !1||r||!zA.r()?r:"), "S6d"],
+      ["the block source re-pointed", (s: string) => s.replace('"cobalt_plinth"', '"other_policy"'), "S6d"],
+      ["the restriction reader re-pointed", (s: string) => s.replace('zWL()==="restricted"', 'zWL()==="open"'), "S6d"],
+    ])("flags: %s", (_n, mutate, tag) => {
+      const m = mutate(shared());
+      expect(m).not.toBe(shared());
+      expect(run(mutate)).toContain(tag);
+    });
+    it("flags a namespace export that does not exist", () => {
+      expect(run((s) => s.replace('"v",{enumerable', '"w",{enumerable'))).toContain("S6c");
+    });
+  });
+
   describe("S6c/S6d split form (Desktop 2.37337.1)", () => {
     const facts = (b: string) => checkSpawnContractFacts(b).join("\n");
     it("the split shape is clean", () => {
@@ -3406,22 +3490,22 @@ describe.skipIf(!ASAR_BACKUPS)("extractPromptFingerprint over saved Desktop asar
 });
 
 describe("prompt drift guard (H1-H3)", () => {
-  // D8: the RENDERED prompt has not moved since 1.20186.0 — but its RAW sha has, twice, purely from
+  // D8: the RENDERED prompt held from 1.20186.0 until Desktop 4.23118.0 changed its task-list section — but its RAW sha moved twice before that, purely from
   // codegen (1.32352.0 began escaping non-ASCII). Pinning the raw sha here made this oracle a VERSION pin
   // wearing an invariant's clothes: it went red the day Desktop updated, for no product reason. The
   // decoded hash is the invariant it was always reaching for.
-  const RENDERED_PROMPT_SHA = "a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf";
+  const RENDERED_PROMPT_SHA = "dc803821f7a581398c81077584ccee8a6cca84e7182e7521450f97d1e75c0fa6";
 
   // Golden oracle (non-circular): extractPromptFingerprint over the REAL asar must match the
-  // committed 1.20186.0 fingerprint entry exactly. Skips gracefully off-macOS / without a live
+  // committed 4.23118.0 fingerprint entry exactly. Skips gracefully off-macOS / without a live
   // Desktop install (same readRealBundleOrSkip seam the spawn-contract oracles use).
-  it("golden oracle: the RENDERED prompt in the real asar is unchanged since 1.20186.0", () => {
+  it("golden oracle: the RENDERED prompt in the real asar is the one fingerprinted at 4.23118.0", () => {
     const bundle = readRealBundleOrSkip();
     if (!bundle) return;
     const fp = extractPromptFingerprint(bundle, readRealBundleFilesOrSkip() ?? undefined);
     expect(fp).not.toBeNull();
     expect(fp!.decodedSha256).toBe(RENDERED_PROMPT_SHA);
-    expect(fp!.decodedCodePoints).toBe(37811);
+    expect(fp!.decodedCodePoints).toBe(38197);
     expect(fp!.sectionTags).toBe(43);
     expect(fp!.placeholders).toHaveLength(10);
   });
@@ -5824,6 +5908,20 @@ describe("checkVmAgentStagingFacts — startVM still stages the agent", () => {
   ];
   it.each(MUT)("mutation %s fails loud (%#)", (_label, mutate) => {
     expect(checkVmAgentStagingFacts(vmChunk(mutate)).join("\n")).toContain("vm agent staging");
+  });
+  // Desktop 4.23118.0: the element gained a rejection handler that reports not-ready, and whose log string holds a `]`.
+  const CATCH = `EG.prepareForVM(t).catch((e=>{Z.error("[VM:start] prepareForVM() threw: %o",e);return{ready:!1,error:"x"}}))`;
+  const withCatch = (el: string) => (s: string) => s.replace("EG.prepareForVM(t)", el);
+  it("clean: prepareForVM with a not-ready rejection handler", () => {
+    expect(checkVmAgentStagingFacts(vmChunk(withCatch(CATCH)))).toEqual([]);
+  });
+  it.each([
+    ["the handler reports ready", CATCH.replace("ready:!1", "ready:!0")],
+    ["an options object beside the handler", CATCH.replace("prepareForVM(t)", "prepareForVM(t,{skip:!0})")],
+    ["something chained after the handler", `${CATCH}.then(e=>({ready:!0}))`],
+    ["the call only in the handler", `Promise.resolve().catch((e=>EG.prepareForVM(t)))`],
+  ])("flags: %s", (_n, el) => {
+    expect(checkVmAgentStagingFacts(vmChunk(withCatch(el))).join("\n")).toContain("vm agent staging");
   });
 });
 

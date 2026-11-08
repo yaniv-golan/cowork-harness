@@ -52,6 +52,21 @@ describe("scanSpawnEnvPostWrites — direct writes to the spawn env after W1 is 
     expect(r.keys).toEqual(expect.arrayContaining(["ALIASED_KEY", "DELETED_KEY"]));
   });
 
+  // Desktop 4.23118.0: the first turn is held back while a plugin's MCP reconnect is pending.
+  it("reads the spawn when the prompt is the pending-reconnect conditional", () => {
+    const r = scanSpawnEnvPostWrites(
+      files(builder(), caller('J.env.TEST_BEFORE="1";', "let It=Pt({prompt:yn?pf(ge,vn):ge,options:J});")),
+      registryAll,
+    );
+    expect(r.flags).toHaveLength(1); // the classifier's refusal of TEST_BEFORE, not a miss of the spawn
+    expect(r.flags[0]).toContain("TEST_BEFORE");
+  });
+
+  it("flags a prompt expression it was not told about", () => {
+    const r = scanSpawnEnvPostWrites(files(builder(), caller("", "let It=Pt({prompt:yn?pf(ge,vn,1):ge,options:J});")), registryAll);
+    expect(r.flags.join("\n")).toMatch(/spawn call .* was not found/);
+  });
+
   it("hard-fails an unclassified key, naming it", () => {
     const r = scanSpawnEnvPostWrites(files(builder(), caller('J.env.TEST_NEW_KEY="1";')), registryAll);
     expect(r.flags).toHaveLength(1);
