@@ -50,6 +50,7 @@ describe.skipIf(!can)("--allow-stall is accepted by the open-ended lanes", () =>
     writeFileSync(join(d, "plugin", "SKILL.md"), "---\nname: p\ndescription: d\n---\nbody\n");
     const r = cli(["probe-dispatch", "./plugin", "hi", "--allow-stall", "--fidelity", "container", "--model", "claude-sonnet-5"], d, {
       COWORK_HARNESS_FORBID_SPAWN: "1",
+      CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token", // past the credential pre-flight, to the spawn guard
     });
     expect(r.out).not.toMatch(/unknown flag/);
     expect(r.out).toMatch(/COWORK_HARNESS_FORBID_SPAWN/);

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // The guest firewall must only ever meet a provisioned guest: `vmInit` enforces readiness, and what keeps
 // that sufficient is that spawnMicroVm applies the firewall only AFTER vmInit has returned. Lima, staging
@@ -35,7 +35,9 @@ import { loadBaseline } from "../src/baseline.js";
 const baseline = loadBaseline("latest");
 const plan = { mounts: [], resume: false } as any;
 
+afterEach(() => vi.unstubAllEnvs());
 beforeEach(() => {
+  vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "stub-not-a-real-token"); // past the spawn's credential backstop
   calls.length = 0;
   vmInit.mockReset();
   delete process.env.COWORK_LOCKDOWN;

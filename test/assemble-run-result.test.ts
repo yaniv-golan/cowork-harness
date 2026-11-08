@@ -120,6 +120,7 @@ function fullyExplicitFixture(): CompleteRunResult {
     runLabel: undefined,
     skillCommit: undefined,
     hostInputs: undefined,
+    agentEnvPassthrough: undefined,
   };
 }
 

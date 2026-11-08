@@ -799,7 +799,7 @@ after search.
 | Symptom | Cause and fix |
 |---|---|
 | `no usable agent credential for fidelity <tier>` | No credential source resolves: put `CLAUDE_CODE_OAUTH_TOKEN` in `./.env` or the environment, or pass `--dotenv <file>` (a git worktree has no copy of the main checkout's `.env`). `cowork-harness doctor --tier <tier>` runs the same check |
-| `run ended error (auth)` | A credential was found but the agent could not authenticate with it (expired or revoked: `claude setup-token`), or at container or microvm only `ANTHROPIC_AUTH_TOKEN` is set, which does not reach the agent there. The pass prints the sources it looks up once |
+| `run ended error (auth)` | A credential was found but the agent could not authenticate with it (expired or revoked: `claude setup-token`), or the agent rejected it at `protocol`. A setup with only `ANTHROPIC_AUTH_TOKEN` is refused before spend off `protocol` (the row above). The pass prints the sources it looks up once |
 | `[baseline] reference freeze: skipped` | The case has no good row to freeze its reference from yet (its slots failed). The next baseline pass that scores one freezes it, or `hillclimb freeze-ref … --variant baseline --case <id>` |
 | `no approved harness sha` / `harness changed since last approved run` | Review the files the message names as changed, then `hillclimb run … --dry-run --approve-harness` with the loop's `--skill`. A change you did not make: check the working directory and the target path |
 | A resumed variant refuses: snapshot missing | The flow dir moved, or the snapshot root was cleaned. Restore it, or run into a new variant |

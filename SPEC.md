@@ -126,9 +126,11 @@ so the final env has the token and **no** API-key vars at all. **IMPLEMENTED** (
 `runtimeAuthEnv()`): when `CLAUDE_CODE_OAUTH_TOKEN` is present the harness mirrors the desktop and
 passes **only** the token, dropping `ANTHROPIC_API_KEY`; `ANTHROPIC_API_KEY` is forwarded **only** when
 there is no token (the CI/headless fallback the harness intentionally keeps). This holds at container,
-microvm and, from 4.15.0, host-loop (§3.4), whose agent inherits the operator's shell: there the
-operator's `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_CUSTOM_HEADERS` are dropped when
-the token is given, so the agent's env carries the token alone, as in Desktop. (`CLAUDE_CODE_EXECPATH`
+microvm and host-loop (§3.4). The host-loop agent does not inherit the operator's shell: like
+Desktop it gets `PATH`, `HOME`, `LOGNAME`, `SHELL`, `USER`, `TERM` and `CLAUDE_CODE_TMPDIR` from it, plus the
+names a session lists in `agent_env.passthrough` (which refuses every credential name, and
+`ANTHROPIC_CUSTOM_HEADERS` when the token is given), so its env carries one credential, as in Desktop.
+`ANTHROPIC_AUTH_TOKEN` reaches the agent only at protocol. (`CLAUDE_CODE_EXECPATH`
 is the agent's *own* `process.execPath` — never forward a host value; covered by the "no blanket
 `CLAUDE_*`" rule above.)
 
@@ -376,7 +378,7 @@ Assert the **binary** still matches the contract (run on `sync`, skip without to
   `hostCwd = getOutputsDir(e)`), because it runs directly on the host, not inside `/sessions/<id>`. This
   divergence is the fidelity-correct choice, not a bug — do not "fix" it to match this invariant.
 - `CLAUDE_CODE_USE_COWORK_PLUGINS` never set; host `CLAUDE_*` never blanket-forwarded.
-- extended thinking is delivered via the `--max-thinking-tokens` / `--thinking` flags, never a `MAX_THINKING_TOKENS` env var (stripped from hostloop's inherited env).
+- extended thinking is delivered via the `--max-thinking-tokens` / `--thinking` flags, never a `MAX_THINKING_TOKENS` env var (stripped from hostloop's agent env, and refused in `agent_env.passthrough`).
 - plugins via `--plugin-dir`; marketplaces resolved to plugin dirs.
 - variadic tool flags last.
 - host FS sealed (only declared binds); egress default-deny at L1/L2.

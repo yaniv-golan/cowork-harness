@@ -58,7 +58,7 @@ import {
   loadSessionFromFile,
   firstLine,
   unresolvedModelPreflight,
-  protocolCredentialPreflight,
+  credentialPreflight,
   sharedConfigDirPreflight,
   scenarioInputRefusal,
   UnansweredError,
@@ -587,8 +587,8 @@ Output:
 Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of silence.
             COWORK_HARNESS_NO_HEARTBEAT=1 disables it; COWORK_HARNESS_HEARTBEAT_MS tunes the interval.
 
-Auth:  Run 'doctor' to check auth. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN) from process.env >
-       --dotenv <path> > ./.env > <install>/.env.
+Auth:  Run 'doctor' to check auth. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY; ANTHROPIC_AUTH_TOKEN at protocol only)
+       from process.env > --dotenv <path> > ./.env > <install>/.env.
 
 Exit codes:  0 pass · 1 assertion/agent failure · 2 usage / unanswered-under-fail / runtime · 3 boundary/integrity.`;
 
@@ -700,8 +700,8 @@ Output:
 Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of silence
             (COWORK_HARNESS_NO_HEARTBEAT=1 / COWORK_HARNESS_HEARTBEAT_MS to disable/tune).
 
-Auth:  Run 'doctor' to diagnose auth failures. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN) from
-       process.env > --dotenv <path> > ./.env > <install>/.env.
+Auth:  Run 'doctor' to diagnose auth failures. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY; ANTHROPIC_AUTH_TOKEN at
+       protocol only) from process.env > --dotenv <path> > ./.env > <install>/.env.
 
 Exit codes:  0 all pass · 1 any assertion/agent failure · 2 usage / unanswered-under-fail / runtime · 3 boundary/integrity.`;
 
@@ -2113,8 +2113,8 @@ async function cmdRun(rawArgs: string[]) {
     );
     if (singleRun) fail("run", "usage", singleRun, undefined, o.json);
     if (maxBudgetUsd !== undefined && repeatN === undefined) preflightBudget("run", scenario.name, maxBudgetUsd, o.json);
-    // Last, as on the per-file arm: without it every protocol cell would fail at its own spawn as a "cell error".
-    const noCredential = protocolCredentialPreflight([scenario]);
+    // Last, as on the per-file arm: without it every cell with no credential would fail at its own spawn as a "cell error".
+    const noCredential = credentialPreflight([scenario]);
     if (noCredential) fail("run", "usage", noCredential, undefined, o.json);
     const results: RunResult[] = [];
     // Every cell resolves its own overridden scenario/session first (shared by both branches below) —
@@ -2308,8 +2308,8 @@ async function cmdRun(rawArgs: string[]) {
   if (sharedDir) fail("run", "usage", sharedDir, undefined, o.json);
   if (maxBudgetUsd !== undefined && repeatN === undefined)
     for (const scenario of loaded) preflightBudget("run", scenario.name, maxBudgetUsd, o.json);
-  // Last: a protocol scenario with no credential in the environment, named with every other one, before any runs.
-  const noCredential = protocolCredentialPreflight(loaded);
+  // Last: a scenario whose tier has no credential in the environment, named with every other one, before any runs.
+  const noCredential = credentialPreflight(loaded);
   if (noCredential) fail("run", "usage", noCredential, undefined, o.json);
 
   const results: RunResult[] = [];
@@ -2896,7 +2896,7 @@ async function cmdSkill(rawArgs: string[]) {
   // covers exactly the lane that had none — the open-ended one, where you know least what you will spend.
   if (repeatN === undefined && maxBudgetUsd !== undefined) preflightBudget("skill", scenario.name, maxBudgetUsd, o.json);
   // Last: protocol with no credential in the environment, refused before staging (spawnProtocol is the backstop).
-  const noCredential = protocolCredentialPreflight([scenario]);
+  const noCredential = credentialPreflight([scenario]);
   if (noCredential) fail("skill", "usage", noCredential, undefined, o.json);
   const runSkillOnce = (label: string, rethrowUnanswered = false) =>
     runOneScenario({
@@ -3094,6 +3094,9 @@ async function cmdProbeDispatch(rawArgs: string[]) {
     // Note in --help/docs: PROMPT-SCOPED, not enforced — this just flags a prompt that fanned out.
     assert: [{ subagent_dispatched: ".*" }, { dispatch_count_max: 1 }, ...(allowStall ? [{ allow_stall: true as const }] : [])],
   });
+  // As `skill` does: a setup the agent cannot authenticate with at this tier is refused before staging.
+  const noCredential = credentialPreflight([scenario]);
+  if (noCredential) fail("probe-dispatch", "usage", noCredential, undefined, isJson);
 
   // --decider-dir/--decider-cmd (captured generically by takeCommonFlags) are honored here for free via
   // the same resolveExternal seam `skill` uses — an external channel forces the `fail` terminal

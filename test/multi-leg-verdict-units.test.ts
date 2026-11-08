@@ -1,8 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { resolve } from "node:path";
 import { mergeGuards, vacuousLegBlockRefusal, executeMultiLeg } from "../src/run/multi-leg.js";
 import { loadMultiLegScenario } from "../src/run/execute.js";
 import { UsageError } from "../src/errors.js";
+
+afterEach(() => vi.unstubAllEnvs());
 
 // Small pure pieces of the multi-leg verdict and its up-front checks.
 describe("multi-leg verdict units", () => {
@@ -34,6 +36,8 @@ describe("multi-leg verdict units", () => {
   });
 
   it("a malformed caller run id is refused before any root is created", async () => {
+    // A credential this tier hands the agent, so the credential pre-flight (an earlier refusal) passes.
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "stub-not-a-real-token");
     const ms = loadMultiLegScenario(resolve("examples/probes/resumable-probe.scenario.yaml"));
     await expect(executeMultiLeg(ms, { runId: "../escape" } as never)).rejects.toThrow(UsageError);
     await expect(executeMultiLeg(ms, { runId: "../escape" } as never)).rejects.toThrow(/run id "\.\.\/escape" must be local_/);

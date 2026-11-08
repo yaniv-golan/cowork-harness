@@ -1,4 +1,5 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { assertSpawnCredential } from "./protocol.js";
 import type { TerminableAgent } from "../termination.js";
 import { cpSync, existsSync, mkdirSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -99,13 +100,14 @@ export function microvmGuestConfigDir(baseline: PlatformBaseline, sessionVm: str
 }
 
 export function spawnMicroVm(
-  _scenario: Scenario,
+  scenario: Scenario,
   baseline: PlatformBaseline,
   plan: LaunchPlan,
   outDir: string,
   sessionId: string,
   opts: { systemPromptAppend?: string; proxyPort?: number } = {},
 ) {
+  assertSpawnCredential(scenario.name, "microvm");
   const { instance } = vmInit(baseline);
   const sessionVm = microvmGuestSessionRoot(baseline, sessionId);
   const mntVm = `${sessionVm}/mnt`; // the staged tree — see GUEST_MNT_SEGMENT

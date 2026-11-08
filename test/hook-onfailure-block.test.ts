@@ -589,7 +589,7 @@ describe("runHookFailureBlocks reads the plan's sources", () => {
         { kind: "folder", hostPath: folder, mountPath: "folder" },
       ],
     } as unknown as Parameters<typeof runHookFailureBlocks>[0];
-    expect(runHookFailureBlocks(plan, "container", join(dir, "work"), "local_t", join(dir, "no-run"))).toEqual({
+    expect(runHookFailureBlocks(plan, "container", join(dir, "work"), "local_t", join(dir, "no-run"), loadBaseline("latest"))).toEqual({
       events: ["PostToolUse", "PreToolUse", "UserPromptSubmit"],
     });
   });
@@ -646,7 +646,7 @@ describe("a run's own agent gates its inventory (the same rule as an older recor
           join(outDir, "events.jsonl"),
           v ? JSON.stringify({ type: "system", subtype: "init", claude_code_version: v }) + "\n" : "",
         );
-        return runHookFailureBlocks(plan, "container", join(dir, "work"), "local_t", outDir);
+        return runHookFailureBlocks(plan, "container", join(dir, "work"), "local_t", outDir, loadBaseline("latest"));
       };
       expect(withAgent("2.1.293")).toEqual({ events: [] });
       expect(withAgent("2.1.295")).toEqual({ events: ["PreToolUse"] });
@@ -655,12 +655,16 @@ describe("a run's own agent gates its inventory (the same rule as an older recor
       const init = (v: string) => JSON.stringify({ type: "system", subtype: "init", claude_code_version: v });
       const marker = JSON.stringify({ _emu: "turn_start" });
       writeFileSync(join(outDir, "events.jsonl"), [init("2.1.293"), marker, init("2.1.295")].join("\n") + "\n");
-      expect(runHookFailureBlocks(plan, "container", join(dir, "work"), "local_t", outDir)).toEqual({ events: ["PreToolUse"] });
+      expect(runHookFailureBlocks(plan, "container", join(dir, "work"), "local_t", outDir, loadBaseline("latest"))).toEqual({
+        events: ["PreToolUse"],
+      });
       writeFileSync(join(outDir, "events.jsonl"), [init("2.1.295"), marker, init("2.1.293")].join("\n") + "\n");
-      expect(runHookFailureBlocks(plan, "container", join(dir, "work"), "local_t", outDir)).toEqual({ events: [] });
+      expect(runHookFailureBlocks(plan, "container", join(dir, "work"), "local_t", outDir, loadBaseline("latest"))).toEqual({ events: [] });
       // no turn marker: every init counts, so an old first turn cannot gate a newer one
       writeFileSync(join(outDir, "events.jsonl"), [init("2.1.293"), init("2.1.295")].join("\n") + "\n");
-      expect(runHookFailureBlocks(plan, "container", join(dir, "work"), "local_t", outDir)).toEqual({ events: ["PreToolUse"] });
+      expect(runHookFailureBlocks(plan, "container", join(dir, "work"), "local_t", outDir, loadBaseline("latest"))).toEqual({
+        events: ["PreToolUse"],
+      });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -209,7 +209,7 @@ describe.skipIf(!can)("a --dotenv-shaped token that is another flag's VALUE is n
     const runs = join(d, "runs");
     const r = cli(["run", "s.yaml", "--label=--run-dir=x", "--run-dir", runs, "--model", "claude-sonnet-5"], {
       cwd: d,
-      env: { COWORK_HARNESS_FORBID_SPAWN: "1" },
+      env: { COWORK_HARNESS_FORBID_SPAWN: "1", CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" },
     });
     expect(r.out).toMatch(/COWORK_HARNESS_FORBID_SPAWN/);
     const statusFiles = readdirSync(join(runs, "s")).map((id) => join(runs, "s", id, "status.json"));

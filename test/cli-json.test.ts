@@ -643,19 +643,23 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     const folder = mkdtempSync(join(tmpdir(), "cc-ablate-"));
     mkdirSync(join(folder, ".claude-plugin"), { recursive: true });
     writeFileSync(join(folder, "SKILL.md"), "---\nname: h\ndescription: h.\n---\n# h\n");
-    const r = run([
-      "skill",
-      folder,
-      "hi",
-      "--session-id",
-      "s1",
-      "--resume",
-      "--ablate-skill",
-      "--model",
-      "claude-sonnet-5",
-      "--output-format",
-      "json",
-    ]);
+    const r = run(
+      [
+        "skill",
+        folder,
+        "hi",
+        "--session-id",
+        "s1",
+        "--resume",
+        "--ablate-skill",
+        "--model",
+        "claude-sonnet-5",
+        "--output-format",
+        "json",
+        // A credential, so the skill's credential pre-flight (an earlier usage refusal) passes.
+      ],
+      { CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token" },
+    );
     expect(r.code).toBe(2);
     expect(r.json?.error?.category).toBe("usage");
     expect(r.json?.error?.message).toMatch(/--ablate-skill cannot be combined with --resume/);

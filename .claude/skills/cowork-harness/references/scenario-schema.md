@@ -292,6 +292,8 @@ agent_env:
   artifacts_root: artifacts         # -> COWORK_ARTIFACTS_ROOT=<outputs as the agent sees it>/artifacts; refused at hostloop and cowork,
                                     # whose host-loop shell never sees the agent's env. An operator's own export of
                                     # the variable never reaches the agent at protocol or hostloop: set it here
+  passthrough: [SSH_AUTH_SOCK]      # shell vars for the hostloop agent (it gets only PATH/HOME/USER/… otherwise, as in
+                                    # Desktop); refused at container/microvm, for credentials and harness-owned names
 
 # fenced debug escape hatch (NOT reachable via Cowork's UI)
 debug:

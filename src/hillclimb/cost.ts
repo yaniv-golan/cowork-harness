@@ -10,6 +10,9 @@
 //   1. a provider other than firstParty                        → third_party
 //   2. an API-key source AND an OAuth token source            → subscription when a five_hour/seven_day rate limit
 //      was reported (any tier); else api_key when the spawn env carries none of the three keys; else ambiguous
+//      (Since 5.0.0 a harness-built env never holds the API key and the OAuth token together, on any tier; at protocol
+//      an inherited ANTHROPIC_AUTH_TOKEN can sit beside either. A host managed settings.json `env` or `apiKeyHelper`
+//      can still add a key, at protocol and hostloop, so the arm stays.)
 //   3. an OAuth token source, or a claude.ai login (the PRESENCE of the account's `subscriptionType` key; its value is
 //      never read)                                             → subscription
 //   4. an API-key source and no token (`none`, or `apiKeyHelper`: the key's own helper) → api_key

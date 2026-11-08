@@ -285,8 +285,8 @@ removes `run_in_background` from the Bash and Task schemas and runs no backgroun
 
 **Harness behaviour:** every tier sets the key from the baseline's `spawn.env`: `container`, `microvm` and `hostloop`
 through their `spawn.env` overlay, and `protocol`, which has no such overlay, through the same value applied on its own
-(4.11.0 and later). An operator export of the key is ignored on `protocol` and `hostloop`, the tiers that inherit your
-shell. A baseline that pins no value (`desktop-1.11847.5`) sets none on any tier.
+(4.11.0 and later). An operator export of the key is ignored on `protocol` and `hostloop`, the tiers that read your
+shell's environment. A baseline that pins no value (`desktop-1.11847.5`) sets none on any tier.
 
 Before 4.11.0, `protocol` did not set it. A protocol run then exposed Bash `run_in_background`: a background shell
 outlived the run's `result`, woke the agent with a task notification after the harness had closed its input (any

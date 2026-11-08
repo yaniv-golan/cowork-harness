@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { assertSpawnCredential } from "./protocol.js";
 import { resolve, join } from "node:path";
 import type { PlatformBaseline, Scenario } from "../types.js";
 import { type LaunchPlan, pluginSkillRootsFromPlan, mountedPluginsFromPlan, isConnectedContent, workBaseOf } from "../session.js";
@@ -91,6 +92,7 @@ export function spawnContainer(
     onDeviceStarted?: (device: ReturnType<typeof startDeviceBridge>) => void;
   } = {},
 ) {
+  assertSpawnCredential(scenario.name, "container");
   // device_bridge (lane: remote): the connected folders live on the "device", a second container. Every agent-side
   // use below reads `plan`; only startDeviceBridge sees the launch plan's folders.
   const plan: LaunchPlan = agentPlanFor(scenario, launchPlan);

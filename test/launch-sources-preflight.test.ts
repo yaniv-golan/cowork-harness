@@ -80,7 +80,8 @@ function fixture(): string {
 }
 
 describe.skipIf(!can)("chat resolves its inputs before it creates a run dir", () => {
-  const CHAT_ENV = { COWORK_HARNESS_MODEL: "claude-sonnet-5" };
+  // chat refuses a tier with no credential before resolving its inputs, so these carry a stub one.
+  const CHAT_ENV = { COWORK_HARNESS_MODEL: "claude-sonnet-5", ...STUB_CREDENTIAL };
 
   it("a missing --folder is refused (exit 2) with no run dir left behind", () => {
     const d = work();

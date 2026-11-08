@@ -120,10 +120,12 @@ describe("agent_env — the tier-uniform gated-env knob", () => {
   // The enabling key for the second one is deliberately NOT scrubbed — see the membership rule on
   // SCRUBBED_AGENT_ENV_KEYS. Pinned so that decision is visible as a choice rather than an omission, and
   // so flipping it is a deliberate test edit rather than a silent widening.
-  it("CLAUDE_CODE_COORDINATOR_MODE is deliberately NOT scrubbed", () => {
+  it("CLAUDE_CODE_COORDINATOR_MODE is deliberately NOT scrubbed: a passthrough of it reaches the hostloop agent", () => {
     process.env.CLAUDE_CODE_COORDINATOR_MODE = "1";
     try {
-      const env = buildHostLoopNativeEnv(loadBaseline("latest"), { configDir: "/tmp/cfg" });
+      // Not in Desktop's copied set, so not copied by default; not scrubbed, so a session that names it gets it.
+      expect(buildHostLoopNativeEnv(loadBaseline("latest"), { configDir: "/tmp/cfg" }).CLAUDE_CODE_COORDINATOR_MODE).toBeUndefined();
+      const env = buildHostLoopNativeEnv(loadBaseline("latest"), { configDir: "/tmp/cfg", passthrough: ["CLAUDE_CODE_COORDINATOR_MODE"] });
       expect(env.CLAUDE_CODE_COORDINATOR_MODE).toBe("1");
     } finally {
       delete process.env.CLAUDE_CODE_COORDINATOR_MODE;

@@ -8,6 +8,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **`agent_env.passthrough`** lists environment variable names to give the `hostloop` agent beside the ones
+  Desktop copies, for example `SSH_AUTH_SOCK`, `NODE_EXTRA_CA_CERTS`, `HTTPS_PROXY` or `LANG` for a plugin MCP server or
+  hook that needs one. It is accepted at `protocol`, where the agent inherits your environment anyway, and refused at
+  `container` and `microvm`, for the harness's credential variables, for any name the harness sets or removes itself, at `protocol` for
+  the names Cowork strips there, and for `ANTHROPIC_CUSTOM_HEADERS` while the agent is given the OAuth token.
+  `result.json` records the names (never values) as `agentEnvPassthrough`; a listed name your environment leaves unset or
+  empty is reported on stderr. A non-empty list changes the session fingerprint.
 - **`run --timeout <ms>` and `record --timeout <ms>`** set the agent's wall-clock budget for every scenario and leg
   the command starts, in place of the scenario's `timeout_ms`, as `skill --timeout` does. The scenario is not
   changed: a recording freezes the scenario as written. `result.json` and the cassette record the budget that
@@ -64,6 +71,18 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **Breaking: the `hostloop` agent no longer inherits your shell.** Like Desktop, it gets `PATH`, `HOME`, `LOGNAME`,
+  `SHELL`, `USER`, `TERM` and `CLAUDE_CODE_TMPDIR` from it, plus the names a session lists in `agent_env.passthrough`.
+  A plugin MCP server or hook that relied on another variable at `hostloop` needs it listed there. The API key and the OAuth
+  token never reach the agent together on any tier; at `protocol` an inherited `ANTHROPIC_AUTH_TOKEN` can sit beside
+  either.
+- **Breaking: `ANTHROPIC_AUTH_TOKEN` works at `protocol` only.** A `run`, `skill`, `probe-dispatch`, `record`, `chat`
+  or multi-leg run at another tier with only it set is refused before it starts, and `doctor` reports it as a failure there. A
+  gateway that takes `ANTHROPIC_AUTH_TOKEN` runs at `protocol`; one that takes an API key also runs at `hostloop` with
+  `agent_env.passthrough: [ANTHROPIC_BASE_URL]`.
+- **`record`, `chat` and `probe-dispatch` check for a credential before they start,** as `run` does, each scenario at
+  its own tier, and every tier's agent spawn checks it again.
+- **The `protocol` agent no longer receives `CLAUDE_CODE_SESSIONS_OAUTH_TOKEN`** from your environment.
 - **The cassette privacy scan no longer reports the scenario's own plugin's MCP servers as `host-inventory`.** This
   applies to every cassette, not only `plugins.from_host` ones: a server named `plugin:<name>:<server>` is part of the
   fixture when `<name>` is a plugin the recording declares (or a `from_host` input). Any other plugin's server is still

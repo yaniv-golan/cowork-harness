@@ -14,7 +14,7 @@ export const SPAWN_ENV_CLASSES = [
   "pinned", // the baseline's spawn.env carries it (deriveSpawnEnv resolves and pins its value)
   "harness-set", // the harness sets it outside spawn.env (runtime-injected)
   "host-derived", // a value from the host, account or login state; not modeled
-  "host-inherited", // copied from Desktop's own process env (the user's shell); the harness host loop inherits the operator's shell
+  "host-inherited", // copied from Desktop's own process env (the user's shell); the harness host loop copies it from the operator's env
   "anchored-elsewhere", // guarded by a dedicated sync check named in the reason
   "attribution-metadata", // analytics attribution only; not modeled
   "server-config", // a server-delivered account or session config value
@@ -284,7 +284,7 @@ const SPAWN_PIN_KEYS: readonly string[] = [
   // unset: CLAUDE_CODE_SIMPLE=1 is the agent's --bare mode (no plugin sync, hooks, auto-memory or CLAUDE.md
   // discovery); CLAUDE_AGENT_SDK_MCP_NO_PREFIX applies to SDK-type MCP servers' tool-name prefixing only. Desktop
   // also strips both from the user env its Code-tab spawn forwards; the harness mirrors that on the tiers that
-  // inherit the operator's shell (SCRUBBED_AGENT_ENV_KEYS in src/session.ts).
+  // read the operator's env (SCRUBBED_AGENT_ENV_KEYS in src/session.ts).
   "CLAUDE_CODE_SIMPLE",
   "CLAUDE_AGENT_SDK_MCP_NO_PREFIX",
   // Desktop 2.16120.0. UNCONDITIONAL in W2 (`…API_TIMEOUT_MS:String(<t>),PYTHONDONTWRITEBYTECODE:"1",
@@ -307,36 +307,36 @@ const PINNED_REASON = "pinned in the baseline's spawn.env (deriveSpawnEnv resolv
 
 /** Rows that are NOT part of the window scan: post-construction writes and names seen only in Desktop's host-loop dump. */
 const EXTRA_ROWS: Record<string, { class: SpawnEnvClass; reason: string; sites: readonly SpawnEnvSite[] }> = {
-  // Copied from Desktop's own process env into the host-loop spawn (Jp). The harness host loop inherits the operator's
-  // whole shell instead (src/runtime/hostloop.ts buildHostLoopNativeEnv), which covers these names.
+  // Copied from Desktop's own process env into the host-loop spawn (Jp). The harness host loop copies the same names from
+  // the operator's env (hostInheritedKeys, read by src/runtime/hostloop.ts buildHostLoopNativeEnv), and nothing else.
   PATH: {
     class: "host-inherited",
-    reason: "Jp copies it from Desktop's process env; the harness host loop inherits the operator's shell",
+    reason: "Jp copies it from Desktop's process env; the harness host loop copies it from the operator's env",
     sites: ["observed"],
   },
   HOME: {
     class: "host-inherited",
-    reason: "Jp copies it from Desktop's process env; the harness host loop inherits the operator's shell",
+    reason: "Jp copies it from Desktop's process env; the harness host loop copies it from the operator's env",
     sites: ["observed"],
   },
   LOGNAME: {
     class: "host-inherited",
-    reason: "Jp copies it from Desktop's process env; the harness host loop inherits the operator's shell",
+    reason: "Jp copies it from Desktop's process env; the harness host loop copies it from the operator's env",
     sites: ["observed"],
   },
   SHELL: {
     class: "host-inherited",
-    reason: "Jp copies it from Desktop's process env; the harness host loop inherits the operator's shell",
+    reason: "Jp copies it from Desktop's process env; the harness host loop copies it from the operator's env",
     sites: ["observed"],
   },
   USER: {
     class: "host-inherited",
-    reason: "Jp copies it from Desktop's process env; the harness host loop inherits the operator's shell",
+    reason: "Jp copies it from Desktop's process env; the harness host loop copies it from the operator's env",
     sites: ["observed"],
   },
   TERM: {
     class: "host-inherited",
-    reason: "Jp copies it from Desktop's process env when set; the harness host loop inherits the operator's shell",
+    reason: "Jp copies it from Desktop's process env when set; the harness host loop copies it from the operator's env",
     sites: ["observed"],
   },
   CLAUDE_CODE_DISABLE_AUTO_MEMORY: {
@@ -523,6 +523,13 @@ const ENTRIES: ReadonlyMap<string, SpawnEnvEntry> = (() => {
   for (const [name, r] of Object.entries(EXTRA_ROWS)) add({ name, ...r });
   return m;
 })();
+
+/** The names Desktop copies from its own process env into the host-loop spawn (class `host-inherited`). The harness
+ *  host loop copies exactly these from the operator's env (`buildHostLoopNativeEnv`); the rest of the shell does not
+ *  reach the agent unless the session names it in `agent_env.passthrough`. */
+export function hostInheritedKeys(): string[] {
+  return [...ENTRIES.values()].filter((e) => e.class === "host-inherited").map((e) => e.name);
+}
 
 /** Every exact-name row (tests, prune NOTEs). */
 export function registryEntries(): SpawnEnvEntry[] {

@@ -70,6 +70,7 @@ import {
   FidelityMissingError,
   unresolvedModelPreflight,
   sharedConfigDirPreflight,
+  credentialPreflight,
   scenarioInputRefusal,
   scenarioInputFindings,
   loadSessionFromFile,
@@ -1607,7 +1608,16 @@ export function buildSessionFingerprint(
     // field's introduction — a knob-less session's hash doesn't move. A knob change (which silently
     // affects only hostloop/protocol replay behavior — see agent_env's doc comment) moves the hash so
     // `verify-cassettes` surfaces the drift instead of a cassette quietly replaying stale env behavior.
-    ...(Object.keys(agentEnv).length ? { agent_env: agentEnv } : {}),
+    // `agent_env.passthrough` rides in the same member (lower-case, so it cannot collide with an env key), sorted and
+    // only when non-empty: a session without it hashes as before.
+    ...(Object.keys(agentEnv).length || cfg.agent_env.passthrough?.length
+      ? {
+          agent_env: {
+            ...agentEnv,
+            ...(cfg.agent_env.passthrough?.length ? { passthrough: [...new Set(cfg.agent_env.passthrough)].sort() } : {}),
+          },
+        }
+      : {}),
     // Connected PROJECTS, on the same NON-EMPTY-ONLY terms as `agent_env` above: a session with no
     // `projects:` hashes byte-identically to before, so the overwhelming majority of cassettes do not
     // move. Unlike `agent_env` (a brand-new field nobody had), `projects` is an EXISTING field, so a
@@ -4988,7 +4998,7 @@ function failNoRecordCredential(asJson: boolean) {
   return fail(
     "record",
     "runtime",
-    "record: no model credentials — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN " +
+    "record: no model credentials — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, or at fidelity protocol ANTHROPIC_AUTH_TOKEN " +
       "(in-Docker the macOS Keychain is not accessible; run `cowork-harness doctor` for full diagnostics)",
     undefined,
     asJson,
@@ -5363,7 +5373,7 @@ export async function cmdRecord(args: string[]) {
     const agent = realProbe.agentBinary();
     const tokenLine = token
       ? "  token:  found (would be used by a real, non-dry-run record)"
-      : "  token:  (absent — fine for --dry-run; only a real record needs CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN)";
+      : "  token:  (absent — fine for --dry-run; only a real record needs CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, or at fidelity protocol ANTHROPIC_AUTH_TOKEN)";
     const agentLine = agent.ok
       ? `  agent:  ${agent.path} (would be used by a real, non-dry-run record)`
       : `  agent:  (unresolved — fine for --dry-run; only a real record needs it — ${agent.error.split("\n")[0]})`;
@@ -5784,6 +5794,9 @@ export async function cmdRecord(args: string[]) {
     // Two stale scenarios pinning the same config_dir: the first would spend, then the marker refuse the second.
     const staleSharedDir = sharedConfigDirPreflight(staleLoaded);
     if (staleSharedDir) return fail("record", "usage", `record: ${staleSharedDir}`, undefined, asJson);
+    // A scenario whose tier has no credential in the environment would spend the batch's earlier items first.
+    const staleNoCredential = credentialPreflight(staleLoaded);
+    if (staleNoCredential) return fail("record", "usage", `record: ${staleNoCredential}`, undefined, asJson);
     if (maxBudgetUsd !== undefined) {
       preflightBatchBudget("record", staleNames, maxBudgetUsd, asJson);
       if (concurrency > 1) warn(CONCURRENCY_BUDGET_CAVEAT(concurrency));
@@ -6046,6 +6059,18 @@ export async function cmdRecord(args: string[]) {
       }),
     );
     if (sharedDir) return fail("record", "usage", `record: ${sharedDir}`, undefined, asJson);
+    // A scenario whose tier has no credential in the environment, named with every other one, before the first spawn.
+    const noCredential = credentialPreflight(
+      disc.scenarios.flatMap((f) => {
+        try {
+          return [parseScenarioFile(f)];
+        } catch (caught) {
+          rethrowIfExit(caught);
+          return [];
+        }
+      }),
+    );
+    if (noCredential) return fail("record", "usage", `record: ${noCredential}`, undefined, asJson);
 
     const total = disc.scenarios.length;
     // Budget pre-flight for the whole batch, BEFORE the first spawn — same rationale as the redaction
@@ -6160,6 +6185,9 @@ export async function cmdRecord(args: string[]) {
   const noModel = unresolvedModelPreflight(scenario!, modelOverride);
   if (noModel) return fail("record", "usage", `record: ${noModel}`, undefined, asJson, 1);
   if (maxBudgetUsd !== undefined) preflightBudget("record", scenario!.name, maxBudgetUsd, asJson);
+  // Last, as `run` orders it: no credential this scenario's tier hands the agent.
+  const noCredential = credentialPreflight([scenario!]);
+  if (noCredential) return fail("record", "usage", `record: ${noCredential}`, undefined, asJson);
   // `--decider-dir` opens an in-band file rendezvous for the driving agent; close it after the run
   // (mirrors `run`'s one-channel lifecycle).
   const channel = deciderDir !== undefined ? fileChannel(deciderDir) : undefined;
@@ -6982,6 +7010,7 @@ function replayErrorResult(file: string): RunResult {
     hookFailureBlocks: undefined, // no frames to read on this early-bail lane
     deviceBridge: undefined, // no cassette to read it from on this early-bail lane
     hostInputs: undefined, // likewise
+    agentEnvPassthrough: undefined, // likewise
     mcpErrors: undefined, // live-only — this early-bail lane never drives a session
     hookEvents: undefined, // no rec to read from on this early-bail lane
     fileToolAttempts: undefined, // no rec to read from on this early-bail lane
@@ -10109,6 +10138,9 @@ export async function replayCassette(
       hookFailureBlocks: replayHookFailureBlocks,
       deviceBridge: cassette.deviceBridge, // what the recording modeled, as frozen
       hostInputs: cassette.hostInputs, // what the recording took from its host, as frozen (replay never reads the host)
+      // Not frozen: replay does not re-read the session file for evidence. A changed passthrough list moves the session
+      // fingerprint, so verify-cassettes reports it.
+      agentEnvPassthrough: undefined,
       mcpErrors: undefined, // live-only — the re-drive never produces mcp_error
       hookEvents: replayHookEvents, // reconstructed above from cassette.events + controlOut
       // Content-class: the tool_use blocks live in the ordinary events stream (not controlOut), so the
