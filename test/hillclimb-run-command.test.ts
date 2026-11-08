@@ -966,6 +966,11 @@ describe("--case: per-case checks cover the selected cases only", () => {
   for (const [what, opts, refusal] of [
     ["an alias model pin", { session: `model: sonnet\nplugins:\n  local_plugins:\n    - PLUGIN\n` }, /CONCRETE agent model/],
     [
+      "a rolling alias model pin",
+      { session: `model: claude-sonnet-4-0\nplugins:\n  local_plugins:\n    - PLUGIN\n` },
+      /CONCRETE agent model/,
+    ],
+    [
       "a missing upload",
       { session: `model: ${MODEL}\nuploads:\n  - ./no-such-upload.txt\nplugins:\n  local_plugins:\n    - PLUGIN\n` },
       /case beta: .*no-such-upload/,
@@ -1646,7 +1651,10 @@ describe("credentials: refused before spend when no source resolves; an auth fai
     try {
       const r = await runHillclimbCommand(args("--reps", "2"), judgeRefused);
       expect(r.exitCode).toBe(1);
-      expect(err.filter((l) => l.includes("judge call failed on assertion(s) 3"))).toHaveLength(2);
+      // A 401 fails every later grade the same way, so the pass stops after the first attempt.
+      expect(err.filter((l) => l.includes("judge call failed on assertion(s) 3"))).toHaveLength(1);
+      expect(err.some((l) => l.includes("the way every later grade would"))).toBe(true);
+      expect(r.stopped).toMatchObject({ reason: "grader_credential", source: "judge", status: 401 });
       const hints = err.filter((l) => l.includes("The judge used"));
       expect(hints).toHaveLength(1);
       expect(hints[0]).toContain("The judge used CLAUDE_CODE_OAUTH_TOKEN; also set but not passed: ANTHROPIC_API_KEY");

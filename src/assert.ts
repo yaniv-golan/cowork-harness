@@ -1166,6 +1166,7 @@ export function recordJudgeCallError(ctx: AssertContext, a: Assertion, call: Jud
     ...(info.status !== undefined ? { status: info.status } : {}),
     ...(info.origin !== undefined ? { origin: info.origin } : {}),
     message: info.message,
+    retryable: info.retryable,
   });
   if (call.status === 401 || call.status === 403) (ctx.judgeErrorHints ??= new Map()).set(a, graderCredentialHint());
 }

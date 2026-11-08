@@ -492,6 +492,15 @@ describe("loadRowHistory — the judge model", () => {
     }
   });
 
+  it("an undated judge pin is matched by its dated snapshot; another snapshot of a dated pin still differs", () => {
+    // The judge records the dated id it was served (the shape the API returns for an undated request).
+    const judged = [run(passing(judgedBy("claude-haiku-4-5-20251001")))];
+    const undated = loadRowHistory(judged, opts({ judgeModelPin: "claude-haiku-4-5" }));
+    expect(undated.judgeModelDiffers).toBe(0);
+    expect(rowById(undated, SEMANTIC_INDEX, "semantic_rollup")).toMatchObject({ k: 1, n: 1 });
+    expect(loadRowHistory(judged, opts({ judgeModelPin: "claude-haiku-4-5-20251101" })).judgeModelDiffers).toBe(1);
+  });
+
   it("no judge pin: the judge model is not checked", () => {
     const h = loadRowHistory([run(passing(judgedBy("claude-haiku-4-5")))], opts());
     expect(h.judgeModelDiffers).toBe(0);

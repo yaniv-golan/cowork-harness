@@ -55,6 +55,9 @@ export interface HillclimbRunArgs {
   allowMixedPool: boolean;
   /** `--allow-mixed-search`: run beside rows served from another pool, or searched live; printed on every row. */
   allowMixedSearch: boolean;
+  /** `--allow-model-split`: run a variant whose scored rows for one pin were already served two model ids, and finish a
+   *  pass that adds a second one, without failing; recorded on every row the pass writes. */
+  allowModelSplit: boolean;
   /** `--no-judge-check` (or COWORK_HARNESS_JUDGE_CHECK=0): skip the pre-spend grader credential check. */
   noJudgeCheck: boolean;
   globals: Array<{ flag: "--dotenv" | "--run-dir"; value: string }>;
@@ -178,6 +181,7 @@ export function parseHillclimbRunArgs(argv: readonly string[]): HillclimbRunArgs
   const allowConfoundedPool = booleans.has("--allow-confounded-pool");
   const allowMixedPool = booleans.has("--allow-mixed-pool");
   const allowMixedSearch = booleans.has("--allow-mixed-search");
+  const allowModelSplit = booleans.has("--allow-model-split");
   const scDependent = searchCorpusDependentFlagRefusal({
     searchCorpus: values["--search-corpus"] !== undefined,
     miss: values["--search-corpus-miss"] !== undefined,
@@ -200,6 +204,7 @@ export function parseHillclimbRunArgs(argv: readonly string[]): HillclimbRunArgs
     allowConfoundedPool,
     allowMixedPool,
     allowMixedSearch,
+    allowModelSplit,
     noJudgeCheck: judgeCheckDisabled(booleans.has("--no-judge-check")),
     flow: values["--flow"] ?? HILLCLIMB_RUN_DEFAULTS.flow,
     variant,

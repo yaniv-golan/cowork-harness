@@ -13,7 +13,7 @@
 //   5. no model evidence on an otherwise-valid run     → errors, `serving_substitution`
 //   5b. no main-loop message in the transcript on an otherwise-valid run       → errors, `serving_substitution` (effort_not_sent)
 //   6. a run built from another snapshot than the variant's → errors, `error` + meta.arm_source_drift
-//   7. an invalid judge grade                               → errors, `judge_invalid` (regrade lists it with the `run` that re-runs it)
+//   7. an invalid judge grade                               → errors, `judge_invalid`, carrying its results row (regrade re-judges and promotes it)
 //   8. a grade that does not line up with the scenario      → errors, `error` (never a guessed value)
 //   9. otherwise                                            → SCORED
 // A served-model mismatch outranks an agent error (3 before 4): a score from the wrong model is not the
@@ -44,7 +44,7 @@ import { metricEntries, metricSigs } from "./metric-keys.js";
 import { pairwiseRowValues } from "./pairwise.js";
 import { pairwiseComposeKey } from "../run/pairwise-prepass.js";
 import { mainLoopModels, sentEffort, servedModelMismatch } from "./served-model.js";
-import { normalizeModelId } from "../run/model-provenance.js";
+import { modelIdMatches, normalizeModelId } from "../run/model-provenance.js";
 import { resultEventFields } from "./result-event.js";
 import { UNTRUSTED_JUDGE_PREFIX } from "./schema-check.js";
 import { computeVerdict } from "../run/verdict.js";
@@ -100,6 +100,8 @@ export interface AttemptContext {
     skillTracked?: string;
     ablated?: boolean;
     nonDeterministic?: boolean;
+    /** The pass ran under `--allow-model-split`. */
+    modelSplitAllowed?: boolean;
     /** The pass's frozen search corpus: what every rep must have been served from, and how its records relate to the
      *  variants the flow compares. */
     searchCorpus?: {
@@ -143,10 +145,10 @@ const singleKeyRefusal = (g: { assertion: object }): boolean =>
 /** Every modelUsage entry that IS the main model, summed: the agent keys usage by the PICKED id, so a `[1m]`
  *  context-window pick of the same model is `claude-x[1m]` there while its responses say `claude-x`. */
 function mainModelUsage(mu: Record<string, unknown> | undefined, model: string): TokenUsage | undefined {
-  const want = normalizeModelId(model);
   const sum: Partial<TokenUsage> = {};
   for (const [k, e] of Object.entries(mu ?? {})) {
-    if (normalizeModelId(k) !== want) continue;
+    // Keyed by the REQUESTED id (an undated pin), while `model` is the served one (its dated snapshot).
+    if (!modelIdMatches(k, model)) continue;
     const u = snake(e as Record<string, unknown>) ?? {};
     for (const [f, v] of Object.entries(u) as Array<[keyof TokenUsage, number]>) sum[f] = (sum[f] ?? 0) + v;
   }
@@ -401,6 +403,9 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
     },
   });
 
+  // Set by step 7 (an invalid judge grade): built after the scored row, which it carries.
+  let judgeInvalid: ((resultsRow?: Record<string, unknown>) => RowOut) | undefined;
+
   // 1. The runner's ceiling.
   if (ctx.runnerTimeout) return errorRow("timeout", `exceeded the runner's wall-clock ceiling after ${ctx.attemptS}s`, {});
 
@@ -504,27 +509,48 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
     // 7. Invalid judge grade.
     if (rep.bucket === "judge_invalid") {
       // A failed judge CALL graded nothing; a malformed grade is a reply the judge could not be read from. Same slot
-      // outcome (the errors row), different cause and fix: the row names which. `hillclimb regrade` never fills a
-      // judge_invalid slot, so the recovery is to run the slot again.
+      // outcome (the errors row), different cause and fix: the row names which. The errors row is built after the
+      // scored row and carries it (`meta.results_row`, graded from this invalid result): `hillclimb regrade` re-judges
+      // that row from the kept run and moves it into results.jsonl. It is never read as a scored row before then.
       const failed = rep.judgeInvalidAssertions.map((i) => r?.assertions[i]?.judgeError).find((e) => e !== undefined);
       const where = `assertion(s) ${rep.judgeInvalidAssertions.join(", ")}`;
-      const rerun = `re-run the slot with \`hillclimb run … --case ${ctx.caseId} --reps ${ctx.rep + 1}\` (one agent run; a \`regrade\` does not fill it)`;
-      return errorRow(
-        "judge_invalid",
-        failed
-          ? `judge call failed on ${where} (${failed.message}): no grade was made; ${rerun}`
-          : `judge grade invalid after retry on ${where} (malformed: the judge answered without a usable grade); ${rerun}`,
-        {
-          failure_rule: "judge_invalid",
-          judge_invalid_cause: failed ? "call" : "malformed",
-          ...(failed?.status !== undefined ? { judge_error_status: failed.status } : {}),
-          ...(failed !== undefined ? { judge_error_message: failed.message } : {}),
-        },
-      );
+      const rerun = `re-run the slot with \`hillclimb run … --case ${ctx.caseId} --reps ${ctx.rep + 1}\` (one agent run), or \`hillclimb regrade\` to re-judge it from the kept run`;
+      judgeInvalid = (resultsRow) =>
+        errorRow(
+          "judge_invalid",
+          failed
+            ? `judge call failed on ${where} (${failed.message}): no grade was made; ${rerun}`
+            : `judge grade invalid after retry on ${where} (malformed: the judge answered without a usable grade); ${rerun}`,
+          {
+            failure_rule: "judge_invalid",
+            judge_invalid_cause: failed ? "call" : "malformed",
+            ...(failed?.status !== undefined ? { judge_error_status: failed.status } : {}),
+            ...(failed?.retryable !== undefined ? { judge_error_retryable: failed.retryable } : {}),
+            ...(failed !== undefined ? { judge_error_message: failed.message } : {}),
+            ...(resultsRow !== undefined ? { results_row: resultsRow } : {}),
+          },
+        );
     }
   }
 
-  const g = gradeFor(r, ctx, rep, agentFailed);
+  // An invalid judge grade: the carried row is graded with its invalid asserts read as failed. That grade is a
+  // placeholder `hillclimb regrade` rebuilds in full when it re-judges them; nothing reads it before then.
+  const graded =
+    judgeInvalid && r
+      ? (() => {
+          const bad = new Set(rep.judgeInvalidAssertions);
+          const placeholder = {
+            ...r,
+            assertions: r.assertions.map((a, i) =>
+              bad.has(i) ? { ...a, pass: false, judgeInvalid: undefined, judgeError: undefined } : a,
+            ),
+          } as RunResult;
+          return { r: placeholder, rep: classifyRep({ ...evidence, result: placeholder } as never, {}) };
+        })()
+      : { r, rep };
+  const g = gradeFor(graded.r, ctx, graded.rep, agentFailed);
+  // An invalid grade whose scored row cannot be built is still an errors row, carrying none (regrade lists it).
+  if ("misaligned" in g && judgeInvalid) return judgeInvalid();
   if ("misaligned" in g)
     // 8. Never guess a value that does not line up.
     return errorRow("error", `grade for assertion ${g.misaligned} could not be aligned with the scenario (${g.excluded})`, {
@@ -610,7 +636,9 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
       ...(toolCalls !== undefined ? { web_fetches: toolCalls.filter((t) => t.name === "WebFetch").length } : {}),
       ...(ctx.meta.ablated ? { ablated: true } : {}),
       ...(ctx.meta.nonDeterministic ? { non_deterministic: true } : {}),
+      ...(ctx.meta.modelSplitAllowed ? { model_split_allowed: true } : {}),
     },
   };
+  if (judgeInvalid) return judgeInvalid(row);
   return { dest: "results", row };
 }

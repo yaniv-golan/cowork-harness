@@ -27,6 +27,8 @@ import {
   pairwiseRefFindings,
   staleAssertSigWarnings,
   stateMetricFindings,
+  servedModelSplitFindings,
+  promotedOrphanNotes,
 } from "./check.js";
 import { prepareCases } from "./command.js";
 import { hashedPaths } from "./gate.js";
@@ -231,7 +233,11 @@ export function checkReport(
   const corpusErrors = corpus
     .filter((f) => f.severity === "error")
     .map((f) => ({ level: "error" as const, rule: f.rule, file: "results.jsonl", message: f.message }));
-  const extra = [...stateMetricFindings(snap), ...pairwiseRefFindings(snap), ...metricSigFindings(snap), ...corpusErrors];
+  const split = servedModelSplitFindings(snap);
+  const splitErrors = split
+    .filter((f) => f.severity === "error")
+    .map((f) => ({ level: "error" as const, rule: "served_model.split", file: "results.jsonl", message: f.message }));
+  const extra = [...stateMetricFindings(snap), ...pairwiseRefFindings(snap), ...metricSigFindings(snap), ...corpusErrors, ...splitErrors];
   const report = { ...base, findings: [...base.findings, ...extra], errors: base.errors + extra.length };
   const flowShown = normalizeRootArg(flowArg);
   const sig = assertSigScenarios(snap, cwd, flowShown, target);
@@ -247,6 +253,8 @@ export function checkReport(
       ...sig.notes,
       ...pairwiseHints(snap, flowShown, sig.target),
       ...otherModelShareNotes(snap),
+      ...split.filter((f) => f.severity === "warning").map((f) => `served_model.split: ${f.message}`),
+      ...promotedOrphanNotes(snap),
       ...corpus.filter((f) => f.severity === "warning").map((f) => `${f.rule}: ${f.message}`),
     ],
     exitCode: report.errors ? 1 : 0,
@@ -413,6 +421,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
       scored: outcome.scored ?? 0,
       failed: outcome.failed,
       exitCode: outcome.exitCode,
+      ...(outcome.stopped ? { stopped: outcome.stopped } : {}),
       // eval's dry-run shape: the estimate under plan.cost; a top-level cost would read as spend.
       ...(a.dryRun ? { dryRun: true, ...(outcome.cost ? { plan: { cost: outcome.cost } } : {}) } : {}),
     };

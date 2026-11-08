@@ -971,3 +971,103 @@ describe("a requested exit from inside a job (an unanswered gate)", () => {
     expect(rows("baseline"), "the in-flight sibling's row").toHaveLength(1);
   });
 });
+
+describe("a grader failure every later grade would repeat stops the pass", () => {
+  const judgeFailed = (status: number, retryable?: boolean) => ({
+    result: {
+      ...excerpt,
+      assertions: excerpt.assertions.map((a, i) =>
+        i === 3
+          ? {
+              ...a,
+              pass: false,
+              judgeInvalid: true,
+              judgeError: { kind: "call" as const, status, message: `API ${status}`, ...(retryable !== undefined ? { retryable } : {}) },
+            }
+          : a,
+      ),
+    } as RunResult,
+  });
+
+  it("a judge 401 on the first attempt: no task starts after the in-flight ones, exit 1, `stopped` names the slot", async () => {
+    await approved();
+    behave = (id, rep) => (id === "alpha" && rep === 0 ? judgeFailed(401) : {});
+    const r = await runHillclimb(args("--reps", "3"), deps());
+    expect(r.exitCode).toBe(1);
+    expect(r.stopped).toMatchObject({ reason: "grader_credential", source: "judge", status: 401, case: "alpha", rep: 0 });
+    expect(jobs.length).toBeLessThanOrEqual(2); // concurrency 2: only the attempt already running beside it
+    expect(r.error?.message).toContain("the way every later grade would");
+  });
+
+  it("an LLM decider call refused (a thrown ApiExitError 403) stops it too, source decider", async () => {
+    const { ApiExitError } = await import("../src/decide/llm-transport.js");
+    await approved();
+    const r = await runHillclimb(
+      args("--reps", "3"),
+      deps({
+        runJob: async (j) => {
+          jobs.push({ id: j.c.id, rep: j.rep, runLabel: j.runLabel });
+          throw new ApiExitError("API 403", 403, "first_party", "Forbidden");
+        },
+      }),
+    );
+    expect(r.stopped).toMatchObject({ source: "decider", status: 403 });
+    expect(jobs.length).toBeLessThanOrEqual(2);
+  });
+
+  it.each([
+    [500, true],
+    [429, true],
+  ])("(control) a judge %s (retryable %s) does not stop it", async (status, retryable) => {
+    await approved();
+    behave = (id, rep) => (id === "alpha" && rep === 0 ? judgeFailed(status, retryable) : {});
+    const r = await runHillclimb(args("--reps", "3"), deps());
+    expect(r.stopped).toBeUndefined();
+    expect(jobs).toHaveLength(6);
+  });
+});
+
+describe("one model per pin across a variant's scored rows", () => {
+  const served = (m: string) => ({
+    result: { ...excerpt, models: [m], modelPinHonored: true } as RunResult,
+    events: [events[0]!, JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { model: m } }), events[2]!],
+    transcript: [JSON.stringify({ type: "assistant", isSidechain: false, effort: "medium", message: { model: m } })],
+  });
+
+  it("one pass served two snapshots of the pin: exit 1 after the pass, both named", async () => {
+    await approved();
+    behave = (id) => served(id === "alpha" ? `${MODEL}-20251001` : `${MODEL}-20251101`);
+    const r = await runHillclimb(args(), deps());
+    expect(r.exitCode).toBe(1);
+    expect(err.join("\n")).toMatch(new RegExp(`served ${MODEL}-20251001 and ${MODEL}-20251101 \\(cases alpha, beta\\)`));
+  });
+
+  it("a later pass over rows already split is refused before any run", async () => {
+    await approved();
+    behave = (id) => served(id === "alpha" ? `${MODEL}-20251001` : `${MODEL}-20251101`);
+    await runHillclimb(args(), deps());
+    jobs = [];
+    const r = await runHillclimb(args("--reps", "2"), deps());
+    expect(r.exitCode).toBe(2);
+    expect(jobs).toHaveLength(0);
+    expect(r.error?.message).toContain("its scores come from more than one model");
+  });
+
+  it("--allow-model-split: the split pass exits 0 with a warning, a later pass runs, and its rows record the flag", async () => {
+    await approved();
+    behave = (id) => served(id === "alpha" ? `${MODEL}-20251001` : `${MODEL}-20251101`);
+    const first = await runHillclimb(args("--allow-model-split"), deps());
+    expect(first.exitCode).toBe(0);
+    expect(err.join("\n")).toContain("allowed (--allow-model-split)");
+    const r = await runHillclimb(args("--reps", "2", "--allow-model-split"), deps());
+    expect(r.exitCode).toBe(0);
+    expect(rows("baseline").every((x: { meta: Record<string, unknown> }) => x.meta.model_split_allowed === true)).toBe(true);
+  });
+
+  it("(control) one snapshot on every row is fine", async () => {
+    await approved();
+    behave = () => served(`${MODEL}-20251001`);
+    const r = await runHillclimb(args(), deps());
+    expect(r.exitCode).toBe(0);
+  });
+});

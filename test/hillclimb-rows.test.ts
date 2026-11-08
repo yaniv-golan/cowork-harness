@@ -144,6 +144,28 @@ describe("scored rows", () => {
     expect(row.in_tokens).toBe(2 + 17216 + 33648);
   });
 
+  it("an undated pin served its dated snapshot: a scored row, its usage found under the requested-id key", () => {
+    // The key shape of a real kept run pinned `claude-haiku-4-5` (numbers synthetic): the main loop reported the dated
+    // snapshot, modelUsage was keyed by the requested id. Before the shared matcher the row was serving_substitution.
+    const r = {
+      ...fixture("success-semantic"),
+      models: ["claude-haiku-4-5-20251001"],
+      modelPinHonored: true,
+      modelUsage: {
+        "claude-haiku-4-5": { inputTokens: 3, outputTokens: 5, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0.07 },
+      },
+      cost: { usd: 0.07 },
+    } as unknown as RunResult;
+    const out = attemptRow({ result: r }, ctx(r, { pin: "claude-haiku-4-5" }));
+    expect(out.dest).toBe("results");
+    expect((out.row as Record<string, any>).usage).toEqual({
+      input_tokens: 3,
+      output_tokens: 5,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    });
+  });
+
   it("never RunResult.usage (the last call only): the row's usage differs from it on the same result", () => {
     const slash = fixture("slash-success-synthetic");
     // ADDED: a last-call usage that disagrees with the session's modelUsage, as on real runs
@@ -481,18 +503,36 @@ describe("error rows (runner-scaffold.mjs l.549-564)", () => {
     r.assertions[3] = {
       ...r.assertions[3],
       judgeInvalid: true,
-      judgeError: { kind: "call", status: 401, origin: "first_party", message: "API 401, first_party: Invalid API key" },
+      judgeError: { kind: "call", status: 401, origin: "first_party", message: "API 401, first_party: Invalid API key", retryable: false },
     } as never;
     const row = errRow(attemptRow({ result: r }, ctx(r)));
     expect(row.failure_class).toBe("judge_invalid");
     expect(row.meta).toMatchObject({
       judge_invalid_cause: "call",
       judge_error_status: 401,
+      judge_error_retryable: false,
       judge_error_message: "API 401, first_party: Invalid API key",
     });
     expect(row.error).toContain("judge call failed on assertion(s) 3 (API 401, first_party: Invalid API key)");
     expect(row.error).toMatch(/hillclimb run … --case \S+ --reps \d+/);
     expect(row.error).not.toContain("malformed");
+  });
+
+  it("a judge_invalid row carries the results row its run would have had, for regrade to re-judge and promote", () => {
+    const r = structuredClone(fixture("success-semantic"));
+    r.assertions[3] = { ...r.assertions[3], judgeInvalid: true };
+    const row = errRow(attemptRow({ result: r }, ctx(r)));
+    // The scored path's row for the same attempt: what a valid grade of this run would have written.
+    const valid = structuredClone(fixture("success-semantic"));
+    const scored = attemptRow({ result: valid }, ctx(valid));
+    expect(scored.dest).toBe("results");
+    const carried = row.meta!.results_row as Record<string, unknown> & { meta: Record<string, unknown> };
+    // Same slot, same run, and the provenance only a results row records (never filled in later from the flow's state).
+    expect(carried).toMatchObject({ prompt_id: row.prompt_id, rep: row.rep, meta: { run_id: row.meta!.run_id } });
+    for (const k of ["scenario_name", "env", "flow_hash", "assert_sig", "wall_s"] as const)
+      expect(carried.meta[k], k).toEqual((scored.row.meta as Record<string, unknown>)[k]);
+    expect(carried).not.toHaveProperty("failure_class");
+    expect(row.error).toContain("`hillclimb regrade` to re-judge it from the kept run");
   });
 
   it("a malformed judge grade ⇒ judge_invalid that says malformed, with no judge_error_* meta", () => {
@@ -503,6 +543,7 @@ describe("error rows (runner-scaffold.mjs l.549-564)", () => {
     expect(row.meta).toMatchObject({ judge_invalid_cause: "malformed" });
     expect(row.meta).not.toHaveProperty("judge_error_status");
     expect(row.meta).not.toHaveProperty("judge_error_message");
+    expect(row.meta).not.toHaveProperty("judge_error_retryable");
   });
 
   it("a rep built from a different snapshot than the variant's ⇒ error, flagged as source drift", () => {

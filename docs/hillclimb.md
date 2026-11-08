@@ -225,7 +225,7 @@ Three things live outside the flow dir, and the loop needs all three for the who
 | Prove the mechanism is wired | The `skill_invoked` column (pass `--skill <name>` when the plugin has several skills), and a null run: `hillclimb run … --flow <dir>-null --ablate` into a sibling flow. The null flow has its own `_state.json` and gate: you run `state-template` and the `--dry-run --approve-harness` for it first |
 | Recompute the headline from raw results | Rows carry every grade key; recompute from `results.jsonl` |
 | Spot-check grading; fix a rubric and re-grade in place | Edit the rubric, approve the new sha (`--dry-run --approve-harness`, with the loop's `--skill`), then `hillclimb regrade <target> --flow <dir>`. See [what a re-grade can change](#what-a-re-grade-can-and-cannot-change) |
-| Verify the served model and retries | A run served by another model is an `errors.jsonl` row (`serving_substitution`), and so is one with no evidence of the pinned model, unless the agent itself failed first (then it is a scored agent failure). A run whose agent sent another effort than `--effort` asked for, or none, is one too (`effort_not_sent`) |
+| Verify the served model and retries | A run served by another model is an `errors.jsonl` row (`serving_substitution`), and so is one with no evidence of the pinned model, unless the agent itself failed first (then it is a scored agent failure). A run whose agent sent another effort than `--effort` asked for, or none, is one too (`effort_not_sent`). An undated pin also accepts its dated snapshot, so a variant's scored rows for one pin can come from two snapshots: that pass exits `1` and every later pass is refused (start a fresh flow dir and pin the dated id), unless `--allow-model-split`, which every row then records as `meta.model_split_allowed` (the split rows still count in the headline score); `hillclimb check` makes a split an error unless every row of it carries that mark (then a warning), so rows written before the flag keep it red, and `hillclimb run` never re-runs a filled slot. For a clean check, start a fresh flow dir and either pin the dated id or pass `--allow-model-split` from the variant's first pass |
 | A probe or canary on one case | `hillclimb run … --case <id>`; it is the variant's first run, so it fixes that variant's snapshot |
 | Print the resolved scope every run | Every pass prints how many (case, rep) slots it will run and names the slots it re-runs after a failure; `--dry-run` adds the cost estimate |
 | `_state.json` and `harness_paths` | `hillclimb state-template … --flow <dir>`: save its stdout; after adding a metric, merge only the new `metrics` entries |
@@ -261,14 +261,18 @@ Three things live outside the flow dir, and the loop needs all three for the who
   from the variant's snapshot, or a grade that does not line up with the scenario), `serving_substitution` (another
   model served the run, or no evidence of the pinned one, or the agent sent another effort than requested or none:
   `meta.failure_rule: "effort_not_sent"`) and `judge_invalid` (the row's `error` names the cause, and
-  `meta.judge_invalid_cause` records it: `call` for a failed judge call, with `meta.judge_error_status` and
-  `meta.judge_error_message`, or `malformed` for a malformed grade; the slot re-runs with
-  `hillclimb run … --case <id> --reps <rep+1>`, and a `regrade` does not fill it); with `--search-corpus`, also `search_pool_mismatch`
+  `meta.judge_invalid_cause` records it: `call` for a failed judge call, with `meta.judge_error_status`,
+  `meta.judge_error_retryable` and `meta.judge_error_message`, or `malformed` for a malformed grade; the slot re-runs with
+  `hillclimb run … --case <id> --reps <rep+1>`, or a `regrade` promotes it: see below); with `--search-corpus`, also `search_pool_mismatch`
   (the rep was refused before it ran because the pool copy changed, or was served from another pool) and
   `search_refused` (a search the frozen corpus refused: the rep worked from different evidence, so it is never
   scored). When several apply, a timeout wins, then a pool mismatch, then an infrastructure error, then a refused
   search, then a served-model mismatch. Every error row carries `meta.content_sig`, the variant's snapshot signature. An error row does not fill its slot, so the next pass
-  runs it again; a permanent fault runs again on every pass, and the scope line names it.
+  runs it again; a permanent fault runs again on every pass, and the scope line names it. A `judge_invalid` row written by 5.0 or later also carries `meta.results_row`, the results row its run would have had (its grade a placeholder with the invalid asserts failed); nothing reads it as a scored row. `hillclimb regrade` re-judges every judged assert of it from the kept run and, when that grade is valid, moves it into `results.jsonl` (same `meta.run_id`, `meta.regrade_from: "judge_invalid"`) and out of `errors.jsonl`, its
+  prior bytes kept as `regrade-errors-<sha16>.bak.jsonl`. `results.jsonl` is written first: a regrade stopped between
+  the two leaves the slot filled, its spend counted once by run id, and `hillclimb check` notes the leftover errors row,
+  which the next regrade removes. A row written before 5.0, one under `--fill-refs`, and one whose re-grade is invalid
+  again stay open, listed with their cause and the `run` that re-runs them.
 - **Perf fields:** `cost_usd`, `latency_s`, `tool_calls`, `web_searches`, `in_tokens`, `out_tokens` (and
   `skill_invoked` when tracked). `in_tokens` counts the main model's input, cache-read and cache-creation tokens.
   `latency_s` excludes retry backoff; when the run reported no duration it is the attempt's wall time
@@ -471,7 +475,7 @@ rows, and no fixed multiplier reproduces it. So:
 - **There is no spend cap on `hillclimb run`.** It takes no `--max-budget-usd`. Recompute spend from the files
   after every round, as the loop's guide does, and stop at your budget. (`--max-budget-usd` on `run` and `eval` is
   a pre-flight refusal priced from the agent's cost history, not a cap on spend: only a `--repeat` batch keeps a running
-  total, and an `eval` is never stopped mid-way.)
+  total, and the cap never stops an `eval` mid-way.)
 - **A ballpark before you start.** A round is cases × reps agent runs, plus the judge calls of every judged
   assertion on every row (a `semantic_pairwise` assert makes one per reference it is judged against, and `order: both` doubles it). One
   live run observed about 33 s per pairwise judge call. Price one case first: the optional one-case baseline run in
@@ -789,8 +793,8 @@ after search.
 | Code | When |
 |---|---|
 | `0` | every attempted (case, rep) was scored |
-| `1` | any attempt failed (an `errors.jsonl` row, `search_pool_mismatch` and `search_refused` included), the pass stopped mid-run, a reference freeze failed, or `summary.json` could not be written |
-| `2` | refused before spending: usage, the harness gate, a credential, and with `--search-corpus` a one-sided, mixed or unbounded pool, rows served from another pool, a pool that cannot be read, or a pool copy that cannot be written |
+| `1` | any attempt failed (an `errors.jsonl` row, `search_pool_mismatch` and `search_refused` included), the pass stopped mid-run (a judge or LLM decider call refused for its credential or model, or out of quota, stops it: the envelope's `stopped` names the slot), the variant's scored rows for one pin were served two model ids (without `--allow-model-split`), a reference freeze failed, or `summary.json` could not be written |
+| `2` | refused before spending: usage, the harness gate, a credential, a variant whose existing scored rows for one pin were served two model ids (without `--allow-model-split`), and with `--search-corpus` a one-sided, mixed or unbounded pool, rows served from another pool, a pool that cannot be read, or a pool copy that cannot be written |
 
 `hillclimb check` exits `1` on any error finding, the frozen-corpus ones included.
 

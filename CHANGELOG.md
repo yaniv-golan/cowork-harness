@@ -48,6 +48,37 @@ All notable changes to this project are documented here. The format is based on
   privacy findings, so the check can pass on the machine they come from; every other finding still fails, and a plain
   `verify-cassettes` still fails on those names.
 
+- **`eval` and `hillclimb run` stop when a grader fails the way every later grade would.** A judge or LLM decider
+  call refused for its credential (401 or 403), for an unknown model (404), or for a spent quota (a 429 the API marks
+  not retryable) would fail every remaining job the same way, so no further job starts. Jobs already running finish and
+  keep their records. A server error, a timeout or an ordinary rate limit never stops a run. `eval` records why in
+  `<evalDir>/stopped.json`, reports it as `stoppedEarly` (`{reason: "grader_credential", source, status?, atJob}`,
+  else `null`), names it in `report.md`, and exits 1; `eval report` reads the same file. `hillclimb run` keeps the rows
+  already written, exits 1, and names the slot in the payload's `stopped` (absent unless the pass stopped).
+- **`hillclimb regrade` promotes a `judge_invalid` slot.** A `judge_invalid` errors row now carries the results row
+  its run would have had (`meta.results_row`). A default regrade re-judges every judged assert of it from the kept
+  run, with the same checks as any row (`regrade_rejudged_because` names `judge_invalid`). When that grade is valid,
+  it appends the row to `results.jsonl` (`meta.regrade_from: "judge_invalid"`, its `meta.run_id` kept) and then
+  removes the errors row. `errors.jsonl` is replaced atomically, and its prior bytes are kept as
+  `regrade-errors-<sha16>.bak.jsonl`. Each variant counts `promoted`. Only rows written by this version can be
+  promoted: an older `judge_invalid` row has no results row to promote and is still listed with the `hillclimb run`
+  that re-runs it, as are a row under `--fill-refs` and one whose re-grade is invalid again. A regrade stopped between
+  the two writes leaves the slot filled and its spend counted once; `hillclimb check` notes the leftover errors row, and
+  the next regrade removes it. A change to `errors.jsonl` between the judge decision and the locks is refused, as a
+  change to `results.jsonl` already was.
+- **`hillclimb run --allow-model-split`.** An undated pin is matched by any of its dated snapshots, so one variant's
+  rows can come from two of them. Without the flag, a pass whose rows for one pin were served two model ids exits 1,
+  and every later pass of that variant is refused before spending. With it, the pass proceeds with a warning, and
+  every row it writes records `meta.model_split_allowed: true`. The split rows still count in the headline score.
+  `hillclimb check` reports a split as an error (`served_model.split`) unless every row of it carries that mark, and
+  then as a warning.
+- **A failed judge call records whether a retry could succeed.** `assertions[].judgeError.retryable` in `result.json`
+  and the `regrade` schema, `meta.judge_error_retryable` on a `hillclimb` errors row, and `callStatus` /
+  `callRetryable` on a `semantic_pairwise` comparison whose call failed.
+- **`eval` reports the agent's served model.** `summary.agentModelDisagreements` lists each scenario whose scored reps,
+  across both arms, were served more than one model id, and `summary.modelMismatch` the reps of each arm and scenario
+  that were excluded because the agent was not served its pin (`pinned X · served Y` in `report.md`).
+
 ### Fixed
 
 - **`record --rerecord-stale` no longer overwrites a cassette written by a newer cowork-harness.** Such a cassette
@@ -68,6 +99,18 @@ All notable changes to this project are documented here. The format is based on
 - **`prune` reports every usage error as a JSON envelope under `COWORK_HARNESS_OUTPUT_FORMAT=json`**, as other
   commands do. Before, each printed only the plain message. prune has no `--output-format` flag. The text form is
   unchanged.
+
+- **An undated model pin is honored when the agent is served its dated snapshot.** The agent keys its usage by the id
+  it was asked for and reports the dated id it was served, so a run pinned to `claude-haiku-4-5` and served
+  `claude-haiku-4-5-20251001` was read as not honoring its pin. `eval` excluded such reps, its history counted a
+  judge pinned and served the same way as another model, and `hillclimb` wrote them as `serving_substitution` errors and counted the main
+  model's own spend as another model's. One matcher now decides every pin comparison: a dated id matches only itself,
+  and an undated id also matches its dated snapshots. An eval rep's verdict is recorded when it runs, so an eval
+  recorded before this version keeps its `model_mismatch` reps: re-run it. Its `report.md` says so when the served id
+  matches the pin; on an eval run by this version, the same case points at `modelFallbacks` instead. `hillclimb` recovers on its next pass.
+- **A `semantic_pairwise` assert makes no further judge call in a run once one has failed the way every later call
+  would.** A later metric-only comparison is recorded `invalid` ("judge not called: an earlier comparison's call
+  failed …"), and a gating one makes the assert judge-invalid, with the same `judgeError`.
 
 ### Changed
 
@@ -154,6 +197,21 @@ All notable changes to this project are documented here. The format is based on
 - **Breaking: `--resume` refuses a session manifest without its identity stamps** (`sessionId` and `fidelity`), where
   it used to let one through with a warning. Start a fresh session, or delete the run dir and re-run with
   `--session-id`.
+
+- **Breaking: a rolling model alias is not a concrete pin.** An id ending in `-latest` or `-0` can roll to a new
+  snapshot mid-run, so `eval`, `hillclimb run` and `regrade` (including `--judge-model`) now refuse it before spending,
+  as they refuse `opus` or `best`. Pin the dated id: the agent reports it as `models[0]` in a run's `result.json`. On
+  `run`, which still accepts such a pin, a run whose main loop reports no live model now leaves `modelPinHonored`
+  unset instead of reading the usage key as the pin served.
+- **Breaking: `eval` exits 1 on more outcomes.** A scheduled job with no record (the eval was interrupted, killed,
+  ended on a requested exit, or stopped on a grader failure) and an agent served more than one model across a
+  scenario's scored reps now exit 1, on `eval` and on `eval report`. An (arm, scenario) all of whose reps were
+  excluded for any reason (a skill that changed mid-eval, a pin the agent was not served, another judge prompt, as well
+  as infrastructure, a refused search or a pool mismatch) now exits 1 too, and so does one every rep of which has an
+  invalid judge grade on some assertion (`judge_invalid`: a server error, a timeout or a malformed reply): it compares
+  nothing.
+- **Breaking: `hillclimb run` exits 1 when it stops on a grader failure or a variant is served two models for one pin**
+  (see Added). A later pass of such a variant is refused (exit 2) unless `--allow-model-split`.
 
 ### Removed
 

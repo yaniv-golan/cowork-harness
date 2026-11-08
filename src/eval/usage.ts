@@ -49,6 +49,8 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
   --allow-underpowered       accept --reps 2..3; rows whose exact test cannot reach --alpha are labelled
                              'underpowered', never 'no detectable change'
   --model <id>               the agent model; it (or the session's model:) must be a CONCRETE id, not an alias
+                             (-latest / -0 included). An undated id also matches its dated snapshot; to pin exactly
+                             what ran, use the id the agent reports (models[0] of a prior result.json)
   --judge-model <id>         grade every semantic_matches assert with this concrete model (per-assert judge_model
                              is then inert); without it every live judge model must be concrete
   --no-judge-check           skip the pre-spend grader credential check (also COWORK_HARNESS_JUDGE_CHECK=0). By
@@ -83,7 +85,7 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
   --target-effect <pp>       with --dry-run: the change to size for, in percentage points (30pp or 30, 1..100); the plan
                              adds the smallest --reps that detects it per row, its power, and the cost at that --reps
   --max-budget-usd <x>       refuse before any run (exit 2) when the scenarios' worst observed runs, times the jobs
-                             scheduled, exceed x. A pre-flight from history only: the eval is never stopped mid-way, and
+                             scheduled, exceed x. A pre-flight from history only: the cap never stops a run mid-way, and
                              judge spend is not counted. With no priced history the check is a LOWER BOUND, and says so.
   --search-corpus <pool>     serve both arms' web searches from one recorded pool (search-pool build), copied into the
                              eval dir and pinned by hash; hostloop only. A frozen corpus holds search fixed: it cannot
@@ -105,8 +107,9 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
        grades for unavailable evidence than the baseline, and that excess took the row below the threshold; or an
        insufficient_unmeasured metric row, the same for metric values the scorer or a cap left out),
        every row insufficient, a scenario that compared nothing (every rep of both arms errored, or every rep of one arm
-       was an infrastructure failure), a metric row not compared (a broken metric state), or the judge model differed
-       across reps, or (with --search-corpus) any rep not served from the pinned pool · 2 usage, or a refusal before any
+       was excluded or judge_invalid), a metric row not compared (a broken metric state), the judge or agent model differed across
+       reps, a job with no record (interrupted, or stopped: a judge or decider call refused 401/403/404 or out of
+       quota stops the eval; see stoppedEarly), or (with --search-corpus) any rep not served from the pinned pool · 2 usage, or a refusal before any
        run (including the --max-budget-usd refusal, a one-sided or mixed pool, and a pool that cannot be read) · 3 an arm
        snapshot or the pool copy could not be made, or failed its staging preflight. --dry-run: 0 plan printed · 2 any refusal the real eval would make before its first run · 3 as above, or the
        temp dir is inside a git work tree, or git cannot tell whether it is (set TMPDIR)`;

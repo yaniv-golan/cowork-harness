@@ -997,10 +997,11 @@ describe("eval: snapshots and their signatures", () => {
   it("a judge that hit the usage limit (API 429) is counted under its own status", async () => {
     const { scen, a, b } = setup({ semantic: true });
     let n = 0;
-    // The first semantic rep hit the account's usage limit; every other rep's call was refused (401).
+    // The first semantic rep hit a 429 recorded without `retryable` (a result from before the field existed, so it does
+    // not stop the eval); every other rep's call failed with a server error (500), which never stops it either.
     const failCall = (_s: EvalJobSpec, r: RunResult): RunResult => {
       const semantic = r.assertions.some((x) => x.assertion.semantic_matches);
-      const status = semantic && n++ === 0 ? 429 : 401;
+      const status = semantic && n++ === 0 ? 429 : 500;
       return {
         ...r,
         assertions: r.assertions.map((x) =>
@@ -1019,13 +1020,13 @@ describe("eval: snapshots and their signatures", () => {
     const rep = writeEvalReport(out.evalDir);
     const total: Record<string, number> = {};
     for (const arm of rep.arms) for (const [k, v] of Object.entries(arm.judgeInvalidCauses ?? {})) total[k] = (total[k] ?? 0) + v;
-    expect(total).toEqual({ "call failed: API 429": 1, "call failed: API 401": 9 });
+    expect(total).toEqual({ "call failed: API 429": 1, "call failed: API 500": 9 });
     expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).toContain("call failed: API 429 ×1");
   });
 
   it("the report splits invalid judge grades by cause and prints the recovery; an old line reads 'cause not recorded'", async () => {
     const { scen, a, b } = setup({ semantic: true });
-    // Every rep's semantic grade is a failed call (a 401), as the judge now records one.
+    // Every rep's semantic grade is a failed call (a 500: a server error does not stop the eval), as the judge records one.
     const failCall = (_s: EvalJobSpec, r: RunResult): RunResult => ({
       ...r,
       assertions: r.assertions.map((x) =>
@@ -1034,23 +1035,23 @@ describe("eval: snapshots and their signatures", () => {
               ...x,
               pass: false,
               judgeInvalid: true,
-              judgeError: { kind: "call" as const, status: 401, message: "API 401, first_party: Invalid API key" },
+              judgeError: { kind: "call" as const, status: 500, message: "API 500, first_party: Internal server error" },
             }
           : x,
       ),
     });
     const out = await runEval(args(scen, a, b, ["--judge-model", "claude-opus-4-8"]), deps(fakeRunner(failCall)));
     const rep = writeEvalReport(out.evalDir);
-    expect(rep.arms[0]!.judgeInvalidCauses).toEqual({ "call failed: API 401": 5 });
+    expect(rep.arms[0]!.judgeInvalidCauses).toEqual({ "call failed: API 500": 5 });
     expect(rep.judgeCallFailures?.ungraded).toEqual([
-      expect.objectContaining({ scenario: "smoke-semantic-evidence-files", cause: "API 401, first_party: Invalid API key" }),
+      expect.objectContaining({ scenario: "smoke-semantic-evidence-files", cause: "API 500, first_party: Internal server error" }),
     ]);
     expect(rep.judgeCallFailures?.regrade).toHaveLength(1);
     expect(rep.judgeCallFailures!.regrade[0]!.runDirs).toHaveLength(10); // every rep of both arms
     expect(rep.judgeCallFailures!.regrade[0]!.scenarioFile).toMatch(/smoke-semantic-evidence-files\.yaml$/);
     expect(rep.judgeCallFailures!.regrade[0]!.pruned).toEqual([]);
     const md = readFileSync(join(out.evalDir, "report.md"), "utf8");
-    expect(md).toContain("call failed: API 401 ×5");
+    expect(md).toContain("call failed: API 500 ×5");
     expect(md).toContain("No assertion graded: the judge could not be called");
     expect(md).toMatch(/`cowork-harness regrade \S+( \S+)* --scenario \S+`/); // host paths are redacted in the markdown
     expect(md).toContain("does not rewrite this eval's runs.jsonl");
@@ -1564,6 +1565,35 @@ describe.skipIf(!existsSync(CLI))("eval: the CLI wrapper", () => {
     );
     expect(r.status, r.stderr).toBe(2);
     expect(JSON.parse(r.stdout)).toMatchObject({ command: "eval", ok: false, error: { category: "usage" } });
+  });
+
+  it.each(["claude-3-5-sonnet-latest", "claude-sonnet-4-0"])("a rolling alias pin (%s) is refused before any run: exit 2", (model) => {
+    const { scen, a, b } = setup();
+    const r = spawnSync(
+      "node",
+      [CLI, "eval", scen, "--arm", a, "--arm", b, "--model", model, "--out", join(root, "e"), "--output-format", "json"],
+      {
+        encoding: "utf8",
+        cwd: root,
+      },
+    );
+    expect(r.status, r.stderr).toBe(2);
+    expect(JSON.parse(r.stdout)).toMatchObject({ command: "eval", ok: false, error: { category: "usage" } });
+    expect(existsSync(join(root, "e"))).toBe(false);
+  });
+
+  it("`eval report` over a stopped.json it cannot read: exit 1 with a runtime error naming the file, never a crash", async () => {
+    const { scen, a, b } = setup();
+    const out = await runEval(args(scen, a, b), deps(fakeRunner()));
+    writeFileSync(join(out.evalDir, "stopped.json"), "{not json");
+    const r = spawnSync("node", [CLI, "eval", "report", out.evalDir, "--output-format", "json"], { encoding: "utf8", cwd: root });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).not.toMatch(/\n\s+at /); // no stack trace
+    expect(JSON.parse(r.stdout)).toMatchObject({
+      command: "eval",
+      ok: false,
+      error: { category: "runtime", message: expect.stringContaining("stopped.json is not a stop record") },
+    });
   });
 });
 
@@ -2237,5 +2267,300 @@ describe("eval: metric rows (a scenario's declared `metrics:`)", () => {
     await expect(runEval(args(scen, a, b, ["--correction", "holm", "--fail-on", "confirmed"]), deps(fakeRunner()))).rejects.toThrow(
       /tuned pass rates: 7 row\(s\); tuned metrics: 4 row\(s\)/,
     );
+  });
+});
+
+describe("eval: a grader failure every later grade would repeat stops the schedule", () => {
+  const judge401 =
+    (status: number, retryable?: boolean) =>
+    (_s: EvalJobSpec, r: RunResult): RunResult => ({
+      ...r,
+      assertions: r.assertions.map((x) =>
+        x.assertion.semantic_matches
+          ? {
+              ...x,
+              pass: false,
+              judgeInvalid: true,
+              judgeError: { kind: "call" as const, status, message: `API ${status}`, ...(retryable !== undefined ? { retryable } : {}) },
+            }
+          : x,
+      ),
+    });
+  // The k-th job of the semantic scenario (the other scenario has no judged assert) gets `b`.
+  const failAt = (k: number, b: (s: EvalJobSpec, r: RunResult) => RunResult) => {
+    let n = 0;
+    return (s: EvalJobSpec, r: RunResult) => (s.scenario.name === "smoke-semantic-evidence-files" && n++ === k ? b(s, r) : r);
+  };
+  const JOBS = 20; // 5 reps × 2 scenarios × 2 arms
+
+  it("a judge 401 in job k: no later job invokes runJob, stoppedEarly is recorded, exit 1, and `eval report` keeps it", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    const calls: EvalJobSpec[] = [];
+    const out = await runEval(
+      args(scen, a, b, ["--judge-model", "claude-opus-4-8", "--concurrency", "1"]),
+      deps(fakeRunner(failAt(1, judge401(401)), calls)),
+    );
+    const last = calls[calls.length - 1]!;
+    expect(last.scenario.name).toBe("smoke-semantic-evidence-files");
+    expect(calls.filter((c) => c.scenario.name === "smoke-semantic-evidence-files")).toHaveLength(2);
+    expect(out.report.stoppedEarly).toEqual({ reason: "grader_credential", source: "judge", status: 401, atJob: last.job.index });
+    expect(out.report.summary.missingJobs).toBe(JOBS - calls.length);
+    expect(calls.length).toBeLessThan(JOBS);
+    expect(out.report.summary.exitCode).toBe(1);
+    expect(existsSync(join(out.evalDir, "stopped.json"))).toBe(true);
+    const again = writeEvalReport(out.evalDir);
+    expect(again.stoppedEarly).toEqual(out.report.stoppedEarly);
+    expect(again.summary.exitCode).toBe(1);
+    expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).toContain("the eval stopped after job");
+  });
+
+  it("at --concurrency 2, no job after the one beside the failed job starts", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    const calls: EvalJobSpec[] = [];
+    const out = await runEval(
+      args(scen, a, b, ["--judge-model", "claude-opus-4-8", "--concurrency", "2"]),
+      deps(fakeRunner(failAt(1, judge401(401)), calls)),
+    );
+    const at = out.report.stoppedEarly?.atJob;
+    expect(at).toBeTypeOf("number");
+    // Jobs 0..atJob started in schedule order; at most one more was already in flight beside it.
+    expect(calls.length).toBeLessThanOrEqual(at! + 2);
+    expect(calls.length).toBeLessThan(JOBS);
+    expect(out.report.summary.exitCode).toBe(1);
+  });
+
+  it.each([
+    [403, undefined],
+    [404, undefined],
+    [429, false],
+  ])("a judge %s (retryable %s) stops it too", async (status, retryable) => {
+    const { scen, a, b } = setup({ semantic: true });
+    const calls: EvalJobSpec[] = [];
+    const out = await runEval(
+      args(scen, a, b, ["--judge-model", "claude-opus-4-8", "--concurrency", "1"]),
+      deps(fakeRunner(failAt(0, judge401(status, retryable)), calls)),
+    );
+    expect(calls[calls.length - 1]!.scenario.name).toBe("smoke-semantic-evidence-files");
+    expect(calls.filter((c) => c.scenario.name === "smoke-semantic-evidence-files")).toHaveLength(1);
+    expect(out.report.stoppedEarly?.status).toBe(status);
+  });
+
+  it.each([
+    [500, true],
+    [429, true],
+    [429, undefined],
+  ])("(control) a judge %s (retryable %s) does not stop it", async (status, retryable) => {
+    const { scen, a, b } = setup({ semantic: true });
+    const calls: EvalJobSpec[] = [];
+    const out = await runEval(
+      args(scen, a, b, ["--judge-model", "claude-opus-4-8", "--concurrency", "1"]),
+      deps(fakeRunner(failAt(0, judge401(status, retryable)), calls)),
+    );
+    expect(calls).toHaveLength(JOBS);
+    expect(out.report.stoppedEarly).toBeNull();
+    expect(existsSync(join(out.evalDir, "stopped.json"))).toBe(false);
+  });
+
+  it("an LLM decider call refused with a 401 (thrown from the job) stops it, source decider", async () => {
+    const { ApiExitError } = await import("../src/decide/llm-transport.js");
+    const { scen, a, b } = setup();
+    const calls: EvalJobSpec[] = [];
+    let n = 0;
+    const runJob = async (s: EvalJobSpec): Promise<RunResult> => {
+      if (n++ === 1) {
+        calls.push(s);
+        throw new ApiExitError("API 401", 401, "first_party", "Invalid API key");
+      }
+      return fakeRunner(undefined, calls)(s);
+    };
+    const out = await runEval(args(scen, a, b, ["--concurrency", "1"]), deps(runJob));
+    expect(calls).toHaveLength(2);
+    expect(out.report.stoppedEarly).toMatchObject({ reason: "grader_credential", source: "decider", status: 401 });
+    expect(out.report.summary.exitCode).toBe(1);
+  });
+
+  it("(control) a malformed judge grade does not stop it", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    const calls: EvalJobSpec[] = [];
+    const malformed = (_s: EvalJobSpec, r: RunResult): RunResult => ({
+      ...r,
+      assertions: r.assertions.map((x) => (x.assertion.semantic_matches ? { ...x, pass: false, judgeInvalid: true } : x)),
+    });
+    const out = await runEval(
+      args(scen, a, b, ["--judge-model", "claude-opus-4-8", "--concurrency", "1"]),
+      deps(fakeRunner(failAt(0, malformed), calls)),
+    );
+    expect(calls).toHaveLength(JOBS);
+    expect(out.report.stoppedEarly).toBeNull();
+  });
+
+  it("missing jobs with no recorded stop still exit 1 on `eval report` (an interrupted or killed eval)", async () => {
+    const { scen, a, b } = setup();
+    const out = await runEval(args(scen, a, b), deps(fakeRunner()));
+    expect(out.report.summary.exitCode).toBe(0);
+    const runs = join(out.evalDir, "runs.jsonl");
+    const kept = readFileSync(runs, "utf8").trim().split("\n").slice(0, -2);
+    writeFileSync(runs, kept.join("\n") + "\n");
+    const rep = writeEvalReport(out.evalDir);
+    expect(rep.summary.missingJobs).toBe(2);
+    expect(rep.stoppedEarly).toBeNull();
+    expect(rep.summary.exitCode).toBe(1);
+    expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).toContain("the eval did not finish");
+  });
+});
+
+describe("eval: the served model", () => {
+  it("two snapshots of one undated pin across scored reps: exit 1, both named", async () => {
+    const { scen, a, b } = setup();
+    let n = 0;
+    const out = await runEval(
+      args(scen, a, b),
+      deps(
+        fakeRunner((s, r) => {
+          void s;
+          return { ...r, models: [`claude-sonnet-5-${n++ % 2 ? "20251101" : "20251001"}`] }; // the session pins claude-sonnet-5
+        }),
+      ),
+    );
+    const d = out.report.summary.agentModelDisagreements;
+    expect(d).toHaveLength(1);
+    expect(d[0]!.models).toHaveLength(2);
+    expect(out.report.summary.exitCode).toBe(1);
+    expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).toContain("Agent model differed across reps");
+  });
+
+  it("(control) one snapshot of an undated pin on every rep is not a disagreement", async () => {
+    const { scen, a, b } = setup();
+    const out = await runEval(args(scen, a, b), deps(fakeRunner((_s, r) => ({ ...r, models: ["claude-sonnet-5-20251001"] }))));
+    expect(out.report.summary.agentModelDisagreements).toEqual([]);
+    expect(out.report.summary.exitCode).toBe(0);
+  });
+
+  it("every rep of one arm excluded as model_mismatch: compared nothing (exit 1), and the report says pinned · served", async () => {
+    const { scen, a, b } = setup();
+    const out = await runEval(
+      args(scen, a, b),
+      deps(fakeRunner((s, r) => (s.job.arm === "after" ? { ...r, models: ["claude-other-9"], modelPinHonored: false } : r))),
+    );
+    expect(out.report.summary.erroredArms).toEqual([expect.objectContaining({ arm: "after", rowsInsufficient: true })]);
+    expect(out.report.summary.modelMismatch).toEqual([expect.objectContaining({ arm: "after", served: ["claude-other-9"], reps: 5 })]);
+    expect(out.report.summary.exitCode).toBe(1);
+    const md = readFileSync(join(out.evalDir, "report.md"), "utf8");
+    expect(md).toMatch(/pinned \S+ · served claude-other-9/);
+    expect(md).toContain("Every rep of arm after");
+    expect(md).toContain("was excluded");
+    // Another model was served: the hint is to pin what the agent reports, not a stale-verdict note.
+    expect(md).not.toContain("by an earlier version");
+  });
+
+  it("a rep stamped model_mismatch though its served id matches the pin: before 5.0 a stale verdict, from 5.0 a fallback; never re-pin", async () => {
+    const { scen, a, b } = setup();
+    // The session pins claude-sonnet-5; the rep records its dated snapshot and the old stamp.
+    const out = await runEval(
+      args(scen, a, b),
+      deps(fakeRunner((s, r) => (s.job.arm === "after" ? { ...r, models: ["claude-sonnet-5-20251001"], modelPinHonored: false } : r))),
+    );
+    expect(out.report.summary.exitCode).toBe(1);
+    // The eval's own harness version decides the cause: pinned here, so the test does not move with package.json.
+    const stampedBy = (v: string) => {
+      const mf = join(out.evalDir, "manifest.json");
+      writeFileSync(mf, JSON.stringify({ ...JSON.parse(readFileSync(mf, "utf8")), harnessVersion: v }, null, 2));
+      writeEvalReport(out.evalDir);
+      return readFileSync(join(out.evalDir, "report.md"), "utf8");
+    };
+    const before = stampedBy("4.15.0");
+    expect(before).toContain("pinned claude-sonnet-5 · served claude-sonnet-5-20251001 — the served id matches the pin");
+    expect(before).toContain("by an earlier version");
+    expect(before).not.toContain("pin the id the agent reports");
+    expect(before).not.toContain("modelFallbacks");
+    // From 5.0 such a rep can only be a fallback off the pin during the run.
+    const after = stampedBy("5.0.0");
+    expect(after).toContain("— the served id matches the pin: the agent fell back off it during the run");
+    expect(after).toContain("read `modelFallbacks` in each rep's result.json");
+    expect(after).not.toContain("by an earlier version");
+    expect(after).not.toContain("pin the id the agent reports");
+  });
+
+  // Every rep of one arm judge_invalid from a cause that does not stop the eval (a 500): no judged row was graded on
+  // that arm, so the scenario compared nothing, while the other scenario compared fine.
+  it("every rep of one arm judge_invalid (500) in one scenario: compared nothing, exit 1, the other scenario unaffected", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    const inv = (r: RunResult): RunResult => ({
+      ...r,
+      assertions: r.assertions.map((x) =>
+        x.assertion.semantic_matches
+          ? { ...x, pass: false, judgeInvalid: true, judgeError: { kind: "call" as const, status: 500, message: "API 500" } }
+          : x,
+      ),
+    });
+    const out = await runEval(
+      args(scen, a, b),
+      deps(fakeRunner((s, r) => (s.job.arm === "after" && s.scenario.name === "smoke-semantic-evidence-files" ? inv(r) : r))),
+    );
+    expect(out.report.stoppedEarly).toBeNull();
+    expect(out.report.summary.erroredArms).toEqual([
+      expect.objectContaining({ arm: "after", scenario: "smoke-semantic-evidence-files", rowsInsufficient: true }),
+    ]);
+    expect(out.report.summary.exitCode).toBe(1);
+    expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).toContain("had an invalid judge grade on some assertion");
+  });
+
+  it("(control) one rep of that arm with a valid judge grade keeps the scenario compared", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    let n = 0;
+    const out = await runEval(
+      args(scen, a, b),
+      deps(
+        fakeRunner((s, r) =>
+          s.job.arm === "after" && s.scenario.name === "smoke-semantic-evidence-files" && n++ > 0
+            ? {
+                ...r,
+                assertions: r.assertions.map((x) =>
+                  x.assertion.semantic_matches
+                    ? { ...x, pass: false, judgeInvalid: true, judgeError: { kind: "call" as const, status: 500, message: "API 500" } }
+                    : x,
+                ),
+              }
+            : r,
+        ),
+      ),
+    );
+    expect(out.report.summary.erroredArms).toEqual([]);
+  });
+
+  it("every rep of one arm excluded for a skill drift: compared nothing (exit 1)", async () => {
+    const { scen, a, b } = setup();
+    const out = await runEval(
+      args(scen, a, b),
+      deps(fakeRunner((s, r) => (s.job.arm === "after" ? { ...r, fingerprint: { ...r.fingerprint!, contentSig: "0".repeat(64) } } : r))),
+    );
+    expect(out.report.summary.erroredArms).toEqual([expect.objectContaining({ arm: "after", rowsInsufficient: true })]);
+    expect(out.report.summary.exitCode).toBe(1);
+  });
+
+  it("every rep of one arm graded under another judge prompt: compared nothing (exit 1)", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    const out = await runEval(
+      args(scen, a, b, ["--judge-model", "claude-opus-4-8"]),
+      deps(
+        fakeRunner((s, r) =>
+          s.job.arm === "after"
+            ? { ...r, assertions: r.assertions.map((x) => (x.assertion.semantic_matches ? { ...x, judgePromptHash: "0".repeat(16) } : x)) }
+            : r,
+        ),
+      ),
+    );
+    expect(out.report.summary.erroredArms).toEqual([expect.objectContaining({ arm: "after", rowsInsufficient: true })]);
+    expect(out.report.summary.exitCode).toBe(1);
+  });
+
+  it("(control) one valid rep in the arm keeps it out of compared-nothing", async () => {
+    const { scen, a, b } = setup();
+    let n = 0;
+    const out = await runEval(
+      args(scen, a, b),
+      deps(fakeRunner((s, r) => (s.job.arm === "after" && n++ > 0 ? { ...r, models: ["claude-other-9"], modelPinHonored: false } : r))),
+    );
+    expect(out.report.summary.erroredArms).toEqual([]);
   });
 });

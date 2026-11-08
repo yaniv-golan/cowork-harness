@@ -24,6 +24,7 @@ import { CLI, POSIX, makeStubFixture, stubSessionTranscript, type StubFixture } 
 import { mergeMetrics, regradeFlow, type HillclimbRegradeArgs, type RegradeFlowDeps } from "../src/hillclimb/regrade.js";
 import { regradeRuns, type RegradeOptions, type RegradeRunReport } from "../src/run/regrade.js";
 import { metricSigs } from "../src/hillclimb/metric-keys.js";
+import { costSummary } from "../src/hillclimb/cost.js";
 import type { ScenarioMetric } from "../src/types.js";
 import type { CompleteStructured } from "../src/decide/pairwise-judge.js";
 import { checkReport, stateTemplateFor } from "../src/hillclimb/cli.js";
@@ -375,6 +376,178 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
     expect(why[3]).toContain("(judge_invalid; malformed grade)");
     expect(why[4]).toContain("(judge_invalid; cause not recorded)");
   }, 180_000);
+
+  // A judge_invalid slot written by this version carries the results row its run would have had (`meta.results_row`):
+  // a default regrade re-judges every judged assert from the kept run and, when the re-grade is valid, moves that row
+  // into results.jsonl. Simulated from a real v1 row: moved into errors.jsonl in the shape `run` now writes.
+  describe("promoting a judge_invalid slot", () => {
+    type R = { prompt_id: string; rep: number; cost_usd?: number; meta: Record<string, unknown> };
+    const toJudgeInvalid = (flow: string, rep: number, metaOver: Record<string, unknown> = {}) => {
+      const file = join(flow, "v1", "results.jsonl");
+      const lines = readFileSync(file, "utf8").trim().split("\n");
+      const i = lines.findIndex((l) => (JSON.parse(l) as R).rep === rep);
+      // The stub's runs record no cost: the attempt is given one, so counting it twice would show.
+      const r = { ...(JSON.parse(lines[i]!) as R), cost_usd: 0.25 };
+      lines.splice(i, 1);
+      writeFileSync(file, lines.join("\n") + "\n");
+      const err = {
+        prompt_id: r.prompt_id,
+        rep,
+        failure_class: "judge_invalid",
+        error: "judge call failed on assertion(s) 1 (API 500): no grade was made",
+        retries: 0,
+        judge_retries: 0,
+        meta: {
+          run_dir: r.meta.run_dir,
+          run_id: r.meta.run_id,
+          cost_usd: r.cost_usd,
+          failure_rule: "judge_invalid",
+          judge_invalid_cause: "call",
+          judge_error_status: 500,
+          results_row: r,
+          ...metaOver,
+        },
+      };
+      appendFileSync(join(flow, "v1", "errors.jsonl"), JSON.stringify(err) + "\n");
+      return r;
+    };
+    const errorsOf = (flow: string) =>
+      existsSync(join(flow, "v1", "errors.jsonl"))
+        ? readFileSync(join(flow, "v1", "errors.jsonl"), "utf8")
+            .split("\n")
+            .filter(Boolean)
+            .map((l) => JSON.parse(l) as R & { failure_class: string })
+        : [];
+    // Every other row of the stub flow records no cost: the total is the moved attempt's alone, counted once.
+    const summaryCost = (flow: string) => JSON.parse(readFileSync(join(flow, "v1", "summary.json"), "utf8")).cost_usd_total as number;
+
+    it("a valid re-grade moves the row into results.jsonl (same run, regrade_from), out of errors.jsonl, its cost once", async () => {
+      const { flow, rows } = buildFlow({ reps: 2 });
+      const r = toJudgeInvalid(flow, 1);
+      const out = await regradeFlow(ARGS({ variant: "v1" }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
+      const v1 = out.variants.find((v) => v.variant === "v1")!;
+      expect(v1.promoted, JSON.stringify(v1.listed)).toBe(1);
+      expect(v1.listed.filter((l) => l.rep === 1)).toEqual([]);
+      const promoted = rows("v1").find((x) => x.rep === 1)!;
+      expect(promoted.meta).toMatchObject({ run_id: r.meta.run_id, regrade_from: "judge_invalid" });
+      expect(promoted.meta.regrade_rejudged_because).toEqual([expect.objectContaining({ because: ["judge_invalid"] })]);
+      expect(errorsOf(flow).filter((e) => e.failure_class === "judge_invalid")).toEqual([]);
+      expect(readdirSync(join(flow, "v1")).some((n) => /^regrade-errors-[0-9a-f]{16}\.bak\.jsonl$/.test(n))).toBe(true);
+      // The attempt's agent spend is counted once.
+      expect(summaryCost(flow)).toBeCloseTo(0.25);
+    }, 180_000);
+
+    it("an earlier attempt's judge_invalid row at a filled slot (another run) survives the rewrite byte for byte, its cost counted", async () => {
+      const { flow } = buildFlow({ reps: 2 });
+      toJudgeInvalid(flow, 1);
+      // Rep 0 is filled by its results row; this row is an earlier attempt at that slot, from a different run.
+      const earlier =
+        JSON.stringify({
+          prompt_id: "alpha",
+          rep: 0,
+          failure_class: "judge_invalid",
+          error: "judge call failed on assertion(s) 1 (API 500): no grade was made",
+          retries: 0,
+          meta: { run_id: "earlier-attempt", cost_usd: 0.5, failure_rule: "judge_invalid", judge_invalid_cause: "call" },
+        }) + "\n";
+      appendFileSync(join(flow, "v1", "errors.jsonl"), earlier);
+      const out = await regradeFlow(ARGS({ variant: "v1" }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
+      expect(out.variants.find((v) => v.variant === "v1")!.promoted).toBe(1);
+      const kept = readFileSync(join(flow, "v1", "errors.jsonl"), "utf8")
+        .split("\n")
+        .filter(Boolean);
+      expect(kept.map((l) => l + "\n")).toEqual([earlier]);
+      expect(summaryCost(flow)).toBeCloseTo(0.75);
+    }, 180_000);
+
+    it("a carried results row naming another run is listed, never promoted", async () => {
+      const { flow, rows } = buildFlow({ reps: 2 });
+      const r = toJudgeInvalid(flow, 1);
+      const file = join(flow, "v1", "errors.jsonl");
+      const e = JSON.parse(readFileSync(file, "utf8").trim()) as { meta: Record<string, unknown> };
+      e.meta.results_row = { ...r, meta: { ...r.meta, run_id: "other" } };
+      writeFileSync(file, JSON.stringify(e) + "\n");
+      const out = await regradeFlow(ARGS({ variant: "v1" }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
+      const v1 = out.variants.find((v) => v.variant === "v1")!;
+      expect(v1.promoted).toBe(0);
+      expect(v1.listed.find((l) => l.rep === 1)?.why).toMatch(/its results row names another run or slot/);
+      expect(rows("v1").some((x) => x.rep === 1)).toBe(false);
+      expect(errorsOf(flow).filter((x) => x.failure_class === "judge_invalid")).toHaveLength(1);
+    }, 180_000);
+
+    it("a re-grade invalid again keeps the errors row and lists the slot open, with its re-run", async () => {
+      const { flow, rows } = buildFlow({ reps: 2 });
+      toJudgeInvalid(flow, 1);
+      const malformed: CompleteStructured = async () => ({ structured: { rationale: "r" }, model: "claude-haiku-4-5", subtype: "success" });
+      const out = await regradeFlow(ARGS({ variant: "v1" }), DEPS({ regradeOptions: { pairwiseComplete: malformed } }));
+      const v1 = out.variants.find((v) => v.variant === "v1")!;
+      expect(v1.promoted).toBe(0);
+      expect(v1.listed.find((l) => l.rep === 1)?.why).toMatch(
+        /^an errors\.jsonl row \(judge_invalid; judge call failed, API 500\), not promoted: .*re-runs it/,
+      );
+      expect(rows("v1").some((x) => x.rep === 1)).toBe(false);
+      expect(errorsOf(flow).filter((e) => e.failure_class === "judge_invalid")).toHaveLength(1);
+      expect(out.exitCode).toBe(1);
+    }, 180_000);
+
+    it("a row written before the carried results row, a gone run dir, and --fill-refs: listed, never promoted", async () => {
+      const { flow } = buildFlow({ reps: 3 });
+      toJudgeInvalid(flow, 1, { results_row: undefined });
+      const gone = toJudgeInvalid(flow, 2);
+      rmSync(join(f.runsDir, "alpha", gone.meta.run_id as string), { recursive: true, force: true });
+      const out = await regradeFlow(ARGS({ variant: "v1" }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
+      const why = Object.fromEntries(out.variants.find((v) => v.variant === "v1")!.listed.map((l) => [l.rep, l.why]));
+      expect(why[1]).toMatch(/not promoted: written before judge_invalid rows carried their results row.*re-runs it/);
+      expect(why[2]).toMatch(/not promoted: its kept run dir is gone.*re-runs it/);
+      const fill = await regradeFlow(ARGS({ variant: "v1", fillRefs: true }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
+      expect(fill.variants.find((v) => v.variant === "v1")!.listed.find((l) => l.rep === 2)?.why).toMatch(
+        /not promoted: a --fill-refs regrade never promotes it/,
+      );
+      expect(errorsOf(flow).filter((e) => e.failure_class === "judge_invalid")).toHaveLength(2);
+    }, 180_000);
+
+    it("interrupted between the two writes: the slot reads as filled, its cost once, check notes it, the next regrade removes it", async () => {
+      const { flow } = buildFlow({ reps: 2 });
+      // The state a promotion leaves when it stops after results.jsonl: the results row back, the errors row still there.
+      const r = toJudgeInvalid(flow, 1);
+      appendFileSync(
+        join(flow, "v1", "results.jsonl"),
+        JSON.stringify({ ...r, meta: { ...r.meta, regrade_from: "judge_invalid" } }) + "\n",
+      );
+      // In that window the run's spend is counted once (by run id), as summary.json would be refreshed.
+      const read = (n: string) => readFileSync(join(flow, "v1", n), "utf8");
+      expect(costSummary(read("results.jsonl"), read("errors.jsonl")).keys.cost_usd_total).toBeCloseTo(0.25);
+      expect(checkReport("flow", f.cwd).warnings).toContainEqual(
+        expect.stringMatching(/^note: variant v1 slot \(alpha, rep 1\) has a promoted results row/),
+      );
+      const lines: string[] = [];
+      const out = await regradeFlow(
+        ARGS({ variant: "v1" }),
+        DEPS({ stderr: (x) => lines.push(x), regradeOptions: { pairwiseComplete: verdict("A") } }),
+      );
+      expect(out.variants.find((v) => v.variant === "v1")!.promoted).toBe(0);
+      expect(errorsOf(flow).filter((e) => e.failure_class === "judge_invalid")).toEqual([]);
+      expect(lines.join("\n")).toMatch(/removed 1 judge_invalid errors\.jsonl row\(s\) whose run a results row already holds/);
+      expect(summaryCost(flow)).toBeCloseTo(0.25);
+    }, 180_000);
+
+    it("errors.jsonl changed between the judge decision and the locks: refused, nothing written", async () => {
+      const { flow } = buildFlow();
+      const file = join(flow, "v1", "errors.jsonl");
+      const out = await regradeFlow(
+        ARGS({ rejudge: true }),
+        DEPS({
+          isolationCheck: () => {
+            appendFileSync(file, JSON.stringify({ prompt_id: "alpha", rep: 9, failure_class: "error", error: "x", meta: {} }) + "\n");
+            return undefined;
+          },
+        }),
+      );
+      expect(out.exitCode, JSON.stringify(out)).toBe(2);
+      expect(out.error?.message).toMatch(/v1\/errors\.jsonl changed while regrade was starting .*nothing was written/);
+      expect(readdirSync(join(flow, "v1")).some((n) => n.endsWith(".bak.jsonl"))).toBe(false);
+    }, 180_000);
+  });
 
   it("a flow whose session names no model (run with --model) is not refused for an agent model", async () => {
     const { evals } = buildFlow();

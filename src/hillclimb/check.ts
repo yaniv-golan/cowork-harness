@@ -7,6 +7,7 @@
 
 import type { FlowSnapshot, SchemaFinding } from "./schema-check.js";
 import { rowAssertSigs, staleAssertSigRows } from "./metric-keys.js";
+import { servedModelSplits, servedModelSplitText } from "./served-model.js";
 
 interface DeclaredMetric {
   id: string;
@@ -352,4 +353,44 @@ export function incomparableMetricWarnings(snap: FlowSnapshot): string[] {
       );
   }
   return out;
+}
+
+/** A variant whose scored rows for one requested model were served more than one model id (a warning: the pass that
+ *  wrote them already exited 1, and the next pass refuses). */
+/** A variant whose scored rows for one pin were served two models: an error, unless every one of those rows was
+ *  written under `--allow-model-split` (then a warning) — as `--allow-mixed-search` is held. */
+export function servedModelSplitFindings(snap: FlowSnapshot): Array<{ severity: "error" | "warning"; message: string }> {
+  return Object.entries(snap.variants).flatMap(([v, f]) =>
+    servedModelSplits(f.results).map((s) => ({
+      severity: s.allowed ? ("warning" as const) : ("error" as const),
+      message: s.allowed
+        ? `${servedModelSplitText(v, s)} — every row was written under --allow-model-split; the split rows count in the headline score`
+        : `${servedModelSplitText(v, s)} — not every row was written under --allow-model-split`,
+    })),
+  );
+}
+
+/** A judge_invalid errors row whose run (`meta.run_id`) also has a results row (a note): a `regrade` promoted that slot
+ *  and was interrupted before it removed the errors row. Every reader takes the results row and the spend is counted
+ *  once (per run id); the next `regrade` removes the errors row. An errors row from an EARLIER attempt at a slot a later
+ *  pass filled is history, not this: it has its own run id. */
+export function promotedOrphanNotes(snap: FlowSnapshot): string[] {
+  const parse = (text: string | null | undefined) =>
+    (text ?? "").split("\n").flatMap((line) => {
+      if (!line.trim()) return [];
+      try {
+        return [JSON.parse(line) as { prompt_id?: unknown; rep?: unknown; failure_class?: unknown; meta?: { run_id?: unknown } }];
+      } catch {
+        return []; // schema-check reports it
+      }
+    });
+  return Object.entries(snap.variants).flatMap(([v, f]) => {
+    const scoredRuns = new Set(parse(f.results).flatMap((r) => (typeof r.meta?.run_id === "string" ? [r.meta.run_id] : [])));
+    return parse(f.errors)
+      .filter((e) => e.failure_class === "judge_invalid" && typeof e.meta?.run_id === "string" && scoredRuns.has(e.meta.run_id))
+      .map(
+        (e) =>
+          `note: variant ${v} slot (${String(e.prompt_id)}, rep ${String(e.rep)}) has a promoted results row and the judge_invalid errors row it replaced; the results row counts, and the next \`hillclimb regrade\` removes the errors row`,
+      );
+  });
 }

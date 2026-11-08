@@ -119,6 +119,9 @@ describe("hillclimb run args — refusals (exit 2)", () => {
   it("--model and --judge-model must be concrete ids, never aliases", () => {
     refuses(["s.yaml", "--model", "sonnet"], /--model.*concrete/);
     refuses(["s.yaml", "--judge-model", "opus"], /--judge-model.*concrete/);
+    // A rolling alias can roll to a new snapshot mid-flow.
+    refuses(["s.yaml", "--model", "claude-3-5-sonnet-latest"], /--model.*concrete/);
+    refuses(["s.yaml", "--judge-model", "claude-sonnet-4-0"], /--judge-model.*concrete/);
   });
 
   it("--decider-cmd and --decider-dir are mutually exclusive", () => {

@@ -4608,6 +4608,9 @@
       "definitions.RegradedAssertion.judgeError.origin": {
         "type": "string"
       },
+      "definitions.RegradedAssertion.judgeError.retryable": {
+        "type": "boolean"
+      },
       "definitions.RegradedAssertion.judgeError.status": {
         "type": "integer"
       },

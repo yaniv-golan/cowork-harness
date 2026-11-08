@@ -125,7 +125,7 @@ name, hillclimb runs included — which is wider than the plan's `worstObservedU
 budget-gate basis. A real eval with a cap reads the run index only (never the kept `result.json` files), so the
 plan its refusal carries is cost-only (`plan.costOnly: true`, every row `unknown`). A cap
 equal to the estimate passes. With no priced history the check is against a lower bound, and the `budget`
-marker says so (`enforced: "lower_bound"`). It is a pre-flight only: the eval is never stopped mid-way.
+marker says so (`enforced: "lower_bound"`). It is a pre-flight only: the cap never stops an eval mid-way, and judge spend is not counted.
 
 ## What it compares
 
@@ -199,7 +199,8 @@ marker says so (`enforced: "lower_bound"`). It is a pre-flight only: the eval is
   every grade, after each rep's agent run is paid for.
 - `--output-format json` — the envelope
   `{tool, version, command:"eval", ok, evalDir, arms, pins, sections, summary, cost, stoppedEarly, error}`
-  (plus `searchCorpus` with `--search-corpus`), with `ok` true exactly when the exit code is 0.
+  (plus `searchCorpus` with `--search-corpus`), with `ok` true exactly when the exit code is 0. `stoppedEarly` is
+  `null`, or `{reason: "grader_credential", source: "judge" | "decider", status?, atJob}` when the eval stopped.
 
 ## How to read the report
 
@@ -396,8 +397,12 @@ grades none, and its exit code is unchanged. Re-run the eval to grade them.
 ## What it holds fixed (refused before any run, exit 2)
 
 - **The agent model** (`--model`, else the session's `model:`, else `COWORK_HARNESS_MODEL`) must be a
-  concrete id — `opus`, `best` and the like are refused, because an alias can resolve differently between
-  the arms.
+  concrete id — `opus`, `best`, a rolling `-latest` or `-0` id and the like are refused, because an alias can
+  resolve differently between the arms. A dated id is matched only by itself; an undated one (`claude-haiku-4-5`)
+  also by its dated snapshot (`claude-haiku-4-5-20251001`). To pin exactly what ran, use the id the agent reports
+  (`models[0]` of a prior `result.json`). Every scored rep of a scenario must report the same id; two snapshots of
+  one pin exit 1 (`summary.agentModelDisagreements`). A rep excluded because the agent was not served its pin is
+  listed in the report as `pinned X · served Y` (`summary.modelMismatch`).
 - **The judge model**: `--judge-model <id>` grades every `semantic_matches` assert with one concrete
   model. Without it, every assert's `judge_model` and the default chain must be concrete. If the judge
   that actually answered still differs across reps, the eval exits 1.
@@ -484,14 +489,18 @@ live eval of the search change, then a frozen eval with a pool built evenly from
 ## Exit codes
 
 - `0` — completed. Without `--fail-on` no drop fails the eval; read the report. (An all-`insufficient`
-  result, a scenario that compared nothing, or a judge disagreement still exits 1 — see below.)
+  result, a scenario that compared nothing, a job left unrun, or a model disagreement still exits 1 — see below.)
 - `1` — with `--fail-on possible`, a `possible` or `confirmed` drop (the semantic roll-up rows count, the
   classification rows do not), an `insufficient_refusals` row ([below](#when-the-candidate-refuses-more)), or a
   metric row that is `possible worse`, `confirmed worse` or `insufficient_unmeasured`; with `--fail-on confirmed`, a
   `confirmed` drop or a `confirmed worse` metric only. Also, with or without it: every row `insufficient`, metric rows
   included (`insufficient_refusals` / `insufficient_unmeasured` rows do not count toward this), a scenario that
-  compared nothing (below), a metric row `not compared`, the judge model differed across reps, or (with
-  `--search-corpus`) any rep was not served from the pinned pool. An A/A run under `--fail-on possible` can exit 1 on noise alone.
+  compared nothing (below; an arm every rep of which has an invalid judge grade on some assertion included), a metric row `not compared`, the judge model or the agent's served model differed across reps,
+  any scheduled job with no record, or (with `--search-corpus`) any rep was not served from the pinned pool. A job
+  has no record when the eval was interrupted or killed, ended on a requested exit, or **stopped**: a judge or LLM
+  decider call refused for its credential (401/403), its model (404) or a spent quota fails every later grade the
+  same way, so the eval starts no further job (the ones running finish and keep their records) and records why in
+  `stoppedEarly`. A server error, a timeout or a plain rate limit never stops it. An A/A run under `--fail-on possible` can exit 1 on noise alone.
 - `2` — usage, or any refusal before the first run (the `--max-budget-usd` refusal included; with `--search-corpus`, a
   one-sided, mixed or unbounded pool, a pool that cannot be read, or a corpus check a run would fail).
 - `3` — an arm snapshot or the pool copy could not be made, or failed its staging preflight.
@@ -507,11 +516,14 @@ Judged per scenario, for each arm:
 
 - **Every rep of both arms errored** (infrastructure or the agent's own failure, in any mix): 0 against 0
   is not a comparison. The scenario's rows get no reps, so they are `insufficient`, and the eval exits 1.
-- **Every rep of one arm is infrastructure** — counting a refused search and a frozen-pool mismatch, in any mix:
-  that arm never ran the skill on the evidence. Same outcome. The other exclusions (drift, pin, judge prompt) keep
-  their rows `insufficient` without this exit. An arm that mixes the agent's own failures with pool mismatches,
+- **Every rep of one arm is excluded** — infrastructure, a refused search, a frozen-pool mismatch, a skill that
+  changed mid-eval, a pin the agent was not served, or another judge prompt, in any mix: that arm never ran what the
+  eval compares. Same outcome. An arm that mixes the agent's own failures with pool mismatches,
   against an arm with valid reps, is still scored: the agent's reps fail every row and the mismatched ones are left
   out, as with today's mix of the agent's failures and infrastructure.
+- **Every rep of one arm has an invalid judge grade on some assertion** (`judge_invalid`: a server error, a timeout
+  or a malformed reply): same outcome, even when the arm's other assertions graded. The hint says to read each rep's
+  `judgeError` and re-run.
 - **Every rep of one arm is the agent's own failure, and the other arm has valid reps**: a skill that
   crashes every time is exactly the regression an eval should show, so the reps are scored (each fails
   every row) and the rows show the drop. The header still names the arm and its error. It exits 0 unless
@@ -577,8 +589,10 @@ local lane.
 session hashes, each scenario's assertions and metric declarations, pins, settings including the metric family's
 correction), `arms/`, `runs.jsonl` (one line per finished job, with every field the report reads — each rep's
 metric values included — and a `semantic_pairwise` grade's per-order outcomes under `order: both`, for reading position bias), `report.json` (`schemaVersion: 0`; each section's `metricRows`, `metricFamily` and `families`, and
-`summary.metricLabels`, `metricsRecorded`, `families`, `confirmReach` and `notCompared`) and `report.md` (host paths
-outside `$HOME` redacted, the count in the header). With `--search-corpus`, also `search-pool/` (the pinned copy every
+`summary.metricLabels`, `metricsRecorded`, `families`, `confirmReach`, `notCompared`, `agentModelDisagreements` and
+`modelMismatch`) and `report.md` (host paths
+outside `$HOME` redacted, the count in the header). `stopped.json` exists only when the eval stopped on a grader
+failure: the reason `stoppedEarly` reports, and the only record of one the LLM decider caused (a rebuild reads it). With `--search-corpus`, also `search-pool/` (the pinned copy every
 rep was served from), the manifest's `pins.searchCorpus` and `searchCorpusProvenance` (`schemaVersion: 1`, so an
 older harness refuses the dir rather than report it without its label), each `runs.jsonl` line's `searchCorpus`
 counts, and `report.json`'s `searchCorpus` and `summary.searchPoolMismatch` / `summary.confounded`.

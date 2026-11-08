@@ -7,7 +7,7 @@
 // still reads as "honored". It stays an additional trigger in the row classifier.
 
 import { isLiveModelId } from "../types.js";
-import { normalizeModelId } from "../run/model-provenance.js";
+import { modelIdMatches, normalizeModelId } from "../run/model-provenance.js";
 import { currentTurnEventLines } from "../run/turn-events.js";
 
 /** Distinct live models on the current turn's main-loop assistant events (no `parent_tool_use_id`), in
@@ -29,26 +29,14 @@ export function mainLoopModels(lines: readonly string[]): string[] {
   return seen;
 }
 
-// the scaffold's documented alias → snapshot shapes: 'foo-latest' / 'foo-0' / 'foo' served as 'foo-20250101',
-// 'foo@20250101' or 'foo-2025-01-01'.
-const SNAPSHOT_SUFFIX = /^[-@](\d{8}|\d{4}-\d{2}-\d{2})$/;
-
-/** The first main-loop model that the pin does not account for, or undefined when every one matches the
- *  pin exactly or by a documented alias → snapshot resolution. Anything else — another snapshot of the
- *  pin, a sibling model, or the bare base id served for an alias (an unversioned echo that can hide
- *  snapshot drift) — is a substitution. No pin ⇒ no check, as the scaffold skips it without --model. */
+/** The first main-loop model that the pin does not account for, or undefined when every one matches it
+ *  (`modelIdMatches`: exactly, or by a documented alias → snapshot resolution — 'foo-latest' / 'foo-0' / 'foo'
+ *  served as 'foo-20250101', 'foo@20250101' or 'foo-2025-01-01'). Anything else — another snapshot of the pin, a
+ *  sibling model, or the bare base id served for an alias (an unversioned echo that can hide snapshot drift) — is a
+ *  substitution. No pin ⇒ no check, as the scaffold skips it without --model. */
 export function servedModelMismatch(pin: string | undefined, models: readonly string[]): string | undefined {
   if (pin === undefined) return undefined;
-  const want = normalizeModelId(pin);
-  const base = want.replace(/-latest$|-0$/, "");
-  for (const served of models) {
-    const got = normalizeModelId(served);
-    if (got === want) continue;
-    const rest = got.startsWith(base) ? got.slice(base.length) : null;
-    if (rest !== null && SNAPSHOT_SUFFIX.test(rest)) continue;
-    return served;
-  }
-  return undefined;
+  return models.find((served) => !modelIdMatches(pin, served));
 }
 
 /** The effort levels an agent request carries (`output_config.effort`). */
@@ -100,4 +88,51 @@ export function sentEffort(transcript: readonly string[]): SentEffort {
     else if (!out.values.includes(e)) out.values.push(e);
   }
   return out;
+}
+
+/** One requested model whose scored rows were served more than one model id. */
+export interface ServedModelSplit {
+  requested: string;
+  served: string[];
+  /** The cases whose rows carry the split, sorted. */
+  cases: string[];
+  /** Every row of this pin was written under `--allow-model-split` (`meta.model_split_allowed`). */
+  allowed: boolean;
+}
+
+/** Over a variant's `results.jsonl`: each requested model (`meta.model_requested`) whose scored rows record more than
+ *  one served `model` among those that match it. A pin matches its dated snapshots, so an undated pin can be served
+ *  two of them (a snapshot rolled between passes, or during one): the variant's scores then come from two models.
+ *  Rows that record no request, or whose served model is not the pin's (a substitution, already an error row), are
+ *  not counted. Lines that do not parse are skipped (schema-check reports them). */
+export function servedModelSplits(results: string | null | undefined): ServedModelSplit[] {
+  const by = new Map<string, { served: Set<string>; cases: Set<string>; allowed: boolean }>();
+  for (const line of (results ?? "").split("\n")) {
+    if (!line.trim()) continue;
+    let r: { prompt_id?: unknown; model?: unknown; meta?: { model_requested?: unknown; model_split_allowed?: unknown } };
+    try {
+      r = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const req = r.meta?.model_requested;
+    if (typeof req !== "string" || typeof r.model !== "string" || !modelIdMatches(req, r.model)) continue;
+    const k = normalizeModelId(req);
+    const e = by.get(k) ?? { served: new Set<string>(), cases: new Set<string>(), allowed: true };
+    e.served.add(normalizeModelId(r.model));
+    e.cases.add(String(r.prompt_id));
+    if (r.meta?.model_split_allowed !== true) e.allowed = false;
+    by.set(k, e);
+  }
+  return [...by.entries()]
+    .filter(([, e]) => e.served.size > 1)
+    .map(([requested, e]) => ({ requested, served: [...e.served].sort(), cases: [...e.cases].sort(), allowed: e.allowed }));
+}
+
+/** The one sentence each surface (the pre-spend refusal, the post-pass failure, `hillclimb check`) prints for a split. */
+export function servedModelSplitText(variant: string, s: ServedModelSplit): string {
+  return (
+    `variant ${variant}'s scored rows for model ${s.requested} were served ${s.served.join(" and ")} ` +
+    `(cases ${s.cases.join(", ")}): its scores come from more than one model. Start a fresh flow dir and pin the dated id, or pass --allow-model-split (recorded on the rows it writes; \`hillclimb check\` stays an error while an earlier row lacks it)`
+  );
 }
