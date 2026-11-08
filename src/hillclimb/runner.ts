@@ -45,7 +45,7 @@ import { billingOf, costLine, costSummary, otherModelShareWarning, type Billing 
 
 import { ExitRequested, rethrowIfExit } from "../run/exit.js";
 import { gateFailureText, runGateCommand, type GateRunner } from "./gate-cmd.js";
-import { BudgetLedger, BudgetStopError } from "./budget.js";
+import { BudgetLedger, BudgetStopError, type Reservation } from "./budget.js";
 /** What one job hands back. */
 export interface JobReport {
   result?: RunResult;
@@ -554,9 +554,15 @@ async function run(
         if (stopError !== undefined) return;
         // The cap: admitted only when spent + the in-flight slots' estimates + this slot's stays within it. A slot that
         // finished over it (an unestimated one) stops the next, which is the first not started.
-        let reserved = 0;
+        // A slot with no estimate waits while another such slot is in flight (it may price the case meanwhile).
+        let reserved: Reservation = { usd: 0, unestimated: false };
         if (budget) {
-          const r = budget.admit(c.id);
+          let r = budget.admit(c.id);
+          while (r === "wait") {
+            await budget.settled();
+            if (stopError !== undefined) return;
+            r = budget.admit(c.id);
+          }
           if (r === undefined) {
             stopped = {
               reason: "budget",

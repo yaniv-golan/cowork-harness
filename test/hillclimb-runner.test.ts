@@ -1216,6 +1216,15 @@ describe("--max-budget-usd: a per-pass cap checked before each slot", () => {
     expect(err.filter((l) => /alpha has no cost history/.test(l))).toHaveLength(1);
   });
 
+  it("no history at --concurrency 2: unestimated slots run one at a time, so the cap is passed by one slot at most", async () => {
+    await approved();
+    behave = priced(3);
+    const r = await runHillclimb(bargs("--reps", "2", "--concurrency", "2", "--max-budget-usd", "2"), deps());
+    // alpha rep0 starts at $0; alpha rep1 (also $0) waits for it, is then estimated at $3, and is stopped.
+    expect(jobs).toHaveLength(1);
+    expect(r.stopped).toMatchObject({ reason: "budget", spentUsd: 3, atJob: 1, case: "alpha", rep: 1 });
+  });
+
   it("the index fallback prices a case with no rows in the variant", async () => {
     await approved();
     behave = priced(1);

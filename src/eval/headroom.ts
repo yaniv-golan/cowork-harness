@@ -1,7 +1,8 @@
 // `eval report <dir> --headroom`: the assertion and claim rows one arm still has room to move on — what a hillclimb
 // pass could raise. Read-only over the report; it never changes the exit code.
 //
-// A row is listed when the arm passed it on some reps but not all (0 < k < n), with headroom min(p, 1 − p), or when
+// Only assertion and claim rows: the derived rows (the semantic roll-up, the errored-by-agent and invocation rates) are
+// summaries of reps, not something a round edits toward. A row is listed when the arm passed it on some reps but not all (0 < k < n), with headroom min(p, 1 − p), or when
 // the arm has fewer than HEADROOM_MIN_REPS reps on it ("too few reps to tell": 0/3 and 3/3 say little). A row at 0% or
 // 100% over enough reps is not listed.
 
@@ -41,6 +42,7 @@ export function headroomRows(report: Pick<EvalReport, "sections">, role: "A" | "
   const out: HeadroomRow[] = [];
   for (const section of ["tuned", "heldOut"] as const) {
     for (const r of report.sections[section]?.rows ?? []) {
+      if (r.kind !== "assertion" && r.kind !== "claim") continue;
       const k = role === "A" ? r.k1 : r.k2;
       const n = role === "A" ? r.n1 : r.n2;
       const tooFewReps = n < HEADROOM_MIN_REPS;

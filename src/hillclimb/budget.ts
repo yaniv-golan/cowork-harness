@@ -8,7 +8,9 @@
 // The estimate for a case, in order:
 //   1. the p95 of this variant's scored rows for the case (agent + judge + decider), this pass's included;
 //   2. else the case's worst agent-only run on any baseline in the run index (the fallback excludes judge spend);
-//   3. else 0 — then the cap is checked on what the slot actually spent, once it finishes.
+//   3. else 0 — then the cap is checked on what the slot actually spent, once it finishes. Such slots run one at a
+//      time: while one is in flight no other unestimated slot starts, so the pass can pass the cap by at most one
+//      slot's cost. Once a slot of the case is priced, the next one has an estimate.
 
 import { percentile } from "../run/run-index.js";
 import { parseRows, type Row } from "./cost.js";
@@ -57,6 +59,12 @@ export function caseEstimate(
 const usd = (x: number): string => `$${x.toFixed(4)}`;
 
 /** The pass's ledger. Single-threaded: every admit/settle runs to completion between awaits. */
+/** An admitted slot's reservation: its estimate, and whether it had none (priced at $0). */
+export interface Reservation {
+  usd: number;
+  unestimated: boolean;
+}
+
 export class BudgetLedger {
   spent: number;
   private inFlight = 0;
@@ -65,6 +73,8 @@ export class BudgetLedger {
   private readonly spends: Map<string, number[]>;
   private readonly unestimated = new Set<string>();
   private readonly indexWorst: (caseId: string) => number | undefined;
+  private unestimatedInFlight = 0;
+  private waiters: Array<() => void> = [];
 
   constructor(
     readonly capUsd: number,
@@ -89,21 +99,32 @@ export class BudgetLedger {
     return e.usd;
   }
 
-  /** Reserve the slot's estimate when it fits; undefined when it would cross the cap. */
-  admit(caseId: string): number | undefined {
+  /** Reserve the slot's estimate when it fits; undefined when it would cross the cap; "wait" when it has no estimate
+   *  and another unestimated slot is in flight (await `settled()`, then ask again). */
+  admit(caseId: string): Reservation | undefined | "wait" {
+    const unestimated = caseEstimate(this.spends.get(caseId), this.indexWorst(caseId)).source === "none";
+    if (unestimated && this.unestimatedInFlight > 0) return "wait";
     const est = this.estimate(caseId);
     if (this.committed + est > this.capUsd) return undefined;
     this.inFlight += est;
-    return est;
+    if (unestimated) this.unestimatedInFlight++;
+    return { usd: est, unestimated };
+  }
+
+  /** Resolves at the next `settle`. */
+  settled(): Promise<void> {
+    return new Promise((resolve) => this.waiters.push(resolve));
   }
 
   /** The slot finished: its reservation becomes its charge. `row` is what it wrote (undefined: nothing was written). */
-  settle(caseId: string, reserved: number, row: { row: Row; scored: boolean } | undefined): void {
-    this.inFlight -= reserved;
+  settle(caseId: string, reserved: Reservation, row: { row: Row; scored: boolean } | undefined): void {
+    this.inFlight -= reserved.usd;
+    if (reserved.unestimated) this.unestimatedInFlight--;
     const s = row ? rowSpend(row.row, row.scored) : { usd: 0, agentPriced: false };
     if (!s.agentPriced) this.unpriced++;
-    this.spent += s.agentPriced ? s.usd : Math.max(s.usd, reserved);
+    this.spent += s.agentPriced ? s.usd : Math.max(s.usd, reserved.usd);
     if (row?.scored && s.agentPriced) this.spends.set(caseId, [...(this.spends.get(caseId) ?? []), s.usd]);
+    for (const w of this.waiters.splice(0)) w();
   }
 
   /** `spent $x of the $cap cap (unpriced N)`. */

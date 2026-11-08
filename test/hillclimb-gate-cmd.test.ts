@@ -1,6 +1,18 @@
 // `hillclimb run --gate-cmd`: the real spawn — a throwaway copy, the two variables, the timeout's group kill, the tail cap.
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GATE_TAIL_BYTES, gateFailureText, runGateCommand } from "../src/hillclimb/gate-cmd.js";
@@ -45,6 +57,40 @@ describe("runGateCommand", () => {
     expect(readdirSync(snap)).toEqual(["SKILL.md"]);
   });
 
+  it("an in-plugin relative symlink stays relative in the copy: a write through it never reaches the snapshot", async () => {
+    mkdirSync(join(snap, "docs"));
+    writeFileSync(join(snap, "docs", "ref.md"), "reference\n");
+    mkdirSync(join(snap, "skills", "x"), { recursive: true });
+    symlinkSync("../../docs/ref.md", join(snap, "skills", "x", "ref"));
+    const seen = join(scratch, "link.txt");
+    const g = await runGateCommand({
+      cmd: `readlink skills/x/ref > '${seen}'; printf TAMPERED > skills/x/ref`,
+      snapshot: snap,
+      variant: "v1",
+      timeoutS: 30,
+    });
+    expect(g.ok).toBe(true);
+    expect(readFileSync(seen, "utf8").trim()).toBe("../../docs/ref.md");
+    expect(readFileSync(join(snap, "docs", "ref.md"), "utf8")).toBe("reference\n");
+    expect(readlinkSync(join(snap, "skills", "x", "ref"))).toBe("../../docs/ref.md");
+  });
+
+  it("a copy the gate made unremovable does not lose the gate's result", async () => {
+    const where = join(scratch, "dir.txt");
+    const g = await runGateCommand({
+      cmd: `printf '%s' "$COWORK_HARNESS_VARIANT_DIR" > '${where}'; mkdir ro && touch ro/f && chmod 555 ro; exit 4`,
+      snapshot: snap,
+      variant: "v1",
+      timeoutS: 30,
+    });
+    expect(g).toMatchObject({ ok: false, code: 4 });
+    const ro = join(readFileSync(where, "utf8"), "ro");
+    if (existsSync(ro)) {
+      chmodSync(ro, 0o755);
+      rmSync(join(ro, "..", ".."), { recursive: true, force: true });
+    }
+  });
+
   it("a non-zero exit fails, naming the code", async () => {
     const g = await runGateCommand({ cmd: "echo boom >&2; exit 3", snapshot: snap, variant: "v1", timeoutS: 30 });
     expect(g).toMatchObject({ ok: false, code: 3, timedOut: false });
@@ -80,4 +126,23 @@ describe("runGateCommand", () => {
     }
     expect(alive).toBe(false);
   }, 15_000);
+
+  it("a descendant that left the process group and holds the output open cannot hang the pass past the timeout", async () => {
+    const pidFile = join(scratch, "escaped.pid");
+    const t0 = Date.now();
+    const g = await runGateCommand({
+      cmd: `python3 -c 'import os,time; os.setsid(); open("${pidFile}","w").write(str(os.getpid())); time.sleep(30)' & sleep 30`,
+      snapshot: snap,
+      variant: "v1",
+      timeoutS: 1,
+    });
+    const pid = Number(readFileSync(pidFile, "utf8").trim());
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      /* already gone */
+    }
+    expect(g).toMatchObject({ ok: false, timedOut: true });
+    expect(Date.now() - t0).toBeLessThan(10_000);
+  }, 20_000);
 });

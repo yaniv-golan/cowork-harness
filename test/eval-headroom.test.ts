@@ -21,6 +21,21 @@ describe("headroomRows", () => {
     expect(out.find((r) => r.text === "c")).toMatchObject({ tooFewReps: true, headroom: 0 });
   });
 
+  it("lists assertion and claim rows only: a derived row with room is left out", () => {
+    const of = (text: string, kind: string) => ({ ...row(text, 2, 5), kind }) as unknown as ReportRow;
+    const out = headroomRows(
+      report([
+        of("a", "assertion"),
+        of("c", "claim"),
+        of("r", "semantic_rollup"),
+        of("e", "errored_agent_rate"),
+        of("i", "invocation_rate"),
+      ]),
+      "B",
+    );
+    expect(out.map((r) => r.text).sort()).toEqual(["a", "c"]);
+  });
+
   it("orders by headroom, then scenario; a row with no rep last; reads the chosen arm", () => {
     const rows = [row("x", 1, 5, "zz"), row("y", 2, 4, "aa"), row("z", 0, 0, "aa"), row("w", 2, 4, "bb")];
     expect(headroomRows(report(rows), "B").map((r) => r.text)).toEqual(["y", "w", "x", "z"]);

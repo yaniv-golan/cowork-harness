@@ -32,13 +32,14 @@ export interface GateResult {
 export type GateRunner = (o: { cmd: string; snapshot: string; variant: string; timeoutS: number }) => Promise<GateResult>;
 
 /** Copy the snapshot to a fresh temp dir, run `sh -c <cmd>` there in its own process group, and remove the copy. At
- *  `timeoutS` the whole group is killed (SIGKILL) and the gate has failed. */
+ *  `timeoutS` the whole group is killed (SIGKILL) and the gate has failed. The copy keeps every symlink as written: a
+ *  relative in-plugin link stays relative, so it cannot point back into the real snapshot. */
 export const runGateCommand: GateRunner = async ({ cmd, snapshot, variant, timeoutS }) => {
   const root = mkdtempSync(join(tmpdir(), "cowork-harness-gate-"));
   const copy = join(root, "variant");
   const t0 = Date.now();
   try {
-    cpSync(snapshot, copy, { recursive: true });
+    cpSync(snapshot, copy, { recursive: true, verbatimSymlinks: true });
     return await new Promise<GateResult>((resolveGate) => {
       let buf = Buffer.alloc(0);
       const keep = (b: Buffer) => {
@@ -54,6 +55,10 @@ export const runGateCommand: GateRunner = async ({ cmd, snapshot, variant, timeo
       child.stdout.on("data", keep);
       child.stderr.on("data", keep);
       let timedOut = false;
+      let settled = false;
+      // How the shell ended, once it has: `close` waits for the pipes too, which a descendant that left the process
+      // group (setsid) can hold open forever. After the timeout's kill the gate resolves on `exit` instead.
+      let exited: { code: number | null; signal: NodeJS.Signals | null } | undefined;
       const timer = setTimeout(() => {
         timedOut = true;
         try {
@@ -61,9 +66,15 @@ export const runGateCommand: GateRunner = async ({ cmd, snapshot, variant, timeo
         } catch {
           child.kill("SIGKILL");
         }
+        if (exited) done(exited.code, exited.signal);
       }, timeoutS * 1000);
       const done = (code: number | null, signal: NodeJS.Signals | null, spawnError?: Error) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
+        // An escaped descendant may still hold the pipes: stop reading them, so nothing keeps this process alive.
+        child.stdout.destroy();
+        child.stderr.destroy();
         const tail = buf.toString("utf8") + (spawnError ? `${buf.length ? "\n" : ""}${spawnError.message}` : "");
         resolveGate({
           ok: !timedOut && !spawnError && code === 0,
@@ -75,10 +86,19 @@ export const runGateCommand: GateRunner = async ({ cmd, snapshot, variant, timeo
         });
       };
       child.on("error", (e) => done(null, null, e));
+      child.on("exit", (code, signal) => {
+        exited = { code, signal };
+        if (timedOut) done(code, signal);
+      });
       child.on("close", (code, signal) => done(code, signal));
     });
   } finally {
-    rmSync(root, { recursive: true, force: true });
+    // A copy the gate made unremovable (a read-only dir) is a stray temp dir, never a reason to lose the gate's result.
+    try {
+      rmSync(root, { recursive: true, force: true });
+    } catch {
+      /* left in the temp dir */
+    }
   }
 };
 
