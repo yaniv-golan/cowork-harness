@@ -263,12 +263,16 @@ Three things live outside the flow dir, and the loop needs all three for the who
   `meta.failure_rule: "effort_not_sent"`) and `judge_invalid` (the row's `error` names the cause, and
   `meta.judge_invalid_cause` records it: `call` for a failed judge call, with `meta.judge_error_status`,
   `meta.judge_error_retryable` and `meta.judge_error_message`, or `malformed` for a malformed grade; the slot re-runs with
-  `hillclimb run … --case <id> --reps <rep+1>`, and a `regrade` does not fill it); with `--search-corpus`, also `search_pool_mismatch`
+  `hillclimb run … --case <id> --reps <rep+1>`, or a `regrade` promotes it: see below); with `--search-corpus`, also `search_pool_mismatch`
   (the rep was refused before it ran because the pool copy changed, or was served from another pool) and
   `search_refused` (a search the frozen corpus refused: the rep worked from different evidence, so it is never
   scored). When several apply, a timeout wins, then a pool mismatch, then an infrastructure error, then a refused
   search, then a served-model mismatch. Every error row carries `meta.content_sig`, the variant's snapshot signature. An error row does not fill its slot, so the next pass
-  runs it again; a permanent fault runs again on every pass, and the scope line names it.
+  runs it again; a permanent fault runs again on every pass, and the scope line names it. A `judge_invalid` row written by 5.0 or later also carries `meta.results_row`, the results row its run would have had (its grade a placeholder with the invalid asserts failed); nothing reads it as a scored row. `hillclimb regrade` re-judges every judged assert of it from the kept run and, when that grade is valid, moves it into `results.jsonl` (same `meta.run_id`, `meta.regrade_from: "judge_invalid"`) and out of `errors.jsonl`, its
+  prior bytes kept as `regrade-errors-<sha16>.bak.jsonl`. `results.jsonl` is written first: a regrade stopped between
+  the two leaves the slot filled, its spend counted once by run id, and `hillclimb check` notes the leftover errors row,
+  which the next regrade removes. A row written before 5.0, one under `--fill-refs`, and one whose re-grade is invalid
+  again stay open, listed with their cause and the `run` that re-runs them.
 - **Perf fields:** `cost_usd`, `latency_s`, `tool_calls`, `web_searches`, `in_tokens`, `out_tokens` (and
   `skill_invoked` when tracked). `in_tokens` counts the main model's input, cache-read and cache-creation tokens.
   `latency_s` excludes retry backoff; when the run reported no duration it is the attempt's wall time

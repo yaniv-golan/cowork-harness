@@ -518,6 +518,23 @@ describe("error rows (runner-scaffold.mjs l.549-564)", () => {
     expect(row.error).not.toContain("malformed");
   });
 
+  it("a judge_invalid row carries the results row its run would have had, for regrade to re-judge and promote", () => {
+    const r = structuredClone(fixture("success-semantic"));
+    r.assertions[3] = { ...r.assertions[3], judgeInvalid: true };
+    const row = errRow(attemptRow({ result: r }, ctx(r)));
+    // The scored path's row for the same attempt: what a valid grade of this run would have written.
+    const valid = structuredClone(fixture("success-semantic"));
+    const scored = attemptRow({ result: valid }, ctx(valid));
+    expect(scored.dest).toBe("results");
+    const carried = row.meta!.results_row as Record<string, unknown> & { meta: Record<string, unknown> };
+    // Same slot, same run, and the provenance only a results row records (never filled in later from the flow's state).
+    expect(carried).toMatchObject({ prompt_id: row.prompt_id, rep: row.rep, meta: { run_id: row.meta!.run_id } });
+    for (const k of ["scenario_name", "env", "flow_hash", "assert_sig", "wall_s"] as const)
+      expect(carried.meta[k], k).toEqual((scored.row.meta as Record<string, unknown>)[k]);
+    expect(carried).not.toHaveProperty("failure_class");
+    expect(row.error).toContain("`hillclimb regrade` to re-judge it from the kept run");
+  });
+
   it("a malformed judge grade ⇒ judge_invalid that says malformed, with no judge_error_* meta", () => {
     const r = structuredClone(fixture("success-semantic"));
     r.assertions[3] = { ...r.assertions[3], judgeInvalid: true };

@@ -3,6 +3,8 @@
 import { describe, it, expect } from "vitest";
 import { promotedOrphanNotes, servedModelSplitFindings } from "../src/hillclimb/check.js";
 import type { FlowSnapshot } from "../src/hillclimb/schema-check.js";
+import { costSummary } from "../src/hillclimb/cost.js";
+import { servedModelSplits } from "../src/hillclimb/served-model.js";
 
 const jl = (...rows: object[]) => rows.map((r) => JSON.stringify(r)).join("\n") + "\n";
 const snap = (results: string, errors = ""): FlowSnapshot => ({ variants: { baseline: { results, errors } } }) as unknown as FlowSnapshot;
@@ -45,5 +47,30 @@ describe("a promoted slot's leftover errors row", () => {
   });
   it("(control) an earlier failed attempt at a slot a later pass filled is history, not noted", () => {
     expect(promotedOrphanNotes(snap(jl(row("a", "claude-sonnet-5", "r2")), jl(inv("r1"))))).toEqual([]);
+  });
+});
+
+// A judge_invalid errors row carries the results row its run would have had (`meta.results_row`), for `regrade` to
+// promote. Until then nothing that reads errors.jsonl may count or score it as a scored row.
+describe("a carried results row is never read as a scored row", () => {
+  const scored = { ...row("a", "claude-sonnet-5-20251001", "r1"), cost_usd: 0.1, grade: { pass: 1 } };
+  const carried = { ...row("b", "claude-sonnet-5-20251101", "r2"), cost_usd: 0.4, grade: { pass: 1 } };
+  const inv = {
+    prompt_id: "b",
+    rep: 0,
+    failure_class: "judge_invalid",
+    meta: { run_id: "r2", cost_usd: 0.4, results_row: carried },
+  };
+  it("cost: the attempt's spend once, as a failed attempt, not a scored row", () => {
+    const s = costSummary(jl(scored), jl(inv));
+    expect(s.keys.cost_usd_total).toBeCloseTo(0.5);
+    expect(s.scoredCostRows).toBe(1);
+    expect(s.keys.cost_usd_mean).toBeCloseTo(0.1);
+  });
+  it("check: its served model makes no split, and its run id no orphan note", () => {
+    const sn = snap(jl(scored), jl(inv));
+    expect(servedModelSplits(jl(scored))).toEqual([]);
+    expect(servedModelSplitFindings(sn)).toEqual([]);
+    expect(promotedOrphanNotes(sn)).toEqual([]);
   });
 });

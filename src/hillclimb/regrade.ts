@@ -130,6 +130,9 @@ export interface RegradeFlowVariant {
   rebuilt: number;
   /** Of `rebuilt`, the fill rows that lacked only their own variant's reference (neutral, 0.5). */
   ownRefOnly: number;
+  /** Of `judged`, the judge_invalid slots whose re-grade was valid: each results row it carried was moved from
+   *  errors.jsonl into results.jsonl (`meta.regrade_from: "judge_invalid"`). */
+  promoted: number;
   /** Rows not re-graded, with why. Nothing was written for them. */
   listed: Array<{ prompt_id: string; rep: number; why: string }>;
   /** Rows whose deterministic asserts (every assert no judge grades, and each `expect_denied` host) were re-evaluated
@@ -573,7 +576,9 @@ export type RejudgeTrigger =
   | "judge_prompt"
   | "opponents_changed"
   | "reference_changed"
-  | "evidence_changed";
+  | "evidence_changed"
+  /** A judge_invalid slot being promoted: its grade from the run is invalid, so every judged assert is re-judged. */
+  | "judge_invalid";
 
 export interface JudgedPlan {
   /** Per judged scenario index: the entry the row is graded with now, matched by identity. */
@@ -1153,7 +1158,7 @@ const counters = (v: RegradeFlowVariant): string => {
         : "";
   const remeasured = v.remeasured && v.remeasured !== v.rebuilt ? `; re-measured ${v.remeasured} without a judge call` : "";
   return (
-    `rewritten ${v.rewritten}: ${v.judged} re-judged${usd}, ${v.rebuilt} rebuilt without a judge call${own}, ` +
+    `rewritten ${v.rewritten}: ${v.judged} re-judged${v.promoted ? ` (${v.promoted} promoted from errors.jsonl)` : ""}${usd}, ${v.rebuilt} rebuilt without a judge call${own}, ` +
     `${metaOnly} agent-failed (meta only)${remeasured}; listed ${v.listed.length}`
   );
 };
@@ -1241,6 +1246,8 @@ async function regradeFlowInner(
   const refs = discoverFlowRefs(flowAbs);
   const refNames = refs.map((r) => r.name);
   const preLock = new Map(variants.map((v) => [v, readVariantFileIfPresent(flowArg, v, "results.jsonl", deps.cwd) ?? ""]));
+  // errors.jsonl too: a judge_invalid row is promoted from it, and it is rewritten.
+  const preLockErrors = new Map(variants.map((v) => [v, readVariantFileIfPresent(flowArg, v, "errors.jsonl", deps.cwd) ?? ""]));
   const willJudge = (): boolean => {
     for (const [v, text] of preLock)
       for (const raw of text.split("\n")) {
@@ -1311,10 +1318,14 @@ async function regradeFlowInner(
     }
     // The rows the judge decision above was made over: a change since (a concurrent pass) is refused, nothing written.
     for (const v of variants)
-      if ((writers.get(v)!.readVariantFile("results.jsonl") ?? "") !== preLock.get(v))
-        return refuse(
-          `${join(flowArg, v, "results.jsonl")} changed while regrade was starting (a concurrent pass?) — nothing was written; run it again`,
-        );
+      for (const [f, pre] of [
+        ["results.jsonl", preLock],
+        ["errors.jsonl", preLockErrors],
+      ] as const)
+        if ((writers.get(v)!.readVariantFile(f) ?? "") !== pre.get(v))
+          return refuse(
+            `${join(flowArg, v, f)} changed while regrade was starting (a concurrent pass?) — nothing was written; run it again`,
+          );
     const regrade = deps.regrade ?? regradeRuns;
     const shape = {
       ...(flowHasPairwise(all.map((c) => ({ assertions: c.scenario.assert ?? [] })))
@@ -1339,6 +1350,8 @@ async function regradeFlowInner(
       variant: string;
       c: HillclimbCase;
       onlyRefs?: string[];
+      /** Its rows are judge_invalid slots being promoted (every judged assert re-judged, the drift accepted). */
+      promote?: true;
       targets: Target[];
     }
     const batches: Batch[] = [];
@@ -1348,6 +1361,13 @@ async function regradeFlowInner(
     // Agent-failed rows whose kept run cannot be re-evaluated: rebuilt with no evidence read (see `agentFailed`).
     const metaOnly: Array<{ variant: string; c: HillclimbCase; line: Line; result: RunResult }> = [];
     const perVariant = new Map<string, { lines: Line[]; old: string; v: RegradeFlowVariant }>();
+    // The results rows promotion targets (keyed by their synthetic line) and the errors row each came from.
+    const promotedFrom = new Map<Line, { variant: string; errRaw: string }>();
+    // Every open judge_invalid slot considered for promotion: one not promoted stays open and is listed with its re-run.
+    const candidates: Array<{ variant: string; id: string; rep: number; cause: string }> = [];
+    const openWhy = (x: { variant: string; id: string; rep: number; cause: string }, why: string): string =>
+      // `run` schedules reps below --reps only, so the command names the case and a --reps that covers this rep.
+      `an errors.jsonl row (judge_invalid; ${x.cause}), not promoted: ${why}; its slot is open — \`hillclimb run ${args.target} --flow ${flowArg} --variant ${x.variant} --case ${x.id} --reps ${x.rep + 1}\` re-runs it (one agent run per open slot)`;
     for (const v of variants) {
       const old = writers.get(v)!.readVariantFile("results.jsonl") ?? "";
       const lines: Line[] = old
@@ -1370,6 +1390,7 @@ async function regradeFlowInner(
         judgeStopped: 0,
         rebuilt: 0,
         ownRefOnly: 0,
+        promoted: 0,
         listed: [],
         reevaluated: 0,
         remeasured: 0,
@@ -1380,15 +1401,18 @@ async function regradeFlowInner(
       perVariant.set(v, { lines, old, v: vr });
       outcome.variants.push(vr);
       const groups = new Map<string, Batch>();
-      for (const line of lines) {
+      // One row, decided before any judge call: a results row, or (`promote`) the results row a judge_invalid errors
+      // row carries, re-judged on every judged assert and moved into results.jsonl when the re-grade is valid.
+      const consider = async (line: Line, promote?: { errRaw: string }): Promise<void> => {
+        if (promote) promotedFrom.set(line, { variant: v, errRaw: promote.errRaw });
         const row = line.row;
-        if (!row) continue;
+        if (!row) return;
         const id = String(row.prompt_id);
         const rep = Number(row.rep);
         const c = byId.get(id);
         if (!c) {
           if (!args.cases.length) vr.listed.push({ prompt_id: id, rep, why: "no scenario file for this case in the target" });
-          continue;
+          return;
         }
         const judged = c.scenario.assert.some((a) => judgedOpts(a) !== undefined);
         // Every selected row is re-evaluated from its kept run, a case with no judged assert included: a grader fix to
@@ -1397,7 +1421,7 @@ async function regradeFlowInner(
         const result = runDir ? readResult(runDir) : undefined;
         if (!runDir || !result) {
           vr.listed.push({ prompt_id: id, rep, why: "its kept run dir is gone (evidence unavailable)" });
-          continue;
+          return;
         }
         // A fill copies every outcome it does not judge by index, so the run's list must line up with the scenario's. A
         // default regrade rebuilds the list from the scenario (each deterministic assert re-evaluated, each judged one
@@ -1408,7 +1432,7 @@ async function regradeFlowInner(
         const mismatch = args.fillRefs && !failedAgent ? shapeMismatch(row, result, c) : undefined;
         if (mismatch) {
           vr.listed.push({ prompt_id: id, rep, why: `${mismatch} — run a default \`hillclimb regrade\` first, then --fill-refs` });
-          continue;
+          return;
         }
         // Every selected row is re-evaluated from its kept run here, before any judge call: a row whose context cannot be
         // rebuilt is listed, never re-measured as unavailable.
@@ -1422,7 +1446,7 @@ async function regradeFlowInner(
           // grades, so only the row's meta is brought current — never listed (no command would clear it).
           if (row.meta?.failure_class === "errored_agent") metaOnly.push({ variant: v, c, line, result });
           else vr.listed.push({ prompt_id: id, rep, why: shownMessage(re.listed, deps.secrets) });
-          continue;
+          return;
         }
         // Decided here, before batching: a row listed by the deterministic step costs no judge call.
         const byIdentity = liveByIdentity(result, c, deps.secrets);
@@ -1430,7 +1454,7 @@ async function regradeFlowInner(
         const det = deterministicCheck(row, result, c, re, matched, args.fillRefs);
         if ("listed" in det) {
           vr.listed.push({ prompt_id: id, rep, why: det.listed });
-          continue;
+          return;
         }
         // An assert matched exactly only once scrubbed, on a row graded under another assertion list: an edit inside
         // its scrubbed literal (one secret for another) scrubs to the form the run recorded, so whether it changed
@@ -1448,27 +1472,29 @@ async function regradeFlowInner(
           });
           return true;
         };
-        if (cannotApply(byIdentity.scrubbedExact)) continue;
+        if (cannotApply(byIdentity.scrubbedExact)) return;
         for (const i of det.keptLive)
           say(
             `  [${v}] ${id} rep${rep}: ${labelOf(c, i)} ${outcomeOf(matched[i]!.pass)} in the run, ${outcomeOf(re.deterministic[i]!.pass)} re-evaluated now — unchanged since the run, so it kept its live outcome (the kept evidence or the evaluator differs, not the grader; harness ${harnessVersion})`,
           );
         const agentFailed = classifyRep({ result: result as never }, {}).bucket === "errored_agent";
         const plan = judgedPlan(row, c, runDir, result, {
-          rejudge: args.rejudge === true,
+          rejudge: args.rejudge === true || promote !== undefined,
           ...(args.judgeModel !== undefined ? { judgeModel: args.judgeModel } : {}),
           fill: args.fillRefs,
           variant: v,
           refs,
           secrets: deps.secrets,
         });
+        // A promoted slot re-judges every judged assert: its grade from the run is invalid, so none is kept.
+        if (promote) for (const [i, why] of plan.rejudge) plan.rejudge.set(i, ["judge_invalid", ...why.filter((w) => w !== "rejudge")]);
         // An assert the run recorded scrubbed that this process's secrets do not reproduce: taken as unchanged, and
         // said, since that is unknowable. Its live judge read the rubric and the document both scrubbed; a re-judge here
         // would send the rubric as written against the scrubbed evidence (for a negative claim, a leak turned green no
         // live run could produce). So any re-judge such an assert would need lists the row — no judge call, nothing
         // written — unless the operator, having checked the scrub settings, passes --allow-scrub-change. One matched
         // exactly under this process's scrub is re-judged with its rubric scrubbed as the run sent it.
-        if (cannotApply(plan.scrubbedExact)) continue;
+        if (cannotApply(plan.scrubbedExact)) return;
         const unknowable = [...new Set([...byIdentity.scrubbedOnly, ...plan.scrubbedOnly])].sort((a, b) => a - b);
         const toJudge = agentFailed ? [] : args.fillRefs ? fillJudged(plan, c, v, refNames) : [...plan.rejudge.keys()];
         const rawRubric = unknowable.filter((i) => toJudge.includes(i));
@@ -1481,7 +1507,7 @@ async function regradeFlowInner(
               deps.secrets,
             ),
           });
-          continue;
+          return;
         }
         for (const i of unknowable)
           say(
@@ -1500,7 +1526,7 @@ async function regradeFlowInner(
               rep,
               why: `its kept outcome against ${stale.join(", ")} was judged against a reference that has changed since`,
             });
-            continue;
+            return;
           }
         }
         // A fill copies every judged outcome it does not add: one whose assert changed since it was graded would be
@@ -1515,7 +1541,7 @@ async function regradeFlowInner(
                 ? `the rubric changed since the run (${labelOf(c, changed[0])} is not the assert it was graded with): run a default \`hillclimb regrade\` first, then --fill-refs`
                 : `the regrade file it was graded with cannot be read: run a default \`hillclimb regrade\` first, then --fill-refs`,
             });
-            continue;
+            return;
           }
         }
         // Evidence the current harness would show a judge differently than an entry the row is graded with was graded
@@ -1528,7 +1554,7 @@ async function regradeFlowInner(
             rep,
             why: shownMessage(`its judged evidence cannot be recomposed: ${drift.refusal.split("\n")[0]}`, deps.secrets),
           });
-          continue;
+          return;
         }
         if (drift.changes.length) {
           vr.evidenceChanged.push({ prompt_id: id, rep, evidence: drift.changes });
@@ -1550,16 +1576,16 @@ async function regradeFlowInner(
                 deps.secrets,
               ),
             });
-            continue;
+            return;
           }
-          if (!args.rejudge) {
+          if (!args.rejudge && !promote) {
             const why = `the evidence the judge would see changed since this grade (assert ${asserts}): ${
               args.fillRefs
                 ? "run `hillclimb regrade --rejudge` first to grade the current evidence, then --fill-refs"
                 : "pass --rejudge to grade the current evidence"
             }`;
             vr.listed.push({ prompt_id: id, rep, why });
-            continue;
+            return;
           }
           for (const x of drift.changes) plan.rejudge.get(x.assert)?.push("evidence_changed");
           const shas = drift.changes
@@ -1580,7 +1606,7 @@ async function regradeFlowInner(
           live: matched,
           keptLive: det.keptLive,
           plan,
-          evidence: args.rejudge ? drift.changes : [],
+          evidence: args.rejudge || promote ? drift.changes : [],
         };
         if (!judged || (args.fillRefs ? agentFailed || !t.missing.filter((r) => r !== v).length : agentFailed || !plan.rejudge.size)) {
           // No comparison to judge: a case with no judged assert, an agent failure (it scores 0 whatever the judge
@@ -1588,17 +1614,25 @@ async function regradeFlowInner(
           // variant's (neutral) outcome. Rebuilt with no judge call, so it is re-measured and, in a fill, carries every
           // column.
           plain.push(t);
-          continue;
+          return;
         }
         // One batch per set of asserts to re-judge (the rest are kept): every run in a core re-grade keeps the same ones.
-        const key = `${id}\0${args.fillRefs ? t.missing.join(",") : [...plan.rejudge.keys()].join(",")}`;
-        const b = groups.get(key) ?? { variant: v, c, ...(args.fillRefs ? { onlyRefs: t.missing } : {}), targets: [] };
+        const key = `${id}\0${args.fillRefs ? t.missing.join(",") : [...plan.rejudge.keys()].join(",")}${promote ? "\0promote" : ""}`;
+        const b = groups.get(key) ?? {
+          variant: v,
+          c,
+          ...(args.fillRefs ? { onlyRefs: t.missing } : {}),
+          ...(promote ? { promote: true } : {}),
+          targets: [],
+        };
         b.targets.push(t);
         groups.set(key, b);
-      }
-      batches.push(...groups.values());
-      // An error row a judge outage wrote (judge_invalid) is not promoted into results.jsonl here: its slot is still
-      // open, so the next `hillclimb run` pass of this variant re-runs it. Listed so the slot is not forgotten.
+      };
+      for (const line of lines) await consider(line);
+      // A judge_invalid errors row (a judge outage or a malformed grade) whose slot no results row fills: one written by
+      // this version carries the results row its run would have had (`meta.results_row`), which is re-judged on every
+      // judged assert from the kept run and, when the re-grade is valid, moved into results.jsonl. One that carries none
+      // (written before it), or under --fill-refs, is listed with the `hillclimb run` that re-runs the slot.
       const scored = new Set(lines.flatMap((l) => (l.row ? [`${String(l.row.prompt_id)}\0${String(l.row.rep)}`] : [])));
       for (const raw of (writers.get(v)!.readVariantFile("errors.jsonl") ?? "").split("\n")) {
         let e: Row | undefined;
@@ -1609,7 +1643,10 @@ async function regradeFlowInner(
         }
         if (!e || (e as { failure_class?: unknown }).failure_class !== "judge_invalid") continue;
         const id = String(e.prompt_id);
+        const rep = Number(e.rep);
         if (args.cases.length && !byId.has(id)) continue;
+        // A slot a later pass filled: this row is the history of an earlier attempt (one sharing its run id with the
+        // results row, left by an interrupted promotion, is removed when errors.jsonl is rewritten below).
         if (scored.has(`${id}\0${String(e.rep)}`)) continue;
         // The cause, read from the row's structured field (never its prose): a failed judge call (and its API
         // status), a malformed grade, or a row written before the cause was kept.
@@ -1620,13 +1657,33 @@ async function regradeFlowInner(
             : em.judge_invalid_cause === "malformed"
               ? "malformed grade"
               : "cause not recorded";
-        vr.listed.push({
-          prompt_id: id,
-          rep: Number(e.rep),
-          // `run` schedules reps below --reps only, so the command names the case and a --reps that covers this rep.
-          why: `an errors.jsonl row (judge_invalid; ${cause}): its slot is open — \`hillclimb run ${args.target} --flow ${flowArg} --variant ${v} --case ${id} --reps ${Number(e.rep) + 1}\` re-runs it (one agent run per open slot)`,
-        });
+        const candidate = { variant: v, id, rep, cause };
+        candidates.push(candidate);
+        const src = em.results_row;
+        if (args.fillRefs) {
+          vr.listed.push({
+            prompt_id: id,
+            rep,
+            why: openWhy(candidate, "a --fill-refs regrade never promotes it (a default regrade re-judges it)"),
+          });
+          continue;
+        }
+        if (!src || typeof src !== "object" || Array.isArray(src)) {
+          vr.listed.push({
+            prompt_id: id,
+            rep,
+            why: openWhy(candidate, "written before judge_invalid rows carried their results row, so it cannot be promoted"),
+          });
+          continue;
+        }
+        const row = src as Row;
+        if (row.meta?.run_id !== em.run_id || String(row.prompt_id) !== id || Number(row.rep) !== rep) {
+          vr.listed.push({ prompt_id: id, rep, why: openWhy(candidate, "its results row names another run or slot") });
+          continue;
+        }
+        await consider({ raw, row }, { errRaw: raw });
       }
+      batches.push(...groups.values());
     }
 
     // The rows are the ones the pre-lock decision read, but what else it read (a reference store) can have changed
@@ -1644,8 +1701,11 @@ async function regradeFlowInner(
       ...(args.judgeModel !== undefined ? { judgeModel: args.judgeModel } : {}),
       // --rejudge grades a row whose evidence changed on the current evidence (each such row is named above): the
       // drift is accepted for it, by that flag.
-      ...(args.allowDocDrift || args.rejudge ? { allowDocDrift: true } : {}),
-      ...(args.rejudge && !args.allowDocDrift ? { driftAcceptedBy: "--rejudge" } : {}),
+      // A promoted slot is re-judged on every judged assert, so its drift is accepted the way --rejudge accepts it.
+      ...(args.allowDocDrift || args.rejudge || b.promote ? { allowDocDrift: true } : {}),
+      ...((args.rejudge || b.promote) && !args.allowDocDrift
+        ? { driftAcceptedBy: args.rejudge ? "--rejudge" : "a judge_invalid slot's promotion" }
+        : {}),
       ...(args.allowUnchecked ? { allowUnchecked: true } : {}),
       // Only its own flag: never implied by --rejudge or --allow-doc-drift.
       ...(args.allowScrubChange ? { allowScrubChange: true } : {}),
@@ -1981,19 +2041,80 @@ async function regradeFlowInner(
       if (!aIndexAligned(m.line.row!, m.result, m.c)) misaligned.add(m.line);
     }
 
+    // A judge_invalid slot considered for promotion and not promoted stays open: whatever listed it says so, with the
+    // `hillclimb run` that re-runs it.
+    for (const x of candidates) {
+      const done = [...promotedFrom].some(
+        ([l, p]) => p.variant === x.variant && rebuilt.has(l) && String(l.row?.prompt_id) === x.id && Number(l.row?.rep) === x.rep,
+      );
+      if (done) continue;
+      const vr = perVariant.get(x.variant)!.v;
+      const mine = vr.listed.filter((y) => y.prompt_id === x.id && y.rep === x.rep);
+      for (const y of mine) if (!y.why.startsWith("an errors.jsonl row (judge_invalid")) y.why = openWhy(x, y.why);
+      if (!mine.length) vr.listed.push({ prompt_id: x.id, rep: x.rep, why: openWhy(x, "not re-graded") });
+    }
+
     // Write each variant atomically; untouched lines byte for byte.
     const report: string[] = [];
     for (const v of variants) {
       const pv = perVariant.get(v)!;
       const w = writers.get(v)!;
       const changed = pv.lines.filter((l) => rebuilt.has(l));
-      if (changed.length) {
-        const text = pv.lines.map((l) => (rebuilt.has(l) ? JSON.stringify(w.redactRow(rebuilt.get(l)!)) : l.raw)).join("\n") + "\n";
+      const promoted = [...promotedFrom].filter(([l, p]) => p.variant === v && rebuilt.has(l)).map(([l, p]) => ({ l, p }));
+      const promotedRows = promoted.map(({ l }) => {
+        const r = rebuilt.get(l)!;
+        return { ...r, meta: { ...(r.meta ?? {}), regrade_from: "judge_invalid" } as Record<string, unknown> };
+      });
+      if (changed.length || promoted.length) {
+        const text =
+          [
+            ...pv.lines.map((l) => (rebuilt.has(l) ? JSON.stringify(w.redactRow(rebuilt.get(l)!)) : l.raw)),
+            ...promotedRows.map((r) => JSON.stringify(w.redactRow(r))),
+          ].join("\n") + "\n";
+        // results.jsonl first: interrupted before errors.jsonl is rewritten, the slot reads as filled (the results row
+        // counts, its run's spend once, by run id) and the next regrade removes the errors row left behind.
         pv.v.backup = w.rewriteResults(text, pv.old);
-        pv.v.rewritten = changed.length;
+        pv.v.rewritten = changed.length + promoted.length;
+        pv.v.promoted = promoted.length;
         progress.written.push(v);
-        refreshCostSummary(w, v, say);
       }
+      // errors.jsonl without the promoted rows, and without any judge_invalid row whose run a results row holds (one an
+      // interrupted promotion left). An errors row of an earlier attempt at a slot a later pass filled has its own run
+      // id: it is history, and kept.
+      const errOld = w.readVariantFile("errors.jsonl") ?? "";
+      const runs = new Set(
+        [...pv.lines.map((l) => l.row), ...promotedRows].flatMap((r) => (typeof r?.meta?.run_id === "string" ? [r.meta.run_id] : [])),
+      );
+      const gone = new Set(promoted.map(({ p }) => p.errRaw));
+      const keptErrors: string[] = [];
+      let swept = 0;
+      for (const raw of errOld.split("\n").filter((l, i, a) => !(i === a.length - 1 && l === ""))) {
+        if (gone.has(raw)) continue;
+        let e: Row | undefined;
+        try {
+          e = raw.trim() ? (JSON.parse(raw) as Row) : undefined;
+        } catch {
+          e = undefined; // a torn line is kept as it is
+        }
+        const runId = e?.meta?.run_id;
+        if (
+          (e as { failure_class?: unknown } | undefined)?.failure_class === "judge_invalid" &&
+          typeof runId === "string" &&
+          runs.has(runId)
+        ) {
+          swept++;
+          continue;
+        }
+        keptErrors.push(raw);
+      }
+      if (gone.size || swept) {
+        w.rewriteErrors(keptErrors.length ? keptErrors.join("\n") + "\n" : "", errOld);
+        if (swept)
+          say(
+            `  [${v}] removed ${swept} judge_invalid errors.jsonl row(s) whose run a results row already holds (left by an interrupted promotion)`,
+          );
+      }
+      if (changed.length || promoted.length || swept) refreshCostSummary(w, v, say);
       const metricIds = shape.metrics.map((m) => m.id);
       // A row whose a<i> keys name other asserts than before is compared on everything but them, and says so.
       const moved = changed
@@ -2007,10 +2128,13 @@ async function regradeFlowInner(
       const scored = pv.lines.filter((l) => typeof l.row?.grade?.pass === "number");
       const mean = (xs: number[]) => (xs.length ? (xs.reduce((s, x) => s + x, 0) / xs.length).toFixed(2) : "n/a");
       const passOf = (g: Record<string, number> | undefined) => (typeof g?.pass === "number" ? [g.pass] : []);
+      // A promoted row is scored only after: the after mean counts it, and says so.
+      const promotedPass = promotedRows.flatMap((r) => passOf(r.grade as Record<string, number> | undefined));
       const means =
         `mean pass before ${mean(scored.flatMap((l) => passOf(l.row!.grade)))}, ` +
-        `after ${mean(scored.flatMap((l) => passOf(rebuilt.get(l)?.grade ?? l.row!.grade)))} over ${scored.length} scored row(s)` +
-        (changed.length ? "" : "; unchanged (no rows rewritten)");
+        `after ${mean([...scored.flatMap((l) => passOf(rebuilt.get(l)?.grade ?? l.row!.grade)), ...promotedPass])} over ${scored.length + promotedPass.length} scored row(s)` +
+        (promotedPass.length ? ` (${promotedPass.length} promoted)` : "") +
+        (changed.length || promoted.length ? "" : "; unchanged (no rows rewritten)");
       const lines = [
         `# ${v}: hillclimb regrade ${at}${args.fillRefs ? " (--fill-refs)" : ""}`,
         "",
@@ -2023,10 +2147,17 @@ async function regradeFlowInner(
           const cell = [keys.map((k) => `${k} ${b[k] ?? "—"}→${a[k] ?? "—"}`).join(", "), note].filter(Boolean).join(" ");
           return `| ${String(l.row!.prompt_id)} | ${String(l.row!.rep)} | ${cell} |`;
         }),
+        ...(promoted.length
+          ? [
+              "",
+              "Promoted from errors.jsonl (a judge_invalid slot whose re-grade was valid):",
+              ...promoted.map(({ l }) => `- ${String(l.row!.prompt_id)} rep${String(l.row!.rep)}`),
+            ]
+          : []),
         ...(pv.v.listed.length ? ["", "Not re-graded:", ...pv.v.listed.map((x) => `- ${x.prompt_id} rep${x.rep}: ${x.why}`)] : []),
         "",
       ];
-      if (changed.length || pv.v.listed.length) w.writeRegradeReport(lines.join("\n"));
+      if (changed.length || promoted.length || pv.v.listed.length) w.writeRegradeReport(lines.join("\n"));
       report.push(
         ...lines
           .slice(2)
@@ -2044,7 +2175,7 @@ async function regradeFlowInner(
       say(
         `  [${vr.variant}] ${open.length} slot(s) hold a judge_invalid error row (about one agent run each to re-run): ${[...byCase]
           .map(([id, reps]) => `\`hillclimb run ${args.target} --flow ${flowArg} --variant ${vr.variant} --case ${id} --reps ${reps}\``)
-          .join("; ")}. A \`regrade\` of their run dirs does not fill these slots.`,
+          .join("; ")}. Each listed row above says why it was not promoted.`,
       );
     }
     outcome.exitCode = outcome.variants.some((v) => v.listed.length) ? 1 : 0;

@@ -106,14 +106,24 @@ export class FlowWriter {
    *  never followed), and a no-follow rename swaps it in. Lines are passed as they will be written: a caller redacts
    *  the rows it rebuilt (`redactRow`) and keeps every other line byte for byte. Returns the backup's name. */
   rewriteResults(newText: string, oldText: string): string {
-    const bak = `regrade-${createHash("sha256").update(oldText, "utf8").digest("hex").slice(0, 16)}.bak.jsonl`;
+    return this.rewrite("results.jsonl", "regrade", newText, oldText);
+  }
+
+  /** Replace `errors.jsonl` the same way (`hillclimb regrade` moving a promoted judge_invalid row out of it), its prior
+   *  bytes kept as `regrade-errors-<sha16 of them>.bak.jsonl`. Returns the backup's name. */
+  rewriteErrors(newText: string, oldText: string): string {
+    return this.rewrite("errors.jsonl", "regrade-errors", newText, oldText);
+  }
+
+  private rewrite(name: string, prefix: string, newText: string, oldText: string): string {
+    const bak = `${prefix}-${createHash("sha256").update(oldText, "utf8").digest("hex").slice(0, 16)}.bak.jsonl`;
     try {
       this.r.createFile(this.vpath(bak), oldText);
     } catch (e) {
       if ((e as NodeJS.ErrnoException)?.code !== "EEXIST" || this.r.readIfPresent(this.vpath(bak)) !== oldText) throw e;
     }
-    this.r.writeFile(this.vpath("results.jsonl.tmp"), newText);
-    this.r.renameNoFollow(this.vpath("results.jsonl.tmp"), this.vpath("results.jsonl"), { replace: true });
+    this.r.writeFile(this.vpath(`${name}.tmp`), newText);
+    this.r.renameNoFollow(this.vpath(`${name}.tmp`), this.vpath(name), { replace: true });
     return bak;
   }
 
