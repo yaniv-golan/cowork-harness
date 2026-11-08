@@ -15,12 +15,12 @@
 // (src/bounded-spawn.ts is not reused: it bounds from inside this process, which is exactly what cannot work here,
 // and this file is loaded outside the TypeScript build.)
 import { execFile } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { workerData } from "node:worker_threads";
 import { bounded } from "./sync-child-diag.mjs";
 
-const { sab, fileSab, pid, runDir, baseMs, pollMs, graceMs, failFirstListing } = workerData;
+const { sab, fileSab, pid, runDir, baseMs, pollMs, graceMs, failFirstListing, stallFinalSummaryMs } = workerData;
 const slots = new BigInt64Array(sab);
 const fileBytes = new Uint8Array(fileSab);
 // Slot layout, shared with sync-child-watchdog.ts.
@@ -63,13 +63,13 @@ let listings = 0;
 async function descendants(root) {
   // The watchdog's own test makes the first listing fail, to prove a failed listing is retried.
   if (failFirstListing && listings++ === 0) return null;
-  const r = await run("ps", ["-A", "-ww", "-o", "pid=,ppid=,pgid=,command="], 5000);
+  const r = await run("ps", ["-A", "-ww", "-o", "pid=,ppid=,pgid=,stat=,command="], 5000);
   if (!r.ok) return null;
   const rows = r.text
     .split("\n")
-    .map((l) => l.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/))
+    .map((l) => l.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/))
     .filter(Boolean)
-    .map((m) => ({ pid: +m[1], ppid: +m[2], pgid: +m[3], command: m[4] }));
+    .map((m) => ({ pid: +m[1], ppid: +m[2], pgid: +m[3], zombie: m[4].startsWith("Z"), command: m[5] }));
   const out = [];
   const walk = (p, depth) => {
     for (const c of rows)
@@ -80,7 +80,13 @@ async function descendants(root) {
   };
   walk(root, 1);
   const self = rows.find((r) => r.pid === root);
-  return { kids: out, ownPgid: self ? self.pgid : -1 };
+  // A zombie has already exited, and a blocked main thread is just not reaping it: it is neither hung nor killable, so
+  // it is not reported. Its process group is kept: that is the only way left to reach what it left behind.
+  return {
+    kids: out.filter((k) => !k.zombie),
+    zombiePgids: out.filter((k) => k.zombie).map((k) => k.pgid),
+    ownPgid: self ? self.pgid : -1,
+  };
 }
 
 async function stacks(target) {
@@ -133,8 +139,18 @@ let episode = null;
 let busy = false;
 const RETRY_MS = 10_000n;
 
+// A temp file and a rename, so a reader only ever sees a complete summary, even if the fork is killed mid-write: the
+// last write lands just after the kill that lets the fork finish. The temp file stays in the event directory, because
+// readers take every entry of a run directory for an event directory.
 function writeSummary(dir, summary) {
-  writeFileSync(join(dir, "summary.json"), JSON.stringify(summary, null, 2));
+  const tmp = join(dir, "summary.json.tmp");
+  const fd = openSync(tmp, "w");
+  // The watchdog's own test holds the last write open here, to prove a fork that dies at this point loses nothing.
+  if (stallFinalSummaryMs > 0 && summary.stacks === "written")
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, stallFinalSummaryMs);
+  writeSync(fd, JSON.stringify(summary, null, 2));
+  closeSync(fd);
+  renameSync(tmp, join(dir, "summary.json"));
 }
 
 /**
@@ -150,7 +166,29 @@ async function dumpAndKill(ep) {
     writeSummary(ep.dir, ep.summary);
     return false;
   }
-  const { kids, ownPgid } = listing;
+  const { kids, zombiePgids, ownPgid } = listing;
+  // `before` runs ahead of the first signal: a kill can free the main thread, and the fork may then exit at any moment.
+  const killGroups = (pgids, before) => {
+    if (ownPgid < 0) return false; // this fork's own group is unknown, so nothing can be told apart from it
+    const groups = [...new Set(pgids)].filter((g) => g > 1 && g !== ownPgid);
+    if (groups.length > 0) before?.();
+    let signalled = false;
+    for (const g of groups) {
+      try {
+        process.kill(-g, "SIGKILL");
+        signalled = true;
+      } catch {
+        /* already gone */
+      }
+    }
+    return signalled;
+  };
+  // Signalling only an exited child's group does not count as a kill: it is no proof the blocker has gone, so the
+  // retry keeps running.
+  const noteZombieGroups = () => {
+    ep.summary.listing += "; signalled the process groups of children that had already exited, to reach what they left behind";
+    writeSummary(ep.dir, ep.summary);
+  };
   ep.summary.listing = "ok";
   ep.summary.children = kids.map(({ pid: p, ppid, pgid, command, depth }) => ({ pid: p, ppid, pgid, command, depth }));
   ep.summary.killed = kids.length > 0;
@@ -158,9 +196,14 @@ async function dumpAndKill(ep) {
     ep.summary.listing =
       "ok, but a sync call is blocked with no child under this fork: a re-parented descendant may hold its pipe (see the CI job-level dump); retried";
   writeSummary(ep.dir, ep.summary);
-  if (kids.length === 0) return false;
+  if (kids.length === 0) {
+    killGroups(zombiePgids, noteZombieGroups);
+    return false;
+  }
   for (const k of kids) writeFileSync(join(ep.dir, `stacks-${k.pid}.txt`), `${k.command}\n\n${await stacks(k.pid)}`);
-  // Kill only after the dumps, so the stacks show the children as they hung.
+  // Kill only after the dumps, so the stacks show the children as they hung. Exited children's groups go first, while
+  // the live kills below still hold the main thread.
+  killGroups(zombiePgids, noteZombieGroups);
   for (const k of [...kids].sort((a, b) => b.depth - a.depth)) {
     try {
       process.kill(k.pid, "SIGKILL");
@@ -168,15 +211,7 @@ async function dumpAndKill(ep) {
       /* already gone */
     }
   }
-  for (const g of new Set(kids.map((k) => k.pgid))) {
-    if (g > 1 && g !== ownPgid) {
-      try {
-        process.kill(-g, "SIGKILL");
-      } catch {
-        /* already gone */
-      }
-    }
-  }
+  killGroups(kids.map((k) => k.pgid));
   return true;
 }
 

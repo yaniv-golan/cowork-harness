@@ -79,6 +79,7 @@ function start(): Watchdog {
       graceMs: GRACE_MS,
       // Test-only: see test/sync-child-watchdog.test.ts.
       failFirstListing: process.env.COWORK_TEST_HANG_FAIL_FIRST_LISTING === "1",
+      stallFinalSummaryMs: Number(process.env.COWORK_TEST_HANG_STALL_FINAL_SUMMARY_MS) || 0,
     },
   });
   // Never keep the fork alive, and never delay its exit: vitest ends a fork by terminating it.

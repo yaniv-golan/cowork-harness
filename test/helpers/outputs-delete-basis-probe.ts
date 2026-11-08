@@ -1,9 +1,10 @@
 // Child-process probe for test/outputs-delete-basis-linear.test.ts. Builds one named input, runs the REAL
-// `outputsDeleteBasis` on it and prints `{"ms": <best-of-N CPU ms>, "basis": …}`. It runs in its own process so the
-// test can SIGKILL a catastrophic regex instead of blocking its own worker: a synchronous hang cannot be
-// pre-empted by a vitest timeout.
-import { pathToFileURL } from "node:url";
-import { writeFileSync, mkdtempSync } from "node:fs";
+// `outputsDeleteBasis` on it and prints `{"ms": <best-of-N CPU ms>, "basis": …}`. It runs in its own process, under a
+// kernel CPU-time limit, so a catastrophic regex dies instead of blocking the test's worker: a synchronous hang cannot
+// be pre-empted by a vitest timeout.
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { outputsDeleteBasis, isOutputsDelete, scanEvents } from "../../src/run/execute.js";
@@ -24,8 +25,8 @@ export const PROBES: Record<string, () => string> = {
   "{ repeated, 40k": () => R("{", 40000) + ` rm "$Q" ${O}/x`,
   "backtick repeated, 40k": () => R("`", 40000) + `rm "$Q" ${O}/x`,
   "$( repeated, 40k": () => R("$(", 20000) + `rm "$Q" ${O}/x`,
-  // quadratic in the command-position regex itself (each `eval "` is a start); only the per-statement cap
-  // keeps it fast — the probe that fails if the cap goes
+  // quadratic in the command-position regex itself (each `eval "` is a start). BASIS_COMMAND_CAP and
+  // BASIS_STATEMENT_CAP each keep it fast, so this probe fails only when both go.
   'eval " repeated, 40k': () => R('eval "', 6700) + `rmx ${O}/x; rm "$Q"`,
   // detector token arms and pre-split passes: once quadratic on a missing flag / unclosed paren / long runs
   // of assignments. Each ends in `; rm "$Q"` so it is flagged and the classifier runs on it.
@@ -78,9 +79,75 @@ export const PROBES: Record<string, () => string> = {
   'under the cap: eval " × 650': () => R('eval "', 650) + `rmx ${O}/x; rm "$Q"`,
 };
 
+/** The hang killer, in seconds of CPU time. It only has to catch a hang, so it sits well above a healthy probe's cost
+ *  (startup, the tsx compile and the import graph: over 1 s on a quiet machine, several times that on a loaded runner). */
+export const PROBE_CPU_LIMIT_S = 20;
+/** Not a probe: burns CPU forever, after this file's whole import graph has loaded. */
+export const SPIN_PROBE = "(spin)";
+export const SPINNING = "spinning";
+
+const PROBE_FILE = fileURLToPath(import.meta.url);
+
+/** How a probe is spawned. The name is a positional argument: probe names hold `$(`, `"` and backticks, which the shell
+ *  must never read. `exec` keeps the pid, so a signal from the limit is the one the caller sees. */
+export function probeSpawn(name: string, cpuLimitS: number = PROBE_CPU_LIMIT_S): { file: string; args: string[]; options: SpawnOptions } {
+  return {
+    file: "/bin/sh",
+    args: [
+      "-c",
+      'ulimit -t "$1" || exit 97; shift; exec "$@"',
+      "sh",
+      String(cpuLimitS),
+      process.execPath,
+      "--import",
+      "tsx",
+      PROBE_FILE,
+      name,
+    ],
+    options: { stdio: ["ignore", "pipe", "pipe"] },
+  };
+}
+
+export interface ProbeRun {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string;
+  stderr: string;
+}
+
+const live = new Set<ChildProcess>();
+
+/** Runs a probe to its end. Its only kill is the CPU limit in `probeSpawn`; wall time passing is never a failure. */
+export function runProbe(name: string, o: { onSpawn?: (child: ChildProcess) => void } = {}): Promise<ProbeRun> {
+  const { file, args, options } = probeSpawn(name);
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, args, options);
+    live.add(child);
+    let stdout = "";
+    let stderr = "";
+    child.stdout!.on("data", (d) => (stdout += d));
+    child.stderr!.on("data", (d) => (stderr += d));
+    child.on("error", reject);
+    child.on("close", (status, signal) => {
+      live.delete(child);
+      resolve({ status, signal, stdout, stderr });
+    });
+    o.onSpawn?.(child);
+  });
+}
+
+/** A test that timed out must not leave its child behind, least of all a stopped one. */
+export function killLiveProbes(): void {
+  for (const c of live) c.kill("SIGKILL");
+}
+
 // Only when run as the child entry point — importing PROBES from the test must not execute anything.
 const isEntry = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 const name = process.argv[2];
+if (isEntry && name === SPIN_PROBE) {
+  console.log(SPINNING);
+  for (;;);
+}
 if (isEntry && name !== undefined) {
   const build = PROBES[name];
   if (!build) {
@@ -108,7 +175,8 @@ if (isEntry && name !== undefined) {
   }
   // The whole per-command cost as a real run pays it: scanEvents runs the detector over every writable
   // mount, the finding snippet (its own expansion passes) and nothing else; the basis is timed above.
-  const events = join(mkdtempSync(join(tmpdir(), "cwh-probe-")), "events.jsonl");
+  const eventsDir = mkdtempSync(join(tmpdir(), "cwh-probe-"));
+  const events = join(eventsDir, "events.jsonl");
   writeFileSync(
     events,
     JSON.stringify({ type: "assistant", message: { content: [{ type: "tool_use", name: "Bash", input: { command: cmd } }] } }),
@@ -119,5 +187,6 @@ if (isEntry && name !== undefined) {
     scanEvents(events, ["outputs", "proj"]);
     bestScan = Math.min(bestScan, cpuMs(c));
   }
+  rmSync(eventsDir, { recursive: true, force: true });
   console.log(JSON.stringify({ ms: best, detectorMs: bestDetector, scanMs: bestScan, flagged, basis, chars: cmd.length }));
 }
