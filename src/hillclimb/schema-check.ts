@@ -100,7 +100,16 @@ const TURN_KEYS = new Set(["role", "content", "name", "thinking", "attachments"]
 const ATTACHMENT_KINDS = new Set(["image", "svg", "html", "pdf", "json", "text", "code", "file", "url"]);
 /** runner-scaffold.mjs failure classes (l.291, 318, 491, 555). Others are allowed but noted. */
 // Plus the harness's two frozen-search-corpus classes: a rep served off the pinned pool, and one whose search was refused.
-const KNOWN_FAILURE_CLASSES = new Set(["error", "serving_substitution", "timeout", "search_pool_mismatch", "search_refused"]);
+/** Every `failure_class` this runner writes: the scaffold's three, and ours. */
+const KNOWN_FAILURE_CLASSES = new Set([
+  "error",
+  "serving_substitution",
+  "timeout",
+  "search_pool_mismatch",
+  "search_refused",
+  "judge_invalid",
+  "gate_failed",
+]);
 /** runner-scaffold.mjs l.551-564: every key an errors.jsonl line may carry. `meta` is ours. */
 const ERROR_ROW_KEYS = new Set([
   "prompt_id",
@@ -563,7 +572,7 @@ function checkErrorRow(c: Collector, file: string, line: number, e: unknown): vo
     c.note(
       "error.failure_class",
       file,
-      `failure_class ${JSON.stringify(e.failure_class)} is not one the scaffold writes (error, serving_substitution, timeout)`,
+      `failure_class ${JSON.stringify(e.failure_class)} is not one this runner writes (${[...KNOWN_FAILURE_CLASSES].join(", ")})`,
       line,
     );
   if (typeof e.error !== "string") c.error("error.error", file, "error (the message) must be a string", line);

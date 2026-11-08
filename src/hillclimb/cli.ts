@@ -438,6 +438,8 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         undefined,
         {
           payload,
+          // A budget stop is told apart from every other mid-run stop by its code, not its prose.
+          ...(outcome.error.code !== undefined ? { error: { code: outcome.error.code } } : {}),
         },
       );
     if (json) writeAllSync(1, scrub(jsonPayloadEnvelope(`${CMD} run`, outcome.exitCode === 0, payload), secrets) + "\n");

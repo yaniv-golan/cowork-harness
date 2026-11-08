@@ -120,14 +120,31 @@ export interface FlowDigestInput {
   baselineId: string;
   /** The `--skill` selection (`run`), or the one `harness_skill` recorded (`regrade`, which never changes it). */
   skill?: string;
+  /** `gateCmdSha(--gate-cmd)` (`run`), or the `harness_gate_sha` recorded (`regrade`, which never runs the gate). Hashed
+   *  as the virtual entry `<gate-cmd>`; absent ⇒ nothing is added, so the sha is the one approved without a gate. */
+  gateSha?: string;
 }
+
+/** What a `--gate-cmd` contributes to the harness sha, and what `_state.json` records of it (`harness_gate_sha`): the
+ *  command's sha256, never its text. A loop that plants a hash can only make `run` refuse until the operator
+ *  re-approves; it cannot make anything run. */
+export const gateCmdSha = (cmd: string): string => createHash("sha256").update(cmd).digest("hex");
+
+/** The gate command hash a flow's harness sha was approved with: `_state.json` `harness_gate_sha`, when it is a string. */
+export const approvedGateSha = (state: Readonly<Record<string, unknown>>): string | undefined =>
+  typeof state.harness_gate_sha === "string" ? state.harness_gate_sha : undefined;
 
 export function flowHarnessDigest(i: FlowDigestInput): Digest {
   return harnessDigest({
     cwd: i.cwd,
     listed: Array.isArray(i.state.harness_paths) ? i.state.harness_paths.map(String) : [],
     derived: i.derived,
-    virtual: { ...i.derivedValues, "cowork-harness-version": i.harnessVersion, baseline: i.baselineId },
+    virtual: {
+      ...i.derivedValues,
+      "cowork-harness-version": i.harnessVersion,
+      baseline: i.baselineId,
+      ...(i.gateSha !== undefined ? { "gate-cmd": i.gateSha } : {}),
+    },
     tags: i.skill !== undefined ? [`skill:${i.skill}`] : [],
   });
 }

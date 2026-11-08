@@ -172,7 +172,8 @@ export function jsonEnvelope(command: string, results: RunResult[], opts: JsonEn
 /** Stable machine codes on `error.code`. A code NARROWS a category, it never replaces one: `category` stays
  *  the covered coarse class (§11), and `code` is present only on the errors a consumer needs to tell apart
  *  within it. `budget_exceeded` is a `--max-budget-usd` pre-flight refusal — a `runtime` error whose exit
- *  code is shared with other refusals, so without it the only discriminator was the message prose. `doc_drift` and
+ *  code is shared with other refusals, so without it the only discriminator was the message prose. `budget_stopped` is
+ *  `hillclimb run --max-budget-usd`'s mid-run stop (exit 1; the payload's `stopped.reason` is `"budget"`). `doc_drift` and
  *  `unchecked_content` are `regrade`'s two evidence refusals (the kept evidence differs from what the live judge
  *  read; content the live judge never read would be graded), listed per run dir in the payload's `refusals[]`.
  *  `no_semantic_asserts` is `regrade`'s refusal of a scenario with neither a `semantic_matches` nor a `semantic_pairwise`
@@ -182,6 +183,7 @@ export function jsonEnvelope(command: string, results: RunResult[], opts: JsonEn
  *  dir in `refusals[]` beside the evidence refusals. */
 export type ErrCode =
   | "budget_exceeded"
+  | "budget_stopped"
   | "doc_drift"
   | "unchecked_content"
   | "task_unverifiable"

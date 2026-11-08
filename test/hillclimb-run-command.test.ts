@@ -2348,3 +2348,57 @@ describe("hillclimb run --search-corpus", () => {
     expect(err.join("\n")).toMatch(/search frozen: 3 served, 0 miss, 0 refused over 1 row\(s\) \[frozen search corpus fixture@/);
   });
 });
+
+describe("--gate-cmd and --max-budget-usd above the runner", () => {
+  const idx = (usd: number) => () => [{ scenario: "Alpha", costUsd: usd, ts: "2026-11-01T00:00:00Z" }] as never;
+  const ROUND2 = ["--gate-cmd", "grep -q 'round 2' skills/x/SKILL.md"];
+
+  it("a failed gate leaves the variant un-run: once the plugin is fixed, the next pass re-snapshots it and the reps run", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run", ...ROUND2), deps({ indexRows: () => [] }));
+    const first = await runHillclimbCommand(args(...ROUND2), deps({ indexRows: () => [] }));
+    expect(first).toMatchObject({ exitCode: 1, failed: 1 });
+    expect(calls).toHaveLength(0);
+    writeFileSync(join(plugin, "skills", "x", "SKILL.md"), "---\nname: x\ndescription: d\n---\nround 2\n");
+    const second = await runHillclimbCommand(args(...ROUND2), deps({ indexRows: () => [] }));
+    expect(second.exitCode, err.join("\n")).toBe(0);
+    expect(calls).toHaveLength(1);
+    const s = calls[0].extra.session as { plugins: { local_plugins: string[] } };
+    expect(readFileSync(join(s.plugins.local_plugins[0], "skills", "x", "SKILL.md"), "utf8")).toMatch(/round 2/);
+  });
+
+  it("refused at $0, before the grader probe, when the cheapest open slot's estimate is over the cap", async () => {
+    let probed = 0;
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ indexRows: () => [] }));
+    const r = await runHillclimbCommand(
+      args("--max-budget-usd", "2"),
+      deps({ indexRows: idx(5), judgeCheck: async () => (probed++, { lines: [] }) }),
+    );
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(/below the estimate of every open slot \(the cheapest, case alpha, is estimated at \$5\.0000\)/);
+    expect(probed).toBe(0);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("(control) an open slot with no estimate is never refused up front: the pass runs and checks the cap mid-run", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ indexRows: () => [] }));
+    const r = await runHillclimbCommand(args("--max-budget-usd", "2"), deps({ indexRows: () => [] }));
+    expect(r.exitCode, err.join("\n")).toBe(0);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("the probe's cost is the pass's first spend: a probe over the cap stops the pass before any slot", async () => {
+    await runHillclimbCommand(args("--approve-harness", "--dry-run"), deps({ indexRows: () => [] }));
+    const r = await runHillclimbCommand(
+      args("--max-budget-usd", "2"),
+      deps({ indexRows: idx(1), judgeCheck: async () => ({ lines: [], costUsd: 1.5 }) }),
+    );
+    expect(r).toMatchObject({ exitCode: 1, stopped: { reason: "budget", spentUsd: 1.5, capUsd: 2 } });
+    expect(calls).toHaveLength(0);
+  });
+
+  it("--dry-run prints the cap beside the estimate", async () => {
+    const r = await runHillclimbCommand(args("--dry-run", "--max-budget-usd", "9"), deps({ indexRows: idx(1) }));
+    expect(r.exitCode).toBe(0);
+    expect(err.join("\n")).toMatch(/estimated cost of 1 run\(s\)[\s\S]*--max-budget-usd \$9\.00 \(per pass\)/);
+  });
+});

@@ -619,7 +619,10 @@ describe("schema-check: errors.jsonl rows", () => {
   });
 
   it("an unknown failure class or extra key is a note; bad usage is an error", () => {
-    expectOnly(check(withErr((e) => (e.failure_class = "judge_invalid"))), "note", "error.failure_class");
+    expectOnly(check(withErr((e) => (e.failure_class = "made_up"))), "note", "error.failure_class");
+    // Classes this runner writes are not unknown: a promoted-later judge grade, and a slot the gate command kept.
+    for (const fc of ["judge_invalid", "gate_failed"])
+      expect(check(withErr((e) => (e.failure_class = fc))).findings.filter((f) => f.rule === "error.failure_class")).toEqual([]);
     expectOnly(check(withErr((e) => (e.surprise = 1))), "note", "error.key");
     expectOnly(check(withErr((e) => (e.usage = { inputTokens: 1 }))), "error", "usage.key");
     expectOnly(check(withErr((e) => (e.prompt_id = "a b"))), "error", "error.prompt_id");

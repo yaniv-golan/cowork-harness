@@ -23,7 +23,7 @@ import { join } from "node:path";
 import type { Assertion, RunResult } from "../src/types.js";
 import { buildStats, indexRowFromResult, type RunIndexRow } from "../src/run/run-index.js";
 import { HILLCLIMB_LABEL_PREFIX, loadCostHistory, loadRowHistory, type RowHistoryOptions } from "../src/eval/plan-history.js";
-import { estimateScheduleCost, perRepCost } from "../src/eval/planner.js";
+import { estimateScheduleCost, perRepCost, scheduleCostLine } from "../src/eval/planner.js";
 import { JUDGE_PROMPT_HASH } from "../src/decide/semantic-judge.js";
 import { PAIRWISE_PROMPT_HASH } from "../src/decide/pairwise-judge.js";
 
@@ -729,5 +729,52 @@ describe("loadRowHistory — semantic_pairwise rows", () => {
     const h = loadRowHistory([run(passing(pairwise({ pass: true, promptHash: "0".repeat(16) })))], pwOpts());
     expect(pwRow(h).history).toMatchObject({ n: 0, excluded: { judge_prompt_mismatch: 1 } });
     expect(rowById(h, 0)).toMatchObject({ k: 1, n: 1 });
+  });
+});
+
+describe("loadCostHistory — the nearest baseline stands in when the requested one has no priced run", () => {
+  const B = "3.1623.4";
+  const at = (baseline: string, costUsd: number | undefined, more: Partial<RunIndexRow> = {}) =>
+    run(undefined, { baseline, costUsd, ...more });
+  const load = (rows: RunIndexRow[]) => loadCostHistory(rows, { scenario: SCEN, baseline: B, tier: "container" });
+
+  it("the exact baseline wins whenever it has a priced run", () => {
+    const h = load([at(B, 2), at("3.1600.0", 9), at("3.1700.0", 9)]);
+    expect(h.pricedFromBaseline).toBeUndefined();
+    expect(perRepCost(h).pricedRuns).toBe(1);
+  });
+
+  it("the nearest OLDER baseline is used first, in version order (not string order), and is labelled", () => {
+    // 3.999.0 < 3.1600.0 numerically; 3.1700.0 is newer.
+    const h = load([at("3.999.0", 5), at("3.1600.0", 1), at("3.1600.0", 3), at("3.1700.0", 9), at(B, undefined)]);
+    expect(h.pricedFromBaseline).toBe("3.1600.0");
+    expect(perRepCost(h).pricedRuns).toBe(2);
+    const cost = estimateScheduleCost([{ scenario: SCEN, jobs: 2, history: h }]);
+    expect(cost.lowerBound).toBe(false);
+    expect(cost.items[0].pricedFromBaseline).toBe("3.1600.0");
+    expect(scheduleCostLine(cost)).toContain(`${SCEN} priced from baseline 3.1600.0 (2 run(s))`);
+    expect(scheduleCostLine(cost)).not.toContain("LOWER BOUND");
+  });
+
+  it("only a newer baseline ⇒ the nearest newer", () => {
+    expect(load([at("3.1800.0", 2), at("3.1700.0", 1)]).pricedFromBaseline).toBe("3.1700.0");
+  });
+
+  it("the other filters still apply: another tier, a resumed turn, a hillclimb or frozen-corpus run never stands in", () => {
+    const h = load([
+      at("3.1600.0", 1, { fidelity: "hostloop" }),
+      at("3.1600.0", 1, { turn: 2 }),
+      at("3.1600.0", 1, { runLabel: `${HILLCLIMB_LABEL_PREFIX}flow:v1` }),
+      at("3.1600.0", 1, { searchCorpus: { identity: "x" } as never }),
+    ]);
+    expect(h.pricedFromBaseline).toBeUndefined();
+    const cost = estimateScheduleCost([{ scenario: SCEN, jobs: 1, history: h }]);
+    expect(cost).toMatchObject({ lowerBound: true, unpriced: [SCEN] });
+  });
+
+  it("the pass-rate history keeps its exact-baseline filter", () => {
+    // (control) the same run on the requested baseline is in the window
+    expect(loadRowHistory([run(passing(), { baseline: B })], opts({ baseline: B })).reps).toBe(1);
+    expect(loadRowHistory([run(passing(), { baseline: "3.1600.0" })], opts({ baseline: B })).reps).toBe(0);
   });
 });

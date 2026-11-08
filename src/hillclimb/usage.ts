@@ -31,6 +31,9 @@ export const HILLCLIMB_RUN_VALUE_FLAGS = [
   "--search-corpus",
   "--search-corpus-miss",
   "--search-corpus-min-score",
+  "--gate-cmd",
+  "--gate-timeout",
+  "--max-budget-usd",
 ] as const;
 export const HILLCLIMB_RUN_REPEATED_FLAGS = ["--case"] as const;
 /** `hillclimb regrade`'s own booleans (its value flags are a subset of run's). */
@@ -89,8 +92,8 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
        [--concurrency N] [--timeout-s N (0 = no ceiling)] [--approve-harness] [flags]
        The runner for /claude-api hillclimb: runs every scenario --reps times into <flow>/<variant>/ with the
        runner-scaffold contract (results.jsonl, errors.jsonl, traces/, progress.txt, summary.json). Exit 0 all
-       attempts ok, 1 any failed attempt (search_pool_mismatch and search_refused rows included) or a mid-run stop,
-       2 refused before spending (with --search-corpus: a one-sided, mixed or unreadable pool, rows served from another
+       attempts ok, 1 any failed attempt (search_pool_mismatch, search_refused and gate_failed rows included) or a
+       mid-run stop (a grader failure every later grade would repeat, or --max-budget-usd), 2 refused before spending (with --search-corpus: a one-sided, mixed or unreadable pool, rows served from another
        pool, or a pool copy that cannot be written). See docs/cli.md.
   --flow DIR              flow directory (default .claude/hillclimb/flow)
   --variant ID            'baseline' or 'v<N>' (default baseline)
@@ -126,6 +129,16 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
                           never the baseline's and otherwise needs --allow-mixed-pool
   --allow-mixed-search    run beside rows served from another pool, or searched live (recorded on every row)
   --allow-model-split     run a variant whose rows were served two snapshots of one pin (recorded on every row)
+  --gate-cmd CMD          run CMD (sh -c) once per pass on a throwaway copy of the variant's plugin snapshot, before any
+                          rep (env COWORK_HARNESS_VARIANT_DIR, COWORK_HARNESS_VARIANT_ID); non-zero fails every open
+                          slot as gate_failed with no agent run. Its text joins the harness sha (only its hash is
+                          recorded), so it needs --approve-harness and the same text on every pass
+  --gate-timeout S        seconds before a running gate has failed (default 600)
+  --max-budget-usd X      per-pass cap: no slot starts whose estimate would take this pass's spend, plus the
+                          estimates of slots in flight, past X (exit 1, stopped.reason budget); a slot with no
+                          recorded cost is charged its estimate. Each pass has its own cap. Unlike run and eval,
+                          where the flag is a pre-flight refusal, this stops mid-pass; it refuses before spending
+                          only when even the cheapest open slot's estimate is over X
   --decider-cmd CMD | --decider-dir DIR   answer unscripted questions (one channel; --concurrency 1)
   --output-format text|json   json: one envelope on stdout at exit
   --dotenv FILE  --run-dir DIR   as on every command`;

@@ -63,6 +63,7 @@ import { searchCorpusPreflight } from "../run/execute.js";
 import { loadBaseline } from "../baseline.js";
 import { flowRows, mixedRowsRefusal, otherVariantArms } from "./search-corpus.js";
 import { SNAPSHOT_ROOT_ENV, variantSnapshot } from "./snapshot.js";
+import { caseEstimate, scoredSpendByCase } from "./budget.js";
 
 /** Where variant snapshots live: outside every git work tree, or the stager would mount them empty. */
 export const defaultSnapshotRoot = (): string => join(homedir(), ".cowork-harness", "hillclimb-snapshots");
@@ -152,6 +153,8 @@ export async function runHillclimbCommand<F extends { label?: string; ablateSkil
         const jc = await deps.judgeCheck(graderTargets);
         for (const l of jc.lines) say(`[${args.variant}] ${l}`);
         if (jc.refusal) throw new UsageError(jc.refusal);
+        // The probe is this pass's first spend: --max-budget-usd counts it.
+        if (jc.costUsd !== undefined) runner = { ...runner, budgetStartUsd: jc.costUsd };
       }
     }
   } catch (e) {
@@ -173,6 +176,10 @@ export async function runHillclimbCommand<F extends { label?: string; ablateSkil
   if (!args.dryRun || outcome.remaining === undefined) return outcome;
   const cost = price(outcome.remaining);
   say(`[${args.variant}] ${scheduleCostLine(cost)}`);
+  if (args.maxBudgetUsd !== undefined)
+    say(
+      `[${args.variant}] --max-budget-usd $${args.maxBudgetUsd.toFixed(2)} (per pass): the pass stops before a slot whose estimate would cross it`,
+    );
   say(`[${args.variant}] the estimate ignores the requested model and effort: it prices each scenario's recorded runs, whatever they ran`);
   return { ...outcome, cost: scheduleCostJson(cost) };
 }
@@ -283,7 +290,23 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
   let pluginDir = live;
   let snapRootHandle: NoFollowRoot | undefined;
   {
-    const variantRan = ["results.jsonl", "errors.jsonl"].some((f) => slotsIn(readVariantFileIfPresent(flowArg, v, f, deps.cwd)).size > 0);
+    // A slot the gate command kept from running is not a run: a variant with only `gate_failed` rows takes a new
+    // snapshot, so the plugin fixed after a failed gate is the one its reps run.
+    const ranRows = (f: string): string | null => {
+      const text = readVariantFileIfPresent(flowArg, v, f, deps.cwd);
+      if (f === "results.jsonl" || text === null) return text;
+      return text
+        .split("\n")
+        .filter((line) => {
+          try {
+            return (JSON.parse(line) as { failure_class?: unknown }).failure_class !== "gate_failed";
+          } catch {
+            return line.trim().length > 0;
+          }
+        })
+        .join("\n");
+    };
+    const variantRan = ["results.jsonl", "errors.jsonl"].some((f) => slotsIn(ranRows(f)).size > 0);
     // A live runner of this variant may be mounting its snapshot: never re-take it under that runner.
     const holder = liveLockHolder(flowArg, v, deps.cwd);
     if (holder !== undefined) throw new UsageError(lockHeldMessage(holder, join(flowArg, v, ".lock")));
@@ -534,6 +557,31 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
     );
   };
 
+  // --max-budget-usd: a case's estimate falls back to its worst agent-only run in the index (any baseline).
+  const indexWorst = (c: HillclimbCase): number | undefined => {
+    const baseline = prep.baseline(c);
+    return loadCostHistory(indexRows(), {
+      scenario: c.scenario.name,
+      baseline: baseline.appVersion,
+      tier: effectiveTier(c.scenario.fidelity, baseline),
+    }).budgetGateWorstUsd;
+  };
+  // Refused at $0, before the grader probe, only when every open slot has an estimate and the cheapest is over the
+  // cap: no slot could ever start. Otherwise the pass runs and stops mid-run.
+  if (args.maxBudgetUsd !== undefined && openSlots > 0) {
+    const spends = scoredSpendByCase(readVariantFileIfPresent(flowArg, v, "results.jsonl", deps.cwd));
+    const ests = selected
+      .filter((c) => Array.from({ length: args.reps }, (_, rep) => rep).some((rep) => !scored.has(`${c.id}\0${rep}`)))
+      .map((c) => ({ c, e: caseEstimate(spends.get(c.id), indexWorst(c)) }));
+    if (ests.length && ests.every((x) => x.e.source !== "none")) {
+      const cheapest = ests.reduce((a, b) => (b.e.usd < a.e.usd ? b : a));
+      if (cheapest.e.usd > args.maxBudgetUsd)
+        throw new UsageError(
+          `the --max-budget-usd cap $${args.maxBudgetUsd.toFixed(4)} is below the estimate of every open slot (the cheapest, case ${cheapest.c.id}, is estimated at $${cheapest.e.usd.toFixed(4)}): no slot could start — raise the cap (it is per pass)`,
+        );
+    }
+  }
+
   const runner: Parameters<typeof runHillclimb>[1] = {
     cwd: deps.cwd,
     secrets: deps.secrets,
@@ -609,6 +657,8 @@ function prepare<F extends { label?: string; ablateSkill?: boolean }>(
       : {}),
     authHint: (c) => authFailureHint(c.scenario.fidelity, deps.tokenCheck(c.scenario.fidelity), deps.env),
     expectedContentSig: (c) => sigs.get(c.id),
+    gateSnapshot: pluginDir,
+    ...(args.maxBudgetUsd !== undefined ? { budgetIndexWorstUsd: indexWorst } : {}),
     ...(corpus ? { searchCorpus: corpus.meta } : {}),
     ...(tracked.name !== undefined ? { skillTracked: tracked.id } : {}),
     ...(deps.now ? { now: deps.now } : {}),

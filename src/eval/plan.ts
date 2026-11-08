@@ -403,7 +403,7 @@ export function planText(plan: EvalPlan, o: { tilde?: (p: string) => string; cau
     if (c.priced) {
       const ratio = r.p50Usd && r.worstObservedUsd !== undefined ? ` (worst/p50 ${(r.worstObservedUsd / r.p50Usd).toFixed(1)}×)` : "";
       L.push(
-        `  cost: ${r.pricedRuns} priced run(s)${r.thin ? " (THIN)" : ""} — per run p50 ${usd(r.p50Usd!)} · mean ${usd(r.meanUsd!)} · ` +
+        `  cost: ${c.pricedFromBaseline !== undefined ? `priced from baseline ${c.pricedFromBaseline} (${r.pricedRuns} run(s)): no priced run on baseline ${s.baseline} — ` : ""}${r.pricedRuns} priced run(s)${r.thin ? " (THIN)" : ""} — per run p50 ${usd(r.p50Usd!)} · mean ${usd(r.meanUsd!)} · ` +
           `p95 ${usd(r.p95Usd!)}${r.p95IsMax ? " (= the max: 20 or fewer runs)" : ""} · worst ${usd(r.worstObservedUsd!)}${ratio}`,
       );
     } else
@@ -416,7 +416,8 @@ export function planText(plan: EvalPlan, o: { tilde?: (p: string) => string; cau
       L.push(`  ⚠ the cost history spans ${c.distinctSkillHashes} skill versions: costs from different versions are pooled`);
     const elsewhere = [
       c.excluded.tier ? `${c.excluded.tier} run(s) on other tiers` : "",
-      c.excluded.baseline ? `${c.excluded.baseline} on other baselines` : "",
+      // A basis borrowed from another baseline says so on the cost line instead.
+      c.excluded.baseline && c.pricedFromBaseline === undefined ? `${c.excluded.baseline} on other baselines` : "",
     ].filter(Boolean);
     if (elsewhere.length) L.push(`  left out of the cost basis: ${elsewhere.join(", ")} (the budget gate still counts them)`);
     // stats keeps a frozen-corpus run in its own group, so it never enters the group the hint below names.

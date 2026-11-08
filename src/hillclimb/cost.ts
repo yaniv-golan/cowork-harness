@@ -190,9 +190,9 @@ export interface CostSummary {
   searchFrozen?: string;
 }
 
-type Row = Record<string, unknown> & { meta?: Record<string, unknown> };
+export type Row = Record<string, unknown> & { meta?: Record<string, unknown> };
 
-function parseRows(text: string | null | undefined): Row[] {
+export function parseRows(text: string | null | undefined): Row[] {
   const out: Row[] = [];
   for (const line of (text ?? "").split("\n")) {
     if (!line.trim()) continue;
@@ -242,6 +242,8 @@ export function costSummary(results: string | null | undefined, errors: string |
       .filter(once)
       .map((r) => ({ r, scored: true, cost: num(r.cost_usd), judge: num(r.judge_usd), decider: num(r.decider_usd) })),
     ...parseRows(errors)
+      // A `gate_failed` row records a slot the gate command kept from running: no run, no spend, no billing to count.
+      .filter((r) => r.failure_class !== "gate_failed")
       .filter(once)
       .map((r) => ({ r, scored: false, cost: num(r.meta?.cost_usd), judge: num(r.meta?.judge_usd), decider: num(r.meta?.decider_usd) })),
   ];

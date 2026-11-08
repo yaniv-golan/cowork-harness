@@ -47,7 +47,7 @@ import { loadCases, selectCases, type HillclimbCase } from "./cases.js";
 import { prepareCases } from "./command.js";
 import { FlowWriter, redactDeep } from "./flow.js";
 import { lexists, normalizeRootArg, NoFollowRoot } from "./fs.js";
-import { approvedHarnessSkill, flowHarnessDigest, gateDecision, harnessChangeText } from "./gate.js";
+import { approvedGateSha, approvedHarnessSkill, flowHarnessDigest, gateDecision, harnessChangeText } from "./gate.js";
 import { assertIdentities, assertSig, canonicalJson, flowHasPairwise, type MetricDecl } from "./grade-keys.js";
 import { BASELINE_REF, discoverFlowRefs, flowPairwiseOptions, metricRefNames } from "./pairwise.js";
 import { readRefDoc } from "../refs/store.js";
@@ -1290,6 +1290,8 @@ async function regradeFlowInner(
   const baselineIds = [...new Set(all.map((c) => prep.baseline(c).appVersion))].sort();
   // Hashed under the `--skill` selection the flow was approved with: regrade never changes what skill_invoked tracks.
   const approvedSkill = approvedHarnessSkill(state);
+  // And under the gate command hash it was approved with: regrade never runs the gate, and never changes it.
+  const approvedGate = approvedGateSha(state);
   const digest = flowHarnessDigest({
     cwd: deps.cwd,
     state,
@@ -1298,6 +1300,7 @@ async function regradeFlowInner(
     harnessVersion,
     baselineId: baselineIds.join(","),
     ...(approvedSkill !== undefined ? { skill: approvedSkill } : {}),
+    ...(approvedGate !== undefined ? { gateSha: approvedGate } : {}),
   });
   const decision = gateDecision(state, digest.sha, args.approveHarness);
   if (decision.kind === "absent")
@@ -1793,7 +1796,7 @@ async function regradeFlowInner(
       );
     // Every refusal is decided: record the approval now, so a refused regrade never records one.
     if (decision.kind === "approve") {
-      writers.get(variants[0]!)!.approveHarness(digest.sha, { skill: approvedSkill, files: digest.entries });
+      writers.get(variants[0]!)!.approveHarness(digest.sha, { skill: approvedSkill, gateSha: approvedGate, files: digest.entries });
       say(
         `harness approved: sha256 ${digest.sha.slice(0, 12)} over ${digest.hashed.length} file(s) recorded in ${join(flowArg, "_state.json")}`,
       );

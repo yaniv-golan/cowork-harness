@@ -21,7 +21,15 @@ import { loadCases, selectCases, splitIdNotes, type HillclimbCase } from "./case
 import type { PairwiseDecls } from "./grade-keys.js";
 import { FlowWriter, flowHashOf, redactDeep, slotsIn } from "./flow.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
-import { approvedHarnessSkill, flowHarnessDigest, gateDecision, harnessChangeText, listedInside } from "./gate.js";
+import {
+  approvedGateSha,
+  approvedHarnessSkill,
+  flowHarnessDigest,
+  gateCmdSha,
+  gateDecision,
+  harnessChangeText,
+  listedInside,
+} from "./gate.js";
 import { attemptRow, type AttemptContext } from "./rows.js";
 import { flowMetricUnion, refuseChangedMetrics, removedMetrics, staleAssertSigRows, undeclaredRowMetrics } from "./metric-keys.js";
 import { turnsFromEvents, type ChildTranscript } from "./trace.js";
@@ -36,6 +44,8 @@ import { graderCredentialFailure, type GraderFailure } from "../run/grader-stop.
 import { billingOf, costLine, costSummary, otherModelShareWarning, type Billing } from "./cost.js";
 
 import { ExitRequested, rethrowIfExit } from "../run/exit.js";
+import { gateFailureText, runGateCommand, type GateRunner } from "./gate-cmd.js";
+import { BudgetLedger, BudgetStopError } from "./budget.js";
 /** What one job hands back. */
 export interface JobReport {
   result?: RunResult;
@@ -117,6 +127,14 @@ export interface RunnerDeps {
     lines: string[];
     failures: number;
   };
+  /** The variant's plugin snapshot, which `--gate-cmd` runs against (as a throwaway copy). Required with --gate-cmd. */
+  gateSnapshot?: string;
+  /** Runs the gate command (default: `runGateCommand`); tests inject one. */
+  runGate?: GateRunner;
+  /** With --max-budget-usd: what this pass has already spent before its first slot (the grader probe). */
+  budgetStartUsd?: number;
+  /** With --max-budget-usd: a case's worst agent-only run in the run index, any baseline (the estimate's fallback). */
+  budgetIndexWorstUsd?: (c: HillclimbCase) => number | undefined;
   /** Progress interval; the scaffold uses 30 s. */
   tickMs?: number;
   now?: () => number;
@@ -131,14 +149,19 @@ export interface RunOutcome {
   failed: number;
   /** Rows appended to results.jsonl this pass — an attempt whose later writes failed is still scored. */
   scored?: number;
-  /** Why the pass refused (exit 2) or stopped mid-run (exit 1): the JSON envelope's `error.message`. */
-  error?: { category: "usage" | "runtime"; message: string };
+  /** Why the pass refused (exit 2) or stopped mid-run (exit 1): the JSON envelope's `error.message`. `code` is set on
+   *  a budget stop. */
+  error?: { category: "usage" | "runtime"; message: string; code?: "budget_stopped" };
   /** A dry run's remaining (case, rep) slots per case id — what the pass would run. */
   remaining?: Record<string, number>;
   /** The pass stopped scheduling because a grader (a judge, or the LLM decider) failed the way every later grade
    *  would: a rejected credential, an unknown model or a spent quota. `atJob` is the task's index in this pass's
-   *  schedule; `case` and `rep` name its slot. Exit 1. */
-  stopped?: { reason: "grader_credential"; source: "judge" | "decider"; status?: number; atJob: number; case: string; rep: number };
+   *  schedule; `case` and `rep` name its slot. Exit 1.
+   *  Or the pass stopped on its `--max-budget-usd` cap: `atJob`, `case` and `rep` name the first slot not started,
+   *  `spentUsd` what the pass had spent then (finished slots, the grader probe included). Exit 1. */
+  stopped?:
+    | { reason: "grader_credential"; source: "judge" | "decider"; status?: number; atJob: number; case: string; rep: number }
+    | { reason: "budget"; spentUsd: number; capUsd: number; atJob: number; case: string; rep: number };
 }
 
 // runner-scaffold.mjs l.46-53: strip escape sequences and control characters from anything printed — case ids and error text
@@ -337,7 +360,9 @@ async function run(
   // The harness gate (runner-scaffold.mjs l.238-277). A --skill selection joins the digest as `skill:<name>`: it
   // decides what skill_invoked means, so changing it is a harness change. Without one nothing is added and the sha
   // is the one a flow approved before --skill existed.
-  const digestFor = (skill: string | undefined) =>
+  // A --gate-cmd joins it the same way, as its hash (`<gate-cmd>`): the command decides which variants are measured at all.
+  const gateSha = args.gateCmd !== undefined ? gateCmdSha(args.gateCmd) : undefined;
+  const digestFor = (skill: string | undefined, gate: string | undefined) =>
     flowHarnessDigest({
       cwd: deps.cwd,
       state,
@@ -346,22 +371,30 @@ async function run(
       harnessVersion: deps.virtual.harnessVersion,
       baselineId: deps.virtual.baselineId,
       ...(skill !== undefined ? { skill } : {}),
+      ...(gate !== undefined ? { gateSha: gate } : {}),
     });
-  const digest = digestFor(args.skill);
+  const digest = digestFor(args.skill, gateSha);
   for (const s of digest.skipped) say(`warning: harness path '${s.path}' not readable (${s.code}) - skipped`);
   const decision = gateDecision(state, digest.sha, args.approveHarness);
   // The sha alone cannot name the skill it was approved with: `harness_skill`, recorded beside it on approval,
   // can. Re-hashing under that selection tells a selection-only change from one where the files moved too.
   const approvedSkill = approvedHarnessSkill(state);
+  // Likewise `harness_gate_sha` names the gate command hash it was approved with (never the command's text).
+  const approvedGate = approvedGateSha(state);
   const skillChange = (): { cause: string; filesToo: boolean } | undefined => {
-    if (approvedSkill === args.skill) return undefined;
-    const cause =
-      approvedSkill === undefined
-        ? `--skill added (${args.skill})`
-        : args.skill === undefined
-          ? `--skill removed (was ${approvedSkill})`
-          : `tracked skill ${approvedSkill} → ${args.skill}`;
-    return { cause, filesToo: digestFor(approvedSkill).sha !== state.harness_sha };
+    const causes: string[] = [];
+    if (approvedSkill !== args.skill)
+      causes.push(
+        approvedSkill === undefined
+          ? `--skill added (${args.skill})`
+          : args.skill === undefined
+            ? `--skill removed (was ${approvedSkill})`
+            : `tracked skill ${approvedSkill} → ${args.skill}`,
+      );
+    if (approvedGate !== gateSha)
+      causes.push(approvedGate === undefined ? "--gate-cmd added" : gateSha === undefined ? "--gate-cmd removed" : "--gate-cmd changed");
+    if (!causes.length) return undefined;
+    return { cause: causes.join(", "), filesToo: digestFor(approvedSkill, approvedGate).sha !== state.harness_sha };
   };
   if (args.dryRun && !args.approveHarness) {
     const change = decision.kind === "mismatch" ? skillChange() : undefined;
@@ -372,10 +405,12 @@ async function run(
         ? `${harnessChangeText(state, digest)}; sha256 ${digest.sha.slice(0, 12)}`
         : `sha256 ${digest.sha.slice(0, 12)} over: ${digest.hashed.join(", ")}`;
     say(`harness gate: ${decision.kind === "ok" ? "approved" : decision.kind}${why} (${detail})`);
+    if (args.gateCmd !== undefined) say(`gate command (runs on this host before the variant's reps): ${args.gateCmd}`);
   } else if (decision.kind !== "ok") {
     if (!digest.lockfiles.length) say("note: no lockfile in the current directory - dependency changes are outside the harness sha");
     if (decision.kind === "approve") {
-      w!.approveHarness(digest.sha, { skill: args.skill, files: digest.entries });
+      w!.approveHarness(digest.sha, { skill: args.skill, gateSha, files: digest.entries });
+      if (args.gateCmd !== undefined) say(`gate command (runs on this host before the variant's reps): ${args.gateCmd}`);
       say(`harness approved: sha256 ${digest.sha.slice(0, 12)} over ${digest.hashed.length} file(s) recorded in ${statePathShown}`);
     } else if (decision.kind === "absent") {
       const m = `no approved harness sha in ${statePathShown} (computed ${digest.sha.slice(0, 12)} over: ${digest.hashed.join(", ")}).`;
@@ -422,6 +457,66 @@ async function run(
     }
 
     const writer = w!;
+    // The gate command: once per pass, before any rep, on a throwaway copy of the variant's snapshot. A failure writes
+    // one `gate_failed` row per open slot (error slots re-run on every pass, so a fixed gate resumes them) and runs
+    // nothing. It spent nothing, so every row records $0.
+    if (args.gateCmd !== undefined && tasks.length > 0) {
+      if (deps.gateSnapshot === undefined) throw new Error("--gate-cmd needs the variant's plugin snapshot");
+      const g = await (deps.runGate ?? runGateCommand)({
+        cmd: args.gateCmd,
+        snapshot: deps.gateSnapshot,
+        variant: v,
+        timeoutS: args.gateTimeoutS,
+      });
+      if (!g.ok) {
+        const text = gateFailureText(g, args.gateTimeoutS);
+        for (const { c, rep } of tasks)
+          writer.appendError({
+            prompt_id: c.id,
+            rep,
+            ...(c.originalId !== undefined ? { original_id: c.originalId } : {}),
+            failure_class: "gate_failed",
+            error: text,
+            retries: 0,
+            judge_retries: 0,
+            latency_s: g.wallS,
+            meta: {
+              cost_usd: 0,
+              gate_exit: g.code,
+              ...(g.signal ? { gate_signal: g.signal } : {}),
+              ...(g.timedOut ? { gate_timed_out: true } : {}),
+              gate_tail: g.tail,
+              ...(sigOf(c) !== undefined ? { content_sig: sigOf(c)! } : {}),
+            },
+          });
+        for (const line of g.tail.trimEnd().split("\n").slice(-5)) if (line) say(`  [${v}] gate: ${line}`);
+        const m = `[${v}] ${text}: ${tasks.length} slot(s) recorded as gate_failed in ${join(flowArg, v, "errors.jsonl")}; fix the plugin and run the pass again`;
+        say(m);
+        try {
+          for (const line of writeCostSummary(writer, v)) say(line);
+        } catch (e) {
+          rethrowIfExit(e);
+          say(`[${v}] writing summary.json failed: ${message(e)}`);
+        }
+        return { exitCode: 1, scheduled: tasks.length, ok: 0, failed: tasks.length, scored: 0, error: { category: "runtime", message: m } };
+      }
+      say(`[${v}] gate command passed (${g.wallS}s)`);
+    }
+    const budget =
+      args.maxBudgetUsd !== undefined
+        ? new BudgetLedger(
+            args.maxBudgetUsd,
+            {
+              ...(deps.budgetStartUsd !== undefined ? { startUsd: deps.budgetStartUsd } : {}),
+              results,
+              indexWorstUsd: (id) => {
+                const c = cases.find((x) => x.id === id);
+                return c ? deps.budgetIndexWorstUsd?.(c) : undefined;
+              },
+            },
+            (line) => say(`[${v}] ${line}`),
+          )
+        : undefined;
     let ok = 0;
     let scored = 0;
     // `fail` counts failed slots only; a step after the pool that fails (the reference freeze, summary.json) fails the
@@ -457,8 +552,31 @@ async function run(
     try {
       await pMapBounded(tasks, args.concurrency, async ({ c, rep }, i) => {
         if (stopError !== undefined) return;
+        // The cap: admitted only when spent + the in-flight slots' estimates + this slot's stays within it. A slot that
+        // finished over it (an unestimated one) stops the next, which is the first not started.
+        let reserved = 0;
+        if (budget) {
+          const r = budget.admit(c.id);
+          if (r === undefined) {
+            stopped = {
+              reason: "budget",
+              spentUsd: Math.round(budget.spent * 1e6) / 1e6,
+              capUsd: budget.capUsd,
+              atJob: i,
+              case: c.id,
+              rep,
+            };
+            stopError = new BudgetStopError(
+              `the pass ${budget.text()}, and case ${c.id} rep${rep} (estimated $${budget.estimate(c.id).toFixed(4)}) would cross it ` +
+                `with the slots still running; the cap is per pass: raise it, or re-run (each pass has its own cap)`,
+            );
+            return;
+          }
+          reserved = r;
+        }
         try {
-          const f = await oneTask(c, rep);
+          const { graderFailure: f, written } = await oneTask(c, rep);
+          budget?.settle(c.id, reserved, written);
           // A grader every later grade would fail on: no later task starts (the row this one wrote is kept).
           if (f !== undefined && stopError === undefined) {
             stopped = {
@@ -476,6 +594,7 @@ async function run(
           }
         } catch (e) {
           // exit-safe: captured, and rethrown below once the in-flight jobs have finished
+          budget?.settle(c.id, reserved, undefined);
           stopError ??= e;
         }
       });
@@ -490,20 +609,34 @@ async function run(
     }
     if (stopError !== undefined) {
       progress();
-      const m = `stopped mid-run (rows already written are kept; re-run to resume): ${message(stopError)}`;
+      const onBudget = stopError instanceof BudgetStopError;
+      const m = onBudget
+        ? `stopped mid-run (rows already written are kept): ${message(stopError)}`
+        : `stopped mid-run (rows already written are kept; re-run to resume): ${message(stopError)}`;
       say(m);
+      // The spend the stopped pass did make, in summary.json as on a finished pass.
+      try {
+        for (const line of writeCostSummary(writer, v)) say(line);
+      } catch (e) {
+        rethrowIfExit(e);
+        say(`[${v}] writing summary.json failed: ${message(e)}`);
+      }
       return {
         exitCode: 1,
         scheduled: tasks.length,
         ok,
         failed: fail,
         scored,
-        error: { category: "runtime", message: m },
+        error: { category: "runtime", message: m, ...(onBudget ? { code: "budget_stopped" as const } : {}) },
         ...(stopped !== undefined ? { stopped } : {}),
       };
     }
-    /** Runs one attempt and writes its row; returns a grader failure every later grade would repeat, if it saw one. */
-    async function oneTask(c: HillclimbCase, rep: number): Promise<GraderFailure | undefined> {
+    /** Runs one attempt and writes its row; returns a grader failure every later grade would repeat, if it saw one,
+     *  and the row it wrote (the budget charges it). */
+    async function oneTask(
+      c: HillclimbCase,
+      rep: number,
+    ): Promise<{ graderFailure: GraderFailure | undefined; written?: { row: Record<string, unknown>; scored: boolean } }> {
       const tStart = now();
       let report: JobReport;
       try {
@@ -600,7 +733,7 @@ async function run(
           judgeAuthHinted = true;
           say(`  [${v}] ${graderCredentialHint()}`);
         }
-        return graderFailure;
+        return { graderFailure, written: { row: out.row as Record<string, unknown>, scored: false } };
       }
       // The session's uploads: attached to the row now, copied after it (unless --no-copy-inputs).
       const uploads = deps.inputs?.(c) ?? [];
@@ -643,6 +776,7 @@ async function run(
       }
       writer.appendResult(out.row);
       scored++;
+      const written = { row: out.row as Record<string, unknown>, scored: true };
       if (typeof out.row.model === "string") models.add(out.row.model);
       // Past this point the attempt is scored: a failed post-row write counts as failed but writes no error
       // row, which would double-count its spend (runner-scaffold.mjs l.529, 541-548).
@@ -659,7 +793,7 @@ async function run(
         fail++;
         say(`  [${v}] ${c.stem} rep${rep} scored, but a post-row write failed: ${message(e)}`);
       }
-      return graderFailure;
+      return { graderFailure, written };
     }
     progress();
     // The variant's scored rows, this pass's included, must come from one model per pin: the pre-spend refusal sees only
@@ -692,6 +826,7 @@ async function run(
       writer.setSummaryKeys(requestedSummary(writer.readVariantFile("results.jsonl")));
       // The variant's spend: printed before the `done` line, which stays the pass's last line (the scaffold's).
       for (const line of writeCostSummary(writer, v)) say(line);
+      if (budget) say(`[${v}] budget: the pass ${budget.text()}`);
       if (v === "baseline") for (const line of headroom(loadFlowSnapshot(flowAbs), all).warnings) say(line);
     } catch (e) {
       rethrowIfExit(e);

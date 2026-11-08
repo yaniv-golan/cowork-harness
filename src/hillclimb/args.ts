@@ -60,8 +60,18 @@ export interface HillclimbRunArgs {
   allowModelSplit: boolean;
   /** `--no-judge-check` (or COWORK_HARNESS_JUDGE_CHECK=0): skip the pre-spend grader credential check. */
   noJudgeCheck: boolean;
+  /** `--gate-cmd`: a shell command run once per pass, on a throwaway copy of the variant's snapshot, before any rep is
+   *  scheduled; non-zero fails every open slot (`gate_failed`). Only from the command line: never read from a file. */
+  gateCmd?: string;
+  /** `--gate-timeout`, seconds (default 600): a gate still running then has failed. */
+  gateTimeoutS: number;
+  /** `--max-budget-usd`: this pass stops before a slot whose estimate would take its committed spend past the cap. */
+  maxBudgetUsd?: number;
   globals: Array<{ flag: "--dotenv" | "--run-dir"; value: string }>;
 }
+
+/** `--gate-timeout`'s default, seconds. */
+export const HILLCLIMB_GATE_TIMEOUT_S = 600;
 
 const VALUE = new Set<string>(HILLCLIMB_RUN_VALUE_FLAGS);
 const REPEATED = new Set<string>(HILLCLIMB_RUN_REPEATED_FLAGS);
@@ -189,7 +199,20 @@ export function parseHillclimbRunArgs(argv: readonly string[]): HillclimbRunArgs
     allow: [...(allowConfoundedPool ? ["--allow-confounded-pool"] : []), ...(allowMixedPool ? ["--allow-mixed-pool"] : [])],
   });
   if (scDependent) throw new UsageError(scDependent);
+  const gateCmd = values["--gate-cmd"];
+  if (values["--gate-timeout"] !== undefined && gateCmd === undefined) throw new UsageError("--gate-timeout requires --gate-cmd");
+  const gateTimeoutS = values["--gate-timeout"] !== undefined ? int1("--gate-timeout", values["--gate-timeout"]) : HILLCLIMB_GATE_TIMEOUT_S;
+  let maxBudgetUsd: number | undefined;
+  if (values["--max-budget-usd"] !== undefined) {
+    const v = values["--max-budget-usd"];
+    const n = Number(v);
+    if (!Number.isFinite(n) || n <= 0) throw new UsageError(`--max-budget-usd requires a dollar amount > 0 (got "${v}")`);
+    maxBudgetUsd = n;
+  }
   return {
+    ...(gateCmd !== undefined ? { gateCmd } : {}),
+    gateTimeoutS,
+    ...(maxBudgetUsd !== undefined ? { maxBudgetUsd } : {}),
     help: false,
     target: positionals[0],
     ...(values["--search-corpus"] !== undefined
