@@ -55,6 +55,99 @@ const NON_GATING: Record<string, string> = {
   "parity-drift": "watches upstream Desktop; drift is news about the world, not a defect in the PR",
 };
 
+describe("the hang budgets of the sharded test jobs", () => {
+  interface TimedStep {
+    name?: string;
+    run?: string;
+    env?: Record<string, string>;
+    with?: Record<string, string>;
+    "timeout-minutes"?: number;
+  }
+  const budget = (id: string, preVitestS: number) => {
+    const job = ci().jobs?.[id] as (Omit<Job, "steps"> & { "timeout-minutes"?: number; steps: TimedStep[] }) | undefined;
+    const runs = job!.steps.map((s) => s.run ?? "");
+    const arm = runs.join("\n").match(/HANG_DUMP_GDB_BUDGET=(\d+) nohup scripts\/ci\/hang-dump\.sh (\d+) /);
+    const stepOf = job!.steps.find((s) => /--kill-after=\d+s \d+ npx vitest run/.test(s.run ?? ""));
+    const kill = stepOf?.run?.match(/--kill-after=(\d+)s (\d+) npx vitest run/);
+    const n = {
+      gdbS: Number(arm?.[1]),
+      dumpS: Number(arm?.[2]),
+      killAfterS: Number(kill?.[1]),
+      vitestS: Number(kill?.[2]),
+      stepS: Number(stepOf?.["timeout-minutes"]) * 60,
+      jobMin: Number(job?.["timeout-minutes"]),
+    };
+    for (const [k, v] of Object.entries(n)) expect(Number.isFinite(v), `${id}: ${k} could not be read`).toBe(true);
+    return { ...n, preVitestS };
+  };
+
+  // Seconds of typecheck and build ahead of vitest in the same step, allowed for generously.
+  it.each([
+    ["test", 0],
+    ["floor", 60],
+  ])("%s: the dump ends before the kill, the kill before the step limit, and the step before the job limit", (id, pre) => {
+    const b = budget(id, pre);
+    // Armed before the step, so the dump's clock starts no later than vitest's.
+    expect(b.dumpS + b.gdbS).toBeLessThan(b.vitestS);
+    expect(b.preVitestS + b.vitestS + b.killAfterS).toBeLessThan(b.stepS);
+    // setup incl. gdb install 3 + step + disarm 1 + upload 1
+    expect(3 + b.stepS / 60 + 1 + 1).toBeLessThanOrEqual(b.jobMin);
+  });
+
+  it("floor runs every shard to its end, and names the shard count it splits by", () => {
+    const job = ci().jobs?.floor as unknown as { strategy: { "fail-fast": boolean; matrix: { shard: number[] } }; steps: TimedStep[] };
+    expect(job.strategy["fail-fast"]).toBe(false);
+    const n = job.strategy.matrix.shard.length;
+    expect(job.strategy.matrix.shard).toEqual(Array.from({ length: n }, (_, i) => i + 1));
+    const shardStep = job.steps.find((s) => (s.run ?? "").includes("--shard="));
+    expect(shardStep?.run).toContain(`--shard=\${{ matrix.shard }}/${n} `);
+    expect(shardStep?.name).toContain(`shard \${{ matrix.shard }}/${n}`);
+  });
+
+  // Hang dumps written anywhere else are outside the uploaded artifact, so a captured hang would be lost silently.
+  it.each([
+    ["ci.yml", "test"],
+    ["ci.yml", "floor"],
+    ["floor-unsharded.yml", "floor-unsharded"],
+  ])("%s, %s: the suite watchdog, the job-level dump and the upload share one directory", (file, id) => {
+    const HANG_DIR = "${{ runner.temp }}/hangs";
+    const job = workflows().find((w) => w.file === file)!.doc.jobs?.[id] as unknown as { steps: TimedStep[] };
+    const vitest = job.steps.find((s) => /npx vitest run/.test(s.run ?? ""));
+    expect(vitest?.env?.COWORK_TEST_HANG_DIR).toBe(HANG_DIR);
+    expect(job.steps.map((s) => s.run ?? "").join("\n")).toMatch(/scripts\/ci\/hang-dump\.sh \d+ "\$RUNNER_TEMP\/hangs"/);
+    const upload = job.steps.find((s) => (s.with?.name ?? "").startsWith("hangs-"));
+    expect(upload?.with?.path).toBe(HANG_DIR);
+  });
+});
+
+describe("floor-unsharded.yml, the main-only capture run", () => {
+  const doc = () =>
+    workflows().find((w) => w.file === "floor-unsharded.yml")!.doc as Workflow & {
+      on: { workflow_dispatch?: unknown; pull_request?: unknown };
+      concurrency?: unknown;
+    };
+  const text = () => readFileSync(join(WF_DIR, "floor-unsharded.yml"), "utf8");
+
+  it("runs on pushes to main and by hand, never on a PR, and is never cancelled by a later push", () => {
+    expect(doc().on.push?.branches).toEqual(["main"]);
+    expect(doc().on).toHaveProperty("workflow_dispatch");
+    expect(doc().on).not.toHaveProperty("pull_request");
+    expect(doc().concurrency).toBeUndefined();
+  });
+
+  it("is unsharded, on the engines floor, and keeps its hang and timing artifacts", () => {
+    expect(text()).toContain('node-version: "22"');
+    expect(text()).not.toContain("--shard");
+    expect(text()).toContain("scripts/ci/hang-dump.sh");
+    expect(text()).toMatch(/name: hangs-floor$/m);
+    expect(text()).toMatch(/name: timing-floor$/m);
+  });
+
+  it("is outside what the publish gate reads", () => {
+    expect(readFileSync(join(".github", "actions", "require-ci-success", "action.yml"), "utf8")).toContain("--workflow=ci.yml");
+  });
+});
+
 describe("ci.yml merge gating", () => {
   it("has a job named for each required ruleset context", () => {
     const names = Object.values(ci().jobs ?? {}).map((j) => j?.name);

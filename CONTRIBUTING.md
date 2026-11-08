@@ -30,8 +30,8 @@ CI Stage 1 (the `build` job in `.github/workflows/ci.yml`) does **not** invoke `
 gate steps individually — e.g. `check:versions`, `check:skill-doc-links`, `format:check`, `typecheck`, `build`, a CLI smoke
 (`node dist/cli.js list`), three token-free `replay` gate fixtures, `verify-cassettes`, `lint`, and
 source-guard checks — while the unit suite runs separately as the 4-shard `test` job (see `ci.yml` for
-the authoritative list). `npm run ci` runs in the `floor` job (on Node 22), in `release.yml`, and as
-`prepublishOnly`. For a copy-paste GitHub Actions setup,
+the authoritative list). `npm run ci` runs in `release.yml` and as `prepublishOnly`; the `floor` job (on Node 22) runs its three steps
+with extra reporters. For a copy-paste GitHub Actions setup,
 see [ci-recipe.md](./.claude/skills/cowork-harness/references/ci-recipe.md).
 
 > **Cutting a release?** See [RELEASING.md](./RELEASING.md) for the branch → PR → tag → publish flow.
@@ -140,7 +140,8 @@ The provided [GitHub Actions workflow](https://github.com/yaniv-golan/cowork-har
 |---|---|---|---|
 | **build** | format check · version-lockstep guard · typecheck · source guards · build · CLI smoke · token-free `replay` · `verify-cassettes` · `lint` | nothing | every push/PR |
 | **test** | the unit suite (vitest), sharded 4-way. If a test step fails or reaches its own time limit, its log and any hang dumps are uploaded as an artifact (`hangs-shard-N`); the floor and release jobs do the same. A runner that stops responding uploads nothing | nothing | every push/PR |
-| **floor** | the unit suite once, unsharded, on Node 22 — the version `engines.node` declares — so the floor is exercised rather than asserted (other jobs run Node 24, the Active LTS line) | nothing | every push/PR; gates the merge context |
+| **floor** | the unit suite, sharded 6-way, on Node 22 — the version `engines.node` declares — so the floor is exercised rather than asserted (other jobs run Node 24, the Active LTS line). Each shard uploads `hangs-floor-shard-N` when its test step does not pass and `timing-floor-shard-N` when it does | nothing | every push/PR; gates the merge context |
+| **floor-unsharded** (its own workflow, `floor-unsharded.yml`) | the unit suite once, unsharded, on Node 22, uploading `hangs-floor` or `timing-floor`. It watches for a hang that needs the whole suite in one process, and blocks nothing: the publish gate reads only `ci.yml`'s run | nothing | pushes to main, and by hand |
 | **metric-runtimes** | the command-metric runtimes at their floors: every shipped Python metric file compiles on 3.9, the Python runner's audit hook and the closure tests run on 3.9, and the Node permission tests run on 22.12 (the `--experimental-permission` branch) | nothing | every push/PR; gates the merge context |
 | **action-self-test** | packs this commit and runs the packaged `uses: ./` Action across its full case set — pass (committed example cassette), usage-error fail (nonexistent path), assertion fail (checks the reporter renders a ❌ row), `lint`, and `analyze-skill`; `ci.yml` currently runs the packaged action **5** times (3 × `replay`, then `lint` and `analyze-skill`) — count the `with: command:` keys, not a bare `grep -c 'command:'`, which also matches step names and log strings | nothing | every push/PR |
 | **python** | `pytest` helper self-checks (`python/`, run with `-m 'not cowork'` — the token-free subset; the Docker/token `@pytest.mark.cowork` tests are excluded) | nothing (token-free assertions only) | every push/PR; gates the merge (its job name is the second required context) |
