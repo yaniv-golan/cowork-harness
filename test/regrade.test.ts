@@ -994,6 +994,11 @@ describe("regrade: refusals (exit 2), all before any judge call", () => {
     const judge = judgeFactory(() => true);
     const out = await regradeRuns(opts(k, { makeJudge: judge.make, judgeModel: "opus" }));
     expect(out).toMatchObject({ ok: false, kind: "usage" });
+    // A rolling alias too: it can roll to a new snapshot between re-grades.
+    expect(await regradeRuns(opts(k, { makeJudge: judge.make, judgeModel: "claude-3-5-sonnet-latest" }))).toMatchObject({
+      ok: false,
+      kind: "usage",
+    });
     const perAssert = await regradeRuns({
       runDirs: [k.runDir],
       scenarioFile: scenarioAt(

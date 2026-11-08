@@ -966,6 +966,11 @@ describe("--case: per-case checks cover the selected cases only", () => {
   for (const [what, opts, refusal] of [
     ["an alias model pin", { session: `model: sonnet\nplugins:\n  local_plugins:\n    - PLUGIN\n` }, /CONCRETE agent model/],
     [
+      "a rolling alias model pin",
+      { session: `model: claude-sonnet-4-0\nplugins:\n  local_plugins:\n    - PLUGIN\n` },
+      /CONCRETE agent model/,
+    ],
+    [
       "a missing upload",
       { session: `model: ${MODEL}\nuploads:\n  - ./no-such-upload.txt\nplugins:\n  local_plugins:\n    - PLUGIN\n` },
       /case beta: .*no-such-upload/,

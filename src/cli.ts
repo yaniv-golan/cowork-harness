@@ -230,6 +230,7 @@ import {
 import { planText, type EvalPlan } from "./eval/plan.js";
 import { makeEvalJobRunner, type ScenarioRunner } from "./eval/job-runner.js";
 import { writeEvalReport, REPORT_MD } from "./eval/report.js";
+import { StoppedFileError } from "./eval/stopped.js";
 import {
   MatrixFile,
   expandMatrix,
@@ -2408,6 +2409,7 @@ async function cmdEval(rawArgs: string[]) {
     if (e instanceof EvalStagingError || e instanceof BoundaryError)
       return fail("eval", "boundary", (e as Error).message, undefined, json, 3, undefined, payload);
     if (e instanceof UsageError) return fail("eval", "usage", e.message, e.hint, json, undefined, undefined, payload);
+    if (e instanceof StoppedFileError) return fail("eval", "runtime", e.message, undefined, json, 1, undefined, payload);
     throw e;
   };
   const emit = (evalDir: string, report: ReturnType<typeof writeEvalReport>, text: string) => {
@@ -2425,7 +2427,13 @@ async function cmdEval(rawArgs: string[]) {
       return failFor(e);
     }
     for (const g of r.globals) applyCommandGlobal("eval", g.flag, g.value, json);
-    const report = writeEvalReport(r.evalDir);
+    let report: ReturnType<typeof writeEvalReport>;
+    try {
+      report = writeEvalReport(r.evalDir);
+    } catch (e) {
+      rethrowIfExit(e);
+      return failFor(e);
+    }
     return emit(r.evalDir, report, readFileSync(join(r.evalDir, REPORT_MD), "utf8"));
   }
   let parsed: ReturnType<typeof parseEvalArgs>;

@@ -1248,6 +1248,9 @@ async function regradeFlowInner(
   const preLock = new Map(variants.map((v) => [v, readVariantFileIfPresent(flowArg, v, "results.jsonl", deps.cwd) ?? ""]));
   // errors.jsonl too: a judge_invalid row is promoted from it, and it is rewritten.
   const preLockErrors = new Map(variants.map((v) => [v, readVariantFileIfPresent(flowArg, v, "errors.jsonl", deps.cwd) ?? ""]));
+  // Reads results.jsonl only: a regrade whose one judge work is promoting a judge_invalid slot decides false here, and
+  // the post-lock isolation check (before any judge call) covers it, so nothing is spent unchecked; only the
+  // pre-lock ordering of that refusal is lost.
   const willJudge = (): boolean => {
     for (const [v, text] of preLock)
       for (const raw of text.split("\n")) {

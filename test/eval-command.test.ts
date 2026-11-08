@@ -1566,6 +1566,35 @@ describe.skipIf(!existsSync(CLI))("eval: the CLI wrapper", () => {
     expect(r.status, r.stderr).toBe(2);
     expect(JSON.parse(r.stdout)).toMatchObject({ command: "eval", ok: false, error: { category: "usage" } });
   });
+
+  it.each(["claude-3-5-sonnet-latest", "claude-sonnet-4-0"])("a rolling alias pin (%s) is refused before any run: exit 2", (model) => {
+    const { scen, a, b } = setup();
+    const r = spawnSync(
+      "node",
+      [CLI, "eval", scen, "--arm", a, "--arm", b, "--model", model, "--out", join(root, "e"), "--output-format", "json"],
+      {
+        encoding: "utf8",
+        cwd: root,
+      },
+    );
+    expect(r.status, r.stderr).toBe(2);
+    expect(JSON.parse(r.stdout)).toMatchObject({ command: "eval", ok: false, error: { category: "usage" } });
+    expect(existsSync(join(root, "e"))).toBe(false);
+  });
+
+  it("`eval report` over a stopped.json it cannot read: exit 1 with a runtime error naming the file, never a crash", async () => {
+    const { scen, a, b } = setup();
+    const out = await runEval(args(scen, a, b), deps(fakeRunner()));
+    writeFileSync(join(out.evalDir, "stopped.json"), "{not json");
+    const r = spawnSync("node", [CLI, "eval", "report", out.evalDir, "--output-format", "json"], { encoding: "utf8", cwd: root });
+    expect(r.status, r.stderr).toBe(1);
+    expect(r.stderr).not.toMatch(/\n\s+at /); // no stack trace
+    expect(JSON.parse(r.stdout)).toMatchObject({
+      command: "eval",
+      ok: false,
+      error: { category: "runtime", message: expect.stringContaining("stopped.json is not a stop record") },
+    });
+  });
 });
 
 describe("eval: the run id carries nothing about the eval or the arm", () => {
@@ -2285,6 +2314,21 @@ describe("eval: a grader failure every later grade would repeat stops the schedu
     expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).toContain("the eval stopped after job");
   });
 
+  it("at --concurrency 2, no job after the one beside the failed job starts", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    const calls: EvalJobSpec[] = [];
+    const out = await runEval(
+      args(scen, a, b, ["--judge-model", "claude-opus-4-8", "--concurrency", "2"]),
+      deps(fakeRunner(failAt(1, judge401(401)), calls)),
+    );
+    const at = out.report.stoppedEarly?.atJob;
+    expect(at).toBeTypeOf("number");
+    // Jobs 0..atJob started in schedule order; at most one more was already in flight beside it.
+    expect(calls.length).toBeLessThanOrEqual(at! + 2);
+    expect(calls.length).toBeLessThan(JOBS);
+    expect(out.report.summary.exitCode).toBe(1);
+  });
+
   it.each([
     [403, undefined],
     [404, undefined],
@@ -2405,6 +2449,69 @@ describe("eval: the served model", () => {
     expect(md).toMatch(/pinned \S+ · served claude-other-9/);
     expect(md).toContain("Every rep of arm after");
     expect(md).toContain("was excluded");
+    // Another model was served: the hint is to pin what the agent reports, not a stale-verdict note.
+    expect(md).not.toContain("by an earlier version");
+  });
+
+  it("a rep stamped model_mismatch though its served id matches the pin (an earlier version's verdict): re-run, never re-pin", async () => {
+    const { scen, a, b } = setup();
+    // The session pins claude-sonnet-5; the rep records its dated snapshot and the old stamp.
+    const out = await runEval(
+      args(scen, a, b),
+      deps(fakeRunner((s, r) => (s.job.arm === "after" ? { ...r, models: ["claude-sonnet-5-20251001"], modelPinHonored: false } : r))),
+    );
+    expect(out.report.summary.exitCode).toBe(1);
+    const md = readFileSync(join(out.evalDir, "report.md"), "utf8");
+    expect(md).toContain("pinned claude-sonnet-5 · served claude-sonnet-5-20251001 — the served id matches the pin");
+    expect(md).toContain("by an earlier version");
+    expect(md).not.toContain("pin the id the agent reports");
+  });
+
+  // Every rep of one arm judge_invalid from a cause that does not stop the eval (a 500): no judged row was graded on
+  // that arm, so the scenario compared nothing, while the other scenario compared fine.
+  it("every rep of one arm judge_invalid (500) in one scenario: compared nothing, exit 1, the other scenario unaffected", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    const inv = (r: RunResult): RunResult => ({
+      ...r,
+      assertions: r.assertions.map((x) =>
+        x.assertion.semantic_matches
+          ? { ...x, pass: false, judgeInvalid: true, judgeError: { kind: "call" as const, status: 500, message: "API 500" } }
+          : x,
+      ),
+    });
+    const out = await runEval(
+      args(scen, a, b),
+      deps(fakeRunner((s, r) => (s.job.arm === "after" && s.scenario.name === "smoke-semantic-evidence-files" ? inv(r) : r))),
+    );
+    expect(out.report.stoppedEarly).toBeNull();
+    expect(out.report.summary.erroredArms).toEqual([
+      expect.objectContaining({ arm: "after", scenario: "smoke-semantic-evidence-files", rowsInsufficient: true }),
+    ]);
+    expect(out.report.summary.exitCode).toBe(1);
+    expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).toContain("had no valid judge grade");
+  });
+
+  it("(control) one rep of that arm with a valid judge grade keeps the scenario compared", async () => {
+    const { scen, a, b } = setup({ semantic: true });
+    let n = 0;
+    const out = await runEval(
+      args(scen, a, b),
+      deps(
+        fakeRunner((s, r) =>
+          s.job.arm === "after" && s.scenario.name === "smoke-semantic-evidence-files" && n++ > 0
+            ? {
+                ...r,
+                assertions: r.assertions.map((x) =>
+                  x.assertion.semantic_matches
+                    ? { ...x, pass: false, judgeInvalid: true, judgeError: { kind: "call" as const, status: 500, message: "API 500" } }
+                    : x,
+                ),
+              }
+            : r,
+        ),
+      ),
+    );
+    expect(out.report.summary.erroredArms).toEqual([]);
   });
 
   it("every rep of one arm excluded for a skill drift: compared nothing (exit 1)", async () => {

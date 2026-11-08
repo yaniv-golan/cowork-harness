@@ -8,6 +8,15 @@ import { join } from "node:path";
 
 export const STOPPED_FILE = "stopped.json";
 
+/** A `stopped.json` that does not parse as a stop record: the report cannot say why the eval stopped, so it is not
+ *  built (the command exits 1 with this message) rather than read as an ordinary unfinished eval. */
+export class StoppedFileError extends Error {
+  constructor(path: string) {
+    super(`${path} is not a stop record this version can read: restore it, or delete it to report the eval as unfinished without a reason`);
+    this.name = "StoppedFileError";
+  }
+}
+
 export interface StoppedEarly {
   /** A grader (a judge, or the LLM decider) failed the way every later grade would: a rejected credential (401/403),
    *  an unknown model (404) or a spent usage quota. */
@@ -41,5 +50,5 @@ export function readStopped(evalDir: string): StoppedEarly | null {
   } catch {
     /* fall through */
   }
-  throw new Error(`${p} is not a stop record this version can read`);
+  throw new StoppedFileError(p);
 }

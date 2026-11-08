@@ -277,13 +277,12 @@ export function costSummary(results: string | null | undefined, errors: string |
     scoredCostRows: scoredCosts.length,
     costBases,
     ...(() => {
+      // The same run-deduplicated rows as the totals: a promotion interrupted between its two writes leaves one run
+      // in both files, counted once.
       const frozen = searchCorpusCostClause(
-        [
-          ...parseRows(results).map((r) => ({ r, file: "results" as const })),
-          ...parseRows(errors).map((r) => ({ r, file: "errors" as const })),
-        ].map(({ r, file }) => ({
+        rows.map(({ r, scored }) => ({
           variant: "",
-          file,
+          file: scored ? ("results" as const) : ("errors" as const),
           caseId: "",
           meta: isObj(r.meta) ? r.meta : {},
           ...(typeof r.failure_class === "string" ? { failureClass: r.failure_class } : {}),

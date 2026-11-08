@@ -178,7 +178,10 @@ export const HILLCLIMB_REGRADE_USAGE = `usage: hillclimb regrade <scenario.yaml 
        anyway, recorded as scrubAcceptedBy. Neither --rejudge nor --allow-doc-drift implies it.
        An edit inside a scrubbed literal cannot be applied: that row is listed until the case is re-run.
        --rejudge: re-judge every judged assert. --fill-refs: only the pairwise comparisons a row lacks are judged (a
-       reference frozen after it), so pass cannot move and every row carries every win column. Gated like run. Exit 0
+       reference frozen after it), so pass cannot move and every row carries every win column.
+       A judge_invalid errors.jsonl slot whose row carries its results row (written by 5.0 or later) is re-judged on
+       every judged assert (not under --fill-refs) and, when valid, moved into results.jsonl (counted as promoted); any
+       other is listed with the hillclimb run that re-runs it. Gated like run. Exit 0
        rewritten or nothing to do, 1 some rows listed (not re-graded) or a failure after the first judge call, 2 refused
        before any judge call.`;
 

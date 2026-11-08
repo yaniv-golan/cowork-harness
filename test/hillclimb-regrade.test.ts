@@ -437,6 +437,44 @@ describe.runIf(POSIX)("hillclimb regrade (in-process)", () => {
       expect(summaryCost(flow)).toBeCloseTo(0.25);
     }, 180_000);
 
+    it("an earlier attempt's judge_invalid row at a filled slot (another run) survives the rewrite byte for byte, its cost counted", async () => {
+      const { flow } = buildFlow({ reps: 2 });
+      toJudgeInvalid(flow, 1);
+      // Rep 0 is filled by its results row; this row is an earlier attempt at that slot, from a different run.
+      const earlier =
+        JSON.stringify({
+          prompt_id: "alpha",
+          rep: 0,
+          failure_class: "judge_invalid",
+          error: "judge call failed on assertion(s) 1 (API 500): no grade was made",
+          retries: 0,
+          meta: { run_id: "earlier-attempt", cost_usd: 0.5, failure_rule: "judge_invalid", judge_invalid_cause: "call" },
+        }) + "\n";
+      appendFileSync(join(flow, "v1", "errors.jsonl"), earlier);
+      const out = await regradeFlow(ARGS({ variant: "v1" }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
+      expect(out.variants.find((v) => v.variant === "v1")!.promoted).toBe(1);
+      const kept = readFileSync(join(flow, "v1", "errors.jsonl"), "utf8")
+        .split("\n")
+        .filter(Boolean);
+      expect(kept.map((l) => l + "\n")).toEqual([earlier]);
+      expect(summaryCost(flow)).toBeCloseTo(0.75);
+    }, 180_000);
+
+    it("a carried results row naming another run is listed, never promoted", async () => {
+      const { flow, rows } = buildFlow({ reps: 2 });
+      const r = toJudgeInvalid(flow, 1);
+      const file = join(flow, "v1", "errors.jsonl");
+      const e = JSON.parse(readFileSync(file, "utf8").trim()) as { meta: Record<string, unknown> };
+      e.meta.results_row = { ...r, meta: { ...r.meta, run_id: "other" } };
+      writeFileSync(file, JSON.stringify(e) + "\n");
+      const out = await regradeFlow(ARGS({ variant: "v1" }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
+      const v1 = out.variants.find((v) => v.variant === "v1")!;
+      expect(v1.promoted).toBe(0);
+      expect(v1.listed.find((l) => l.rep === 1)?.why).toMatch(/its results row names another run or slot/);
+      expect(rows("v1").some((x) => x.rep === 1)).toBe(false);
+      expect(errorsOf(flow).filter((x) => x.failure_class === "judge_invalid")).toHaveLength(1);
+    }, 180_000);
+
     it("a re-grade invalid again keeps the errors row and lists the slot open, with its re-run", async () => {
       const { flow, rows } = buildFlow({ reps: 2 });
       toJudgeInvalid(flow, 1);

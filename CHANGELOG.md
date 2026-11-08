@@ -54,7 +54,7 @@ All notable changes to this project are documented here. The format is based on
   keep their records. A server error, a timeout or an ordinary rate limit never stops a run. `eval` records why in
   `<evalDir>/stopped.json`, reports it as `stoppedEarly` (`{reason: "grader_credential", source, status?, atJob}`,
   else `null`), names it in `report.md`, and exits 1; `eval report` reads the same file. `hillclimb run` keeps the rows
-  already written, exits 1, and names the slot in the payload's `stopped`.
+  already written, exits 1, and names the slot in the payload's `stopped` (absent unless the pass stopped).
 - **`hillclimb regrade` promotes a `judge_invalid` slot.** A `judge_invalid` errors row now carries the results row
   its run would have had (`meta.results_row`). A default regrade re-judges every judged assert of it from the kept
   run, with the same checks as any row (`regrade_rejudged_because` names `judge_invalid`). When that grade is valid,
@@ -75,9 +75,9 @@ All notable changes to this project are documented here. The format is based on
 - **A failed judge call records whether a retry could succeed.** `assertions[].judgeError.retryable` in `result.json`
   and the `regrade` schema, `meta.judge_error_retryable` on a `hillclimb` errors row, and `callStatus` /
   `callRetryable` on a `semantic_pairwise` comparison whose call failed.
-- **`eval` reports the agent's served model.** `summary.agentModelDisagreements` lists each scenario whose scored reps
-  of one arm were served more than one model id, and `summary.modelMismatch` each excluded rep the agent was not served
-  its pin for (`pinned X · served Y` in `report.md`).
+- **`eval` reports the agent's served model.** `summary.agentModelDisagreements` lists each scenario whose scored reps,
+  across both arms, were served more than one model id, and `summary.modelMismatch` the reps of each arm and scenario
+  that were excluded because the agent was not served its pin (`pinned X · served Y` in `report.md`).
 
 ### Fixed
 
@@ -105,7 +105,9 @@ All notable changes to this project are documented here. The format is based on
   `claude-haiku-4-5-20251001` was read as not honoring its pin. `eval` excluded such reps, its history counted a
   judge pinned and served the same way as another model, and `hillclimb` wrote them as `serving_substitution` errors and counted the main
   model's own spend as another model's. One matcher now decides every pin comparison: a dated id matches only itself,
-  and an undated id also matches its dated snapshots.
+  and an undated id also matches its dated snapshots. An eval rep's verdict is recorded when it runs, so an eval
+  recorded before this version keeps its `model_mismatch` reps: re-run it. Its `report.md` says so when the served id
+  matches the pin. `hillclimb` recovers on its next pass.
 - **A `semantic_pairwise` assert makes no further judge call in a run once one has failed the way every later call
   would.** A later metric-only comparison is recorded `invalid` ("judge not called: an earlier comparison's call
   failed …"), and a gating one makes the assert judge-invalid, with the same `judgeError`.
@@ -202,10 +204,11 @@ All notable changes to this project are documented here. The format is based on
   `run`, which still accepts such a pin, a run whose main loop reports no live model now leaves `modelPinHonored`
   unset instead of reading the usage key as the pin served.
 - **Breaking: `eval` exits 1 on more outcomes.** A scheduled job with no record (the eval was interrupted, killed,
-  ended on a requested exit, or stopped on a grader failure) and an agent served more than one model across one arm's
-  scored reps of a scenario now exit 1, on `eval` and on `eval report`. An (arm, scenario) all of whose reps were
+  ended on a requested exit, or stopped on a grader failure) and an agent served more than one model across a
+  scenario's scored reps now exit 1, on `eval` and on `eval report`. An (arm, scenario) all of whose reps were
   excluded for any reason (a skill that changed mid-eval, a pin the agent was not served, another judge prompt, as well
-  as infrastructure, a refused search or a pool mismatch) now exits 1 too.
+  as infrastructure, a refused search or a pool mismatch) now exits 1 too, and so does one none of whose reps got a
+  valid judge grade (`judge_invalid`: a server error, a timeout or a malformed reply): it compares nothing.
 - **Breaking: `hillclimb run` exits 1 when it stops on a grader failure or a variant is served two models for one pin**
   (see Added). A later pass of such a variant is refused (exit 2) unless `--allow-model-split`.
 

@@ -80,6 +80,8 @@ export function modelIdMatches(pin: string, served: string): boolean {
   const want = normalizeModelId(pin);
   const got = normalizeModelId(served);
   if (got === want) return true;
+  // A dated pin is matched by itself only: never by a further date appended to it.
+  if (/[-@]\d{8}$|-\d{4}-\d{2}-\d{2}$/.test(want)) return false;
   const base = want.replace(ROLLING_ALIAS, "");
   return got.startsWith(base) && SNAPSHOT_SUFFIX.test(got.slice(base.length));
 }

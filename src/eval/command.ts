@@ -121,7 +121,7 @@ export interface EvalArgs {
   noJudgeCheck: boolean;
   /** `--target-effect`, in percentage points (30 = a 30-point change). Only with `--dry-run`. */
   targetEffectPp?: number;
-  /** `--max-budget-usd`: a pre-flight refusal from cost history, before any run (never a mid-run stop). */
+  /** `--max-budget-usd`: a pre-flight refusal from cost history, before any run; the cap never stops a run. */
   maxBudgetUsd?: number;
   /** `--search-corpus <pool>` with its miss mode and floor override: one pool for both arms, eval-level. */
   searchCorpus?: SearchCorpusOption;

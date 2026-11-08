@@ -107,7 +107,7 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
        grades for unavailable evidence than the baseline, and that excess took the row below the threshold; or an
        insufficient_unmeasured metric row, the same for metric values the scorer or a cap left out),
        every row insufficient, a scenario that compared nothing (every rep of both arms errored, or every rep of one arm
-       was excluded), a metric row not compared (a broken metric state), the judge or agent model differed across
+       was excluded or judge_invalid), a metric row not compared (a broken metric state), the judge or agent model differed across
        reps, a job with no record (interrupted, or stopped: a judge or decider call refused 401/403/404 or out of
        quota stops the eval; see stoppedEarly), or (with --search-corpus) any rep not served from the pinned pool · 2 usage, or a refusal before any
        run (including the --max-budget-usd refusal, a one-sided or mixed pool, and a pool that cannot be read) · 3 an arm

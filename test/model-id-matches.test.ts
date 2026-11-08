@@ -24,6 +24,9 @@ describe("modelIdMatches", () => {
     // A dated pin is matched by itself only: another snapshot is another model.
     [SERVED, "claude-haiku-4-5-20251101", false],
     [SERVED, PIN, false],
+    // Nor by a further date appended to it.
+    [SERVED, `${SERVED}-20251101`, false],
+    [SERVED, `${SERVED}@2025-11-01`, false],
     // Siblings and other families never match; nor a prefix that is not a date.
     [PIN, "claude-haiku-4-5-1", false],
     ["claude-opus-5", "claude-opus-5-5", false],
