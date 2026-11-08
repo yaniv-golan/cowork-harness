@@ -12,6 +12,7 @@ import type { Assertion } from "../types.js";
 import { isLiveModelId } from "../types.js";
 import { isRun, scenarioCostHistory, tierOf, type RunIndexRow } from "../run/run-index.js";
 import { turnArtifactPath } from "../run/turn-layout.js";
+import { cmpVersionStrings } from "../baseline.js";
 import { deriveModelProvenance, modelIdMatches, normalizeModelId } from "../run/model-provenance.js";
 import { classifyRep, classifyTermination, repRowValues, scenarioRows, type ClassifiableResult, type RowKey } from "./classify.js";
 import { EXACT_CONTENT_MIN, HISTORY_WINDOW, type CostHistory, type RowHistory } from "./planner.js";
@@ -58,20 +59,41 @@ export function loadCostHistory(rows: readonly RunIndexRow[], f: HistoryFilters)
       if (r.searchCorpus !== undefined) return (void excluded.searchCorpus++, false);
       return true;
     });
+  // No priced run on the requested baseline: the nearest baseline that has one stands in — the nearest older first, then
+  // the nearest newer — under every other filter of the basis. Labelled, never silent; the rates never do this.
+  const priced = (r: RunIndexRow) => typeof r.costUsd === "number";
+  let samples = basis;
+  let pricedFromBaseline: string | undefined;
+  if (!basis.some(priced)) {
+    const sameBasis = (r: RunIndexRow) =>
+      r.scenario === f.scenario &&
+      isRun(r) &&
+      tierOf(r) === f.tier &&
+      isFirstTurn(r) &&
+      (f.includeHillclimb === true || !isHillclimb(r)) &&
+      r.searchCorpus === undefined &&
+      typeof r.baseline === "string";
+    const others = [...new Set(rows.filter((r) => sameBasis(r) && priced(r)).map((r) => r.baseline!))];
+    const older = others.filter((b) => cmpVersionStrings(b, f.baseline) < 0).sort(cmpVersionStrings);
+    const newer = others.filter((b) => cmpVersionStrings(b, f.baseline) > 0).sort(cmpVersionStrings);
+    pricedFromBaseline = older.length ? older[older.length - 1] : newer[0];
+    if (pricedFromBaseline !== undefined) samples = rows.filter((r) => sameBasis(r) && r.baseline === pricedFromBaseline);
+  }
   // The gate's basis, not the filtered one: the figure `--max-budget-usd` refuses on. Carried separately;
   // it never feeds a covered cost figure.
   const gate = scenarioCostHistory([...rows], f.scenario);
   return {
     scenario: f.scenario,
-    samples: basis.map((r) => ({
+    samples: samples.map((r) => ({
       ...(typeof r.costUsd === "number" ? { agentUsd: r.costUsd } : {}),
       ...(typeof r.judgeCostUsd === "number" ? { judgeUsd: r.judgeCostUsd } : {}),
       ...(typeof r.deciderCostUsd === "number" ? { deciderUsd: r.deciderCostUsd } : {}),
     })),
     ...(gate.length ? { budgetGateWorstUsd: Math.max(...gate) } : {}),
     budgetGatePricedRuns: gate.length,
-    distinctSkillHashes: new Set(basis.map((r) => r.skillHash).filter((h): h is string => h !== undefined)).size,
-    distinctTiers: new Set(basis.map(tierOf)).size,
+    distinctSkillHashes: new Set(samples.map((r) => r.skillHash).filter((h): h is string => h !== undefined)).size,
+    distinctTiers: new Set(samples.map(tierOf)).size,
+    ...(pricedFromBaseline !== undefined ? { pricedFromBaseline } : {}),
     excluded,
   };
 }

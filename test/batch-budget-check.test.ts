@@ -134,3 +134,14 @@ describe("the history seam: rows and runs dir passed in, instead of read from th
     expect(checkBatchBudget([{ scenario: "z", jobs: 3 }], 5).status.unpriced).toEqual(["z"]);
   });
 });
+
+describe("the eval --max-budget-usd basis is baseline-agnostic: history on another baseline is enough", () => {
+  it("a scenario priced only on another baseline is not unpriced: the refusal is not a LOWER BOUND", () => {
+    const other = { ...row("d", 2, 6), baseline: "desktop-0.9.0" };
+    const c = checkBatchBudget([{ scenario: "d", jobs: 2 }], 1, { rows: [other], runsDir: { runsDir: root, runsDirRedirected: false } });
+    expect(c.refuse).toBe(true);
+    expect(c.status.enforced).not.toBe("lower_bound");
+    expect(c.status.unpriced).toEqual([]);
+    expect(c.estimate.known).toBe(4);
+  });
+});

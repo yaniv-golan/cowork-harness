@@ -34,9 +34,11 @@ export const EVAL_VALUE_FLAGS = [
   "--search-corpus-min-score",
 ] as const;
 export const EVAL_REPEATED_FLAGS = ["--arm", "--holdout"] as const;
+/** `eval report`'s own flags (beside `--arm` and `--output-format`, shared with `eval`). */
+export const EVAL_REPORT_BOOLEAN_FLAGS = ["--headroom"] as const;
 
 export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<source> --arm [<label>=]<source> [flags]
-       eval report <eval-dir> [--output-format text|json]
+       eval report <eval-dir> [--headroom [--arm <label|A|B>]] [--output-format text|json]
        EXPERIMENTAL — paired A/B evaluation of a skill edit: runs every scenario with each arm's plugin in place
        of the session's single plugins.local_plugins entry, interleaved, and compares per-claim pass rates.
        A drop is a signal to investigate, not proof. Live runs only (no replay, no cassettes). See docs/eval.md.
@@ -97,7 +99,10 @@ export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<s
   --search-corpus-miss empty|error, --search-corpus-min-score <n>   as on run
   --allow-confounded-pool    run a pool drawn from one arm (or whose split cannot be bounded); every surface says CONFOUNDED
   --allow-mixed-pool         accept a mixed pool (one built from several skills)
-  --output-format text|json  json: {tool,version,command,ok,evalDir,arms,pins,sections,summary,cost,stoppedEarly,searchCorpus?,error};
+  --headroom [--arm <a>]     (eval report) list the rows arm <a> (label, A or B; default B) passed on some reps but
+                             not all, by min(p, 1-p), plus any with under 4 reps ("too few reps to tell"); never
+                             changes the exit code. JSON: headroom {arm, rows[]}
+  --output-format text|json  json: {tool,version,command,ok,evalDir,arms,pins,sections,summary,cost,stoppedEarly,searchCorpus?,headroom?,error};
                              with --dry-run: {tool,version,command,ok,dryRun,plan,budget?,error}
   --quiet                    no per-job progress lines (a --dry-run's plan is its output, and still prints)
   --dotenv <path>, --run-dir <path>   as on every command

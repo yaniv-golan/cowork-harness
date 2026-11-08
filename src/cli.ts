@@ -230,6 +230,7 @@ import {
 import { planText, type EvalPlan } from "./eval/plan.js";
 import { makeEvalJobRunner, type ScenarioRunner } from "./eval/job-runner.js";
 import { writeEvalReport, REPORT_MD } from "./eval/report.js";
+import { headroomRows, headroomText, resolveHeadroomArm, type HeadroomRow } from "./eval/headroom.js";
 import { StoppedFileError } from "./eval/stopped.js";
 import {
   MatrixFile,
@@ -312,7 +313,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
   eval <scenario.yaml | dir/> --arm [<label>=]<source> --arm [<label>=]<source>
                                EXPERIMENTAL — paired A/B evaluation of a skill edit: runs each scenario with
                                each arm's plugin, interleaved, and compares per-claim pass rates (see 'eval --help')
-  eval report <eval-dir>       rebuild an eval's report from its directory ($0)
+  eval report <eval-dir>       rebuild an eval's report from its directory ($0); --headroom lists the rows an arm can still move
   hillclimb run <scenario.yaml | dir/> [--flow DIR]   the runner for /claude-api hillclimb: every scenario
                                --reps times into <flow>/<variant>/ under the runner-scaffold contract (see 'hillclimb --help')
   hillclimb check [<scenario.yaml | dir/>] [--flow DIR]   check a flow dir against our reading of the hillclimb schema
@@ -320,6 +321,7 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                with --flow, also write <flow>/metrics.md. Pass the same --flow to every hillclimb command
   hillclimb freeze-ref <scenario.yaml | dir/> --variant ID [--flow DIR]   freeze a variant's pairwise references (win_<vN>)
   hillclimb regrade <scenario.yaml | dir/> [--flow DIR]   re-grade a flow's rows from their kept runs (--rejudge: every judged assert; --fill-refs: add win_<vN>)
+  hillclimb seed <scenario.yaml | dir/> --from-eval DIR --arm LABEL [--flow DIR]   seed the baseline variant from an eval arm's kept runs ($0)
 
 ── Cassette lifecycle ─────────────────────────────────────────────────────────
   record <scenario.yaml>       run + save a control-protocol cassette   [--model <id>] [--timeout <ms>]
@@ -2412,10 +2414,16 @@ async function cmdEval(rawArgs: string[]) {
     if (e instanceof StoppedFileError) return fail("eval", "runtime", e.message, undefined, json, 1, undefined, payload);
     throw e;
   };
-  const emit = (evalDir: string, report: ReturnType<typeof writeEvalReport>, text: string) => {
+  const emit = (
+    evalDir: string,
+    report: ReturnType<typeof writeEvalReport>,
+    text: string,
+    headroom?: { arm: { label: string; role: "A" | "B" }; rows: HeadroomRow[] },
+  ) => {
     const code = report.summary.exitCode;
-    if (json) out(jsonPayloadEnvelope("eval", code === 0, evalEnvelopePayload(evalDir, report)));
-    else log(text + `\nreport: ${tildeify(join(evalDir, REPORT_MD))}`);
+    if (json) out(jsonPayloadEnvelope("eval", code === 0, { ...evalEnvelopePayload(evalDir, report), ...(headroom ? { headroom } : {}) }));
+    else
+      log(text + `\nreport: ${tildeify(join(evalDir, REPORT_MD))}` + (headroom ? `\n\n${headroomText(headroom.rows, headroom.arm)}` : ""));
     exitWith(code);
   };
   if (rawArgs[0] === "report") {
@@ -2428,13 +2436,19 @@ async function cmdEval(rawArgs: string[]) {
     }
     for (const g of r.globals) applyCommandGlobal("eval", g.flag, g.value, json);
     let report: ReturnType<typeof writeEvalReport>;
+    let headroom: Parameters<typeof emit>[3];
     try {
       report = writeEvalReport(r.evalDir);
+      if (r.headroom) {
+        const role = resolveHeadroomArm(report, r.headroom.arm);
+        const arm = report.arms.find((a) => a.role === role)!;
+        headroom = { arm: { label: arm.label, role }, rows: headroomRows(report, role) };
+      }
     } catch (e) {
       rethrowIfExit(e);
       return failFor(e);
     }
-    return emit(r.evalDir, report, readFileSync(join(r.evalDir, REPORT_MD), "utf8"));
+    return emit(r.evalDir, report, readFileSync(join(r.evalDir, REPORT_MD), "utf8"), headroom);
   }
   let parsed: ReturnType<typeof parseEvalArgs>;
   try {

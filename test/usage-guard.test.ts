@@ -237,6 +237,6 @@ describe("hillclimb: every subcommand's flags are inside the family's registry e
     });
   }
   it("covers every subcommand the CLI parses", () => {
-    expect(Object.keys(HILLCLIMB_SUBCOMMAND_FLAGS).sort()).toEqual(["check", "freeze-ref", "regrade", "run", "state-template"]);
+    expect(Object.keys(HILLCLIMB_SUBCOMMAND_FLAGS).sort()).toEqual(["check", "freeze-ref", "regrade", "run", "seed", "state-template"]);
   });
 });

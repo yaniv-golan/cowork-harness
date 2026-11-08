@@ -53,6 +53,9 @@ export interface CostHistory {
   budgetGatePricedRuns: number;
   distinctSkillHashes: number;
   distinctTiers: number;
+  /** Set when the requested baseline had no priced run of the scenario on its tier: `samples` are the runs of the
+   *  nearest baseline that has one (the nearest older first, then the nearest newer), every other filter unchanged. */
+  pricedFromBaseline?: string;
   /** Runs of this scenario each cost-basis filter left out (from the loader). */
   excluded?: { notRun: number; tier: number; baseline: number; turn: number; hillclimb: number; searchCorpus?: number };
 }
@@ -127,6 +130,8 @@ export interface ScheduleCostItemEstimate {
   jobs: number;
   /** The cost basis had at least one priced run. */
   priced: boolean;
+  /** The basis is another baseline's runs (`CostHistory.pricedFromBaseline`). */
+  pricedFromBaseline?: string;
   meanUsd?: number;
   p50Usd?: number;
   p95Usd?: number;
@@ -188,7 +193,13 @@ export function estimateScheduleCost(items: readonly ScheduleCostItem[]): Schedu
     const perRep = perRepCost(it.history);
     const priced = perRep.pricedRuns > 0;
     const times = (v: number | undefined) => (v === undefined ? undefined : it.jobs * v);
-    const est: ScheduleCostItemEstimate = { scenario: it.scenario, jobs: it.jobs, priced, perRep };
+    const est: ScheduleCostItemEstimate = {
+      scenario: it.scenario,
+      jobs: it.jobs,
+      priced,
+      ...(priced && it.history.pricedFromBaseline !== undefined ? { pricedFromBaseline: it.history.pricedFromBaseline } : {}),
+      perRep,
+    };
     const set = (k: keyof ScheduleCostItemEstimate, v: number | undefined) => {
       if (v !== undefined) (est as unknown as Record<string, number>)[k] = v;
     };
@@ -233,6 +244,13 @@ export function scheduleCostLine(c: ScheduleCost): string {
     ? ` — LOWER BOUND (${c.unpriced.length}/${n} scenario(s) have no priced run history and contribute $0: ` +
       `${c.unpriced.slice(0, 5).join(", ")}${c.unpriced.length > 5 ? `, +${c.unpriced.length - 5} more` : ""})`
     : "";
+  const borrowed = c.items.filter((i) => i.pricedFromBaseline !== undefined);
+  const from = borrowed.length
+    ? ` — ${borrowed
+        .slice(0, 5)
+        .map((i) => `${i.scenario} priced from baseline ${i.pricedFromBaseline} (${i.perRep.pricedRuns} run(s))`)
+        .join(", ")}${borrowed.length > 5 ? `, +${borrowed.length - 5} more` : ""}`
+    : "";
   // Floor-index p95 is the max for 20 or fewer runs: say so whenever it is, not only for thin history.
   const p95AtMax = c.items.filter((i) => i.priced && i.perRep.p95IsMax).length;
   const basis =
@@ -245,7 +263,7 @@ export function scheduleCostLine(c: ScheduleCost): string {
     `estimated cost of ${c.jobs} run(s): p50 ${usd(c.p50Usd)} · mean ${usd(c.meanUsd)} · ` +
     `p95 ${usd(c.p95Usd)} (pessimistic: every run at its scenario's p95 — not a bound) · ` +
     `worst observed ${usd(c.worstObservedUsd)} (every run at its scenario's worst on this basis — not a bound)` +
-    `${bound}${basis}`
+    `${bound}${from}${basis}`
   );
 }
 
@@ -302,6 +320,7 @@ export function scheduleCostJson(c: ScheduleCost): ScheduleCostJson {
       scenario: i.scenario,
       jobs: i.jobs,
       priced: i.priced,
+      ...(i.pricedFromBaseline !== undefined ? { pricedFromBaseline: i.pricedFromBaseline } : {}),
       ...(i.meanUsd !== undefined ? { meanUsd: i.meanUsd } : {}),
       ...(i.p50Usd !== undefined ? { p50Usd: i.p50Usd } : {}),
       ...(i.p95Usd !== undefined ? { p95Usd: i.p95Usd } : {}),

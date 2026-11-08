@@ -21,7 +21,15 @@ import { loadCases, selectCases, splitIdNotes, type HillclimbCase } from "./case
 import type { PairwiseDecls } from "./grade-keys.js";
 import { FlowWriter, flowHashOf, redactDeep, slotsIn } from "./flow.js";
 import { FsRefusal, NoFollowRoot, lexists, normalizeRootArg } from "./fs.js";
-import { approvedHarnessSkill, flowHarnessDigest, gateDecision, harnessChangeText, listedInside } from "./gate.js";
+import {
+  approvedGateSha,
+  approvedHarnessSkill,
+  flowHarnessDigest,
+  gateCmdSha,
+  gateDecision,
+  harnessChangeText,
+  listedInside,
+} from "./gate.js";
 import { attemptRow, type AttemptContext } from "./rows.js";
 import { flowMetricUnion, refuseChangedMetrics, removedMetrics, staleAssertSigRows, undeclaredRowMetrics } from "./metric-keys.js";
 import { turnsFromEvents, type ChildTranscript } from "./trace.js";
@@ -36,6 +44,8 @@ import { graderCredentialFailure, type GraderFailure } from "../run/grader-stop.
 import { billingOf, costLine, costSummary, otherModelShareWarning, type Billing } from "./cost.js";
 
 import { ExitRequested, rethrowIfExit } from "../run/exit.js";
+import { gateFailureText, runGateCommand, type GateRunner } from "./gate-cmd.js";
+import { BudgetLedger, BudgetStopError, type Reservation } from "./budget.js";
 /** What one job hands back. */
 export interface JobReport {
   result?: RunResult;
@@ -117,6 +127,14 @@ export interface RunnerDeps {
     lines: string[];
     failures: number;
   };
+  /** The variant's plugin snapshot, which `--gate-cmd` runs against (as a throwaway copy). Required with --gate-cmd. */
+  gateSnapshot?: string;
+  /** Runs the gate command (default: `runGateCommand`); tests inject one. */
+  runGate?: GateRunner;
+  /** With --max-budget-usd: what this pass has already spent before its first slot (the grader probe). */
+  budgetStartUsd?: number;
+  /** With --max-budget-usd: a case's worst agent-only run in the run index, any baseline (the estimate's fallback). */
+  budgetIndexWorstUsd?: (c: HillclimbCase) => number | undefined;
   /** Progress interval; the scaffold uses 30 s. */
   tickMs?: number;
   now?: () => number;
@@ -131,14 +149,19 @@ export interface RunOutcome {
   failed: number;
   /** Rows appended to results.jsonl this pass — an attempt whose later writes failed is still scored. */
   scored?: number;
-  /** Why the pass refused (exit 2) or stopped mid-run (exit 1): the JSON envelope's `error.message`. */
-  error?: { category: "usage" | "runtime"; message: string };
+  /** Why the pass refused (exit 2) or stopped mid-run (exit 1): the JSON envelope's `error.message`. `code` is set on
+   *  a budget stop. */
+  error?: { category: "usage" | "runtime"; message: string; code?: "budget_stopped" };
   /** A dry run's remaining (case, rep) slots per case id — what the pass would run. */
   remaining?: Record<string, number>;
   /** The pass stopped scheduling because a grader (a judge, or the LLM decider) failed the way every later grade
    *  would: a rejected credential, an unknown model or a spent quota. `atJob` is the task's index in this pass's
-   *  schedule; `case` and `rep` name its slot. Exit 1. */
-  stopped?: { reason: "grader_credential"; source: "judge" | "decider"; status?: number; atJob: number; case: string; rep: number };
+   *  schedule; `case` and `rep` name its slot. Exit 1.
+   *  Or the pass stopped on its `--max-budget-usd` cap: `atJob`, `case` and `rep` name the first slot not started,
+   *  `spentUsd` what the pass had spent then (finished slots, the grader probe included). Exit 1. */
+  stopped?:
+    | { reason: "grader_credential"; source: "judge" | "decider"; status?: number; atJob: number; case: string; rep: number }
+    | { reason: "budget"; spentUsd: number; capUsd: number; atJob: number; case: string; rep: number };
 }
 
 // runner-scaffold.mjs l.46-53: strip escape sequences and control characters from anything printed — case ids and error text
@@ -337,7 +360,9 @@ async function run(
   // The harness gate (runner-scaffold.mjs l.238-277). A --skill selection joins the digest as `skill:<name>`: it
   // decides what skill_invoked means, so changing it is a harness change. Without one nothing is added and the sha
   // is the one a flow approved before --skill existed.
-  const digestFor = (skill: string | undefined) =>
+  // A --gate-cmd joins it the same way, as its hash (`<gate-cmd>`): the command decides which variants are measured at all.
+  const gateSha = args.gateCmd !== undefined ? gateCmdSha(args.gateCmd) : undefined;
+  const digestFor = (skill: string | undefined, gate: string | undefined) =>
     flowHarnessDigest({
       cwd: deps.cwd,
       state,
@@ -346,22 +371,30 @@ async function run(
       harnessVersion: deps.virtual.harnessVersion,
       baselineId: deps.virtual.baselineId,
       ...(skill !== undefined ? { skill } : {}),
+      ...(gate !== undefined ? { gateSha: gate } : {}),
     });
-  const digest = digestFor(args.skill);
+  const digest = digestFor(args.skill, gateSha);
   for (const s of digest.skipped) say(`warning: harness path '${s.path}' not readable (${s.code}) - skipped`);
   const decision = gateDecision(state, digest.sha, args.approveHarness);
   // The sha alone cannot name the skill it was approved with: `harness_skill`, recorded beside it on approval,
   // can. Re-hashing under that selection tells a selection-only change from one where the files moved too.
   const approvedSkill = approvedHarnessSkill(state);
+  // Likewise `harness_gate_sha` names the gate command hash it was approved with (never the command's text).
+  const approvedGate = approvedGateSha(state);
   const skillChange = (): { cause: string; filesToo: boolean } | undefined => {
-    if (approvedSkill === args.skill) return undefined;
-    const cause =
-      approvedSkill === undefined
-        ? `--skill added (${args.skill})`
-        : args.skill === undefined
-          ? `--skill removed (was ${approvedSkill})`
-          : `tracked skill ${approvedSkill} → ${args.skill}`;
-    return { cause, filesToo: digestFor(approvedSkill).sha !== state.harness_sha };
+    const causes: string[] = [];
+    if (approvedSkill !== args.skill)
+      causes.push(
+        approvedSkill === undefined
+          ? `--skill added (${args.skill})`
+          : args.skill === undefined
+            ? `--skill removed (was ${approvedSkill})`
+            : `tracked skill ${approvedSkill} → ${args.skill}`,
+      );
+    if (approvedGate !== gateSha)
+      causes.push(approvedGate === undefined ? "--gate-cmd added" : gateSha === undefined ? "--gate-cmd removed" : "--gate-cmd changed");
+    if (!causes.length) return undefined;
+    return { cause: causes.join(", "), filesToo: digestFor(approvedSkill, approvedGate).sha !== state.harness_sha };
   };
   if (args.dryRun && !args.approveHarness) {
     const change = decision.kind === "mismatch" ? skillChange() : undefined;
@@ -372,10 +405,12 @@ async function run(
         ? `${harnessChangeText(state, digest)}; sha256 ${digest.sha.slice(0, 12)}`
         : `sha256 ${digest.sha.slice(0, 12)} over: ${digest.hashed.join(", ")}`;
     say(`harness gate: ${decision.kind === "ok" ? "approved" : decision.kind}${why} (${detail})`);
+    if (args.gateCmd !== undefined) say(`gate command (runs on this host before the variant's reps): ${args.gateCmd}`);
   } else if (decision.kind !== "ok") {
     if (!digest.lockfiles.length) say("note: no lockfile in the current directory - dependency changes are outside the harness sha");
     if (decision.kind === "approve") {
-      w!.approveHarness(digest.sha, { skill: args.skill, files: digest.entries });
+      w!.approveHarness(digest.sha, { skill: args.skill, gateSha, files: digest.entries });
+      if (args.gateCmd !== undefined) say(`gate command (runs on this host before the variant's reps): ${args.gateCmd}`);
       say(`harness approved: sha256 ${digest.sha.slice(0, 12)} over ${digest.hashed.length} file(s) recorded in ${statePathShown}`);
     } else if (decision.kind === "absent") {
       const m = `no approved harness sha in ${statePathShown} (computed ${digest.sha.slice(0, 12)} over: ${digest.hashed.join(", ")}).`;
@@ -422,6 +457,66 @@ async function run(
     }
 
     const writer = w!;
+    // The gate command: once per pass, before any rep, on a throwaway copy of the variant's snapshot. A failure writes
+    // one `gate_failed` row per open slot (error slots re-run on every pass, so a fixed gate resumes them) and runs
+    // nothing. It spent nothing, so every row records $0.
+    if (args.gateCmd !== undefined && tasks.length > 0) {
+      if (deps.gateSnapshot === undefined) throw new Error("--gate-cmd needs the variant's plugin snapshot");
+      const g = await (deps.runGate ?? runGateCommand)({
+        cmd: args.gateCmd,
+        snapshot: deps.gateSnapshot,
+        variant: v,
+        timeoutS: args.gateTimeoutS,
+      });
+      if (!g.ok) {
+        const text = gateFailureText(g, args.gateTimeoutS);
+        for (const { c, rep } of tasks)
+          writer.appendError({
+            prompt_id: c.id,
+            rep,
+            ...(c.originalId !== undefined ? { original_id: c.originalId } : {}),
+            failure_class: "gate_failed",
+            error: text,
+            retries: 0,
+            judge_retries: 0,
+            latency_s: g.wallS,
+            meta: {
+              cost_usd: 0,
+              gate_exit: g.code,
+              ...(g.signal ? { gate_signal: g.signal } : {}),
+              ...(g.timedOut ? { gate_timed_out: true } : {}),
+              gate_tail: g.tail,
+              ...(sigOf(c) !== undefined ? { content_sig: sigOf(c)! } : {}),
+            },
+          });
+        for (const line of g.tail.trimEnd().split("\n").slice(-5)) if (line) say(`  [${v}] gate: ${line}`);
+        const m = `[${v}] ${text}: ${tasks.length} slot(s) recorded as gate_failed in ${join(flowArg, v, "errors.jsonl")}; fix the plugin and run the pass again`;
+        say(m);
+        try {
+          for (const line of writeCostSummary(writer, v)) say(line);
+        } catch (e) {
+          rethrowIfExit(e);
+          say(`[${v}] writing summary.json failed: ${message(e)}`);
+        }
+        return { exitCode: 1, scheduled: tasks.length, ok: 0, failed: tasks.length, scored: 0, error: { category: "runtime", message: m } };
+      }
+      say(`[${v}] gate command passed (${g.wallS}s)`);
+    }
+    const budget =
+      args.maxBudgetUsd !== undefined
+        ? new BudgetLedger(
+            args.maxBudgetUsd,
+            {
+              ...(deps.budgetStartUsd !== undefined ? { startUsd: deps.budgetStartUsd } : {}),
+              results,
+              indexWorstUsd: (id) => {
+                const c = cases.find((x) => x.id === id);
+                return c ? deps.budgetIndexWorstUsd?.(c) : undefined;
+              },
+            },
+            (line) => say(`[${v}] ${line}`),
+          )
+        : undefined;
     let ok = 0;
     let scored = 0;
     // `fail` counts failed slots only; a step after the pool that fails (the reference freeze, summary.json) fails the
@@ -457,8 +552,40 @@ async function run(
     try {
       await pMapBounded(tasks, args.concurrency, async ({ c, rep }, i) => {
         if (stopError !== undefined) return;
+        // The cap: admitted only when spent + the in-flight slots' estimates + this slot's stays within it. A slot that
+        // finished over it (an unestimated one) stops the next, which is the first not started.
+        // A slot with no estimate waits while another such slot is in flight (it may price the case meanwhile).
+        let reserved: Reservation = { usd: 0, unestimated: false };
+        if (budget) {
+          let r = budget.admit(c.id);
+          while (r === "wait") {
+            await budget.settled();
+            if (stopError !== undefined) return;
+            r = budget.admit(c.id);
+          }
+          if (r === undefined || r === "uncharged") {
+            stopped = {
+              reason: "budget",
+              spentUsd: Math.round(budget.spent * 1e6) / 1e6,
+              capUsd: budget.capUsd,
+              atJob: i,
+              case: c.id,
+              rep,
+            };
+            stopError = new BudgetStopError(
+              r === "uncharged"
+                ? `a slot of case ${budget.uncharged} finished unpriced and the case has no cost history to charge it, so the cap can ` +
+                    `no longer be enforced; case ${c.id} rep${rep} was not started. The pass ${budget.text()}; re-run to continue (each pass has its own cap)`
+                : `the pass ${budget.text()}, and case ${c.id} rep${rep} (estimated $${budget.estimate(c.id).toFixed(4)}) would cross it ` +
+                    `with the slots still running; the cap is per pass: raise it, or re-run (each pass has its own cap)`,
+            );
+            return;
+          }
+          reserved = r;
+        }
         try {
-          const f = await oneTask(c, rep);
+          const { graderFailure: f, written } = await oneTask(c, rep);
+          budget?.settle(c.id, reserved, written);
           // A grader every later grade would fail on: no later task starts (the row this one wrote is kept).
           if (f !== undefined && stopError === undefined) {
             stopped = {
@@ -476,6 +603,7 @@ async function run(
           }
         } catch (e) {
           // exit-safe: captured, and rethrown below once the in-flight jobs have finished
+          budget?.settle(c.id, reserved, undefined);
           stopError ??= e;
         }
       });
@@ -490,20 +618,34 @@ async function run(
     }
     if (stopError !== undefined) {
       progress();
-      const m = `stopped mid-run (rows already written are kept; re-run to resume): ${message(stopError)}`;
+      const onBudget = stopError instanceof BudgetStopError;
+      const m = onBudget
+        ? `stopped mid-run (rows already written are kept): ${message(stopError)}`
+        : `stopped mid-run (rows already written are kept; re-run to resume): ${message(stopError)}`;
       say(m);
+      // The spend the stopped pass did make, in summary.json as on a finished pass.
+      try {
+        for (const line of writeCostSummary(writer, v)) say(line);
+      } catch (e) {
+        rethrowIfExit(e);
+        say(`[${v}] writing summary.json failed: ${message(e)}`);
+      }
       return {
         exitCode: 1,
         scheduled: tasks.length,
         ok,
         failed: fail,
         scored,
-        error: { category: "runtime", message: m },
+        error: { category: "runtime", message: m, ...(onBudget ? { code: "budget_stopped" as const } : {}) },
         ...(stopped !== undefined ? { stopped } : {}),
       };
     }
-    /** Runs one attempt and writes its row; returns a grader failure every later grade would repeat, if it saw one. */
-    async function oneTask(c: HillclimbCase, rep: number): Promise<GraderFailure | undefined> {
+    /** Runs one attempt and writes its row; returns a grader failure every later grade would repeat, if it saw one,
+     *  and the row it wrote (the budget charges it). */
+    async function oneTask(
+      c: HillclimbCase,
+      rep: number,
+    ): Promise<{ graderFailure: GraderFailure | undefined; written?: { row: Record<string, unknown>; scored: boolean } }> {
       const tStart = now();
       let report: JobReport;
       try {
@@ -514,83 +656,35 @@ async function run(
         report = { thrown: e, events: [], children: [], attemptS: (now() - tStart) / 1000, runnerTimeout: false };
       }
       const graderFailure = graderCredentialFailure(report.result, report.thrown);
-      const ctx: AttemptContext = {
-        caseId: c.id,
-        ...(c.originalId !== undefined ? { originalId: c.originalId } : {}),
-        scenarioName: c.name,
-        prompt: c.scenario.prompt,
-        assertions: c.scenario.assert,
-        expectDenied: c.scenario.expect_denied ?? [],
+      const ctx = attemptContext(c, rep, report, {
         metrics,
-        ...(deps.pairwise ? { pairwise: deps.pairwise } : {}),
-        rep,
+        flowHash,
+        env: deps.virtual,
+        sig: sigOf(c),
         pin: deps.pin(c),
         requestedEffort: deps.requestedEffort(c),
         credentialEnv: deps.credentialEnv(c),
-        ...(sigOf(c) !== undefined ? { expectedContentSig: sigOf(c)! } : {}),
-        events: report.events,
-        ...(report.transcript !== undefined ? { transcript: report.transcript } : {}),
-        ...(report.transcriptWhere !== undefined ? { transcriptWhere: report.transcriptWhere } : {}),
-        attemptS: report.attemptS,
-        runnerTimeout: report.runnerTimeout,
-        tags: [basename(dirname(c.file))],
-        ...(report.skillInvoked !== undefined ? { skillInvoked: report.skillInvoked } : {}),
-        meta: {
-          flowHash,
-          env: deps.virtual,
-          ...(report.runDir !== undefined ? { runDir: report.runDir } : {}),
-          ...(sigOf(c) !== undefined ? { contentSig: sigOf(c)! } : {}),
-          // The skill hash the run itself staged (evidence), not one recomputed here.
-          ...(typeof report.result?.fingerprint?.skillHash === "string" ? { skillHash: report.result.fingerprint.skillHash } : {}),
-          ...(deps.skillTracked !== undefined ? { skillTracked: deps.skillTracked } : {}),
-          ...(args.ablate ? { ablated: true } : {}),
-          ...(c.scenario.on_unanswered === "llm" ? { nonDeterministic: true } : {}),
-          ...(args.allowModelSplit ? { modelSplitAllowed: true } : {}),
-          ...(deps.searchCorpus ? { searchCorpus: deps.searchCorpus } : {}),
-        },
-      };
-      let out: ReturnType<typeof attemptRow>;
-      try {
-        out = attemptRow(
-          { ...(report.result ? { result: report.result } : {}), ...(report.thrown !== undefined ? { thrown: report.thrown } : {}) },
-          ctx,
-        );
-      } catch (e) {
-        rethrowIfExit(e);
-        // A row that cannot be built is this attempt's failure, not the pass's.
-        out = {
-          dest: "errors",
-          row: {
-            prompt_id: c.id,
-            rep,
-            ...(c.originalId !== undefined ? { original_id: c.originalId } : {}),
-            failure_class: "error",
-            error: `could not build the row: ${message(e)}`,
-            retries: 0,
-            judge_retries: 0,
-            latency_s: report.attemptS,
-            // The attempt's spend stays countable; counters it could not report are said, not zeroed.
-            meta: {
-              failure_rule: "row_build",
-              // What the attempt asked for, as on every other error row.
-              ...(ctx.pin !== undefined ? { model_requested: ctx.pin } : {}),
-              ...(ctx.requestedEffort !== undefined ? { effort: ctx.requestedEffort.effort } : {}),
-              ...(ctx.requestedEffort?.noSelector ? { effort_selector: false } : {}),
-              retries_unrecorded: true,
-              judge_retries_unrecorded: true,
-              ...(typeof report.result?.cost?.usd === "number" ? { cost_usd: report.result.cost.usd } : {}),
-              ...(typeof report.result?.deciderCostUsd === "number" ? { decider_usd: report.result.deciderCostUsd } : {}),
-              ...fallbackBilling(report, ctx),
-              ...(report.runDir !== undefined ? { run_dir: report.runDir, run_id: basename(report.runDir) } : {}),
-            },
-          },
-        };
-      }
-      if (out.dest === "errors") {
+        ...(deps.pairwise ? { pairwise: deps.pairwise } : {}),
+        ...(deps.skillTracked !== undefined ? { skillTracked: deps.skillTracked } : {}),
+        ...(deps.searchCorpus ? { searchCorpus: deps.searchCorpus } : {}),
+        ablate: args.ablate,
+        allowModelSplit: args.allowModelSplit,
+      });
+      const rec = recordAttempt({
+        writer,
+        variant: v,
+        c,
+        rep,
+        report,
+        ctx,
+        secrets: deps.secrets,
+        uploads: deps.inputs?.(c) ?? [],
+        noCopyInputs: args.noCopyInputs,
+      });
+      if (rec.dest === "errors") {
         fail++;
-        writer.appendError(out.row);
-        say(`  [${v}] ${c.stem} rep${rep} FAILED: ${String(out.row.error)}`);
-        const meta = out.row.meta as Record<string, unknown> | undefined;
+        say(`  [${v}] ${c.stem} rep${rep} FAILED: ${String(rec.row.error)}`);
+        const meta = rec.row.meta as Record<string, unknown> | undefined;
         if (!authHinted && deps.authHint && meta?.failure_rule === "auth") {
           authHinted = true;
           say(`  [${v}] ${deps.authHint(c)}`);
@@ -600,66 +694,16 @@ async function run(
           judgeAuthHinted = true;
           say(`  [${v}] ${graderCredentialHint()}`);
         }
-        return graderFailure;
+        return { graderFailure, written: { row: rec.row, scored: false } };
       }
-      // The session's uploads: attached to the row now, copied after it (unless --no-copy-inputs).
-      const uploads = deps.inputs?.(c) ?? [];
-      let inputs: ReturnType<typeof planInputCopy> | undefined;
-      if (uploads.length && args.noCopyInputs) (out.row.meta as Record<string, unknown>).inputs_not_copied = true;
-      else if (uploads.length) {
-        inputs = planInputCopy(uploads, OUTPUT_CAPS);
-        if (inputs.copy.length) out.row.attachments = inputs.copy.map((i) => ({ kind: attachmentKind(i.name), ref: `inputs/${i.name}` }));
-        if (inputs.skipped.length) (out.row.meta as Record<string, unknown>).inputs_skipped = inputs.skipped;
-      }
-      // The trace is built (pure) BEFORE the row, so the row can say how complete it is; only the writes
-      // come after the row (runner-scaffold.mjs l.529-547).
-      const prefix = `${v}/out/${c.id}_rep${rep}/blobs/`;
-      let trace: ReturnType<typeof turnsFromEvents> | undefined;
-      let traceError: unknown;
-      let outputs: ReturnType<typeof planOutputCopy> | undefined;
-      try {
-        trace = turnsFromEvents({
-          events: report.events,
-          prompt: c.scenario.prompt,
-          system: report.system,
-          ...(report.subagentAppend !== undefined ? { subagentAppend: report.subagentAppend } : {}),
-          children: report.children,
-          sidecarPrefix: prefix,
-          redact: (t) => redactDeep(t, deps.secrets),
-        });
-        (out.row.meta as Record<string, unknown>).subagent_turns = trace.subagentTurns;
-        // The files the run authored: attached to the final assistant turn now, copied after the row.
-        if (report.result?.workDir) {
-          outputs = planOutputCopy(report.result.workDir, authoredOutputs(report.result), OUTPUT_CAPS);
-          const filesPrefix = `${v}/out/${c.id}_rep${rep}/files/`;
-          const last = [...trace.turns].reverse().find((t) => t.role === "assistant");
-          if (last && outputs.copy.length)
-            last.attachments = outputs.copy.map((o) => ({ kind: attachmentKind(o.rel), ref: filesPrefix + o.rel }));
-          if (outputs.skipped.length) (out.row.meta as Record<string, unknown>).outputs_skipped = outputs.skipped;
-        }
-      } catch (e) {
-        rethrowIfExit(e);
-        traceError = e;
-      }
-      writer.appendResult(out.row);
       scored++;
-      if (typeof out.row.model === "string") models.add(out.row.model);
-      // Past this point the attempt is scored: a failed post-row write counts as failed but writes no error
-      // row, which would double-count its spend (runner-scaffold.mjs l.529, 541-548).
-      try {
-        if (traceError !== undefined) throw traceError;
-        for (const s of trace!.sidecars) writer.writeUnderFlow(prefix + s.name, s.data);
-        for (const i of inputs?.copy ?? []) writer.writeUnderFlow(`inputs/${i.name}`, asFlowData(i.data));
-        // Text is redacted like every other byte in the flow; a binary is copied as it is.
-        for (const o of outputs?.copy ?? []) writer.writeUnderFlow(`${v}/out/${c.id}_rep${rep}/files/${o.rel}`, asFlowData(o.data));
-        writer.writeTrace(c.id, rep, trace!.turns);
-        ok++;
-      } catch (e) {
-        rethrowIfExit(e);
+      if (typeof rec.row.model === "string") models.add(rec.row.model);
+      if (rec.postWriteError === undefined) ok++;
+      else {
         fail++;
-        say(`  [${v}] ${c.stem} rep${rep} scored, but a post-row write failed: ${message(e)}`);
+        say(`  [${v}] ${c.stem} rep${rep} scored, but a post-row write failed: ${message(rec.postWriteError)}`);
       }
-      return graderFailure;
+      return { graderFailure, written: { row: rec.row, scored: true } };
     }
     progress();
     // The variant's scored rows, this pass's included, must come from one model per pin: the pre-spend refusal sees only
@@ -692,6 +736,7 @@ async function run(
       writer.setSummaryKeys(requestedSummary(writer.readVariantFile("results.jsonl")));
       // The variant's spend: printed before the `done` line, which stays the pass's last line (the scaffold's).
       for (const line of writeCostSummary(writer, v)) say(line);
+      if (budget) say(`[${v}] budget: the pass ${budget.text()}`);
       if (v === "baseline") for (const line of headroom(loadFlowSnapshot(flowAbs), all).warnings) say(line);
     } catch (e) {
       rethrowIfExit(e);
@@ -722,6 +767,177 @@ function fallbackBilling(report: JobReport, ctx: AttemptContext): { billing?: Bi
   } catch (caught) {
     rethrowIfExit(caught);
     return {};
+  }
+}
+
+/** What an attempt's row context takes from the pass (the runner's deps and flags, or `hillclimb seed`'s). */
+export interface AttemptContextInput {
+  metrics: AttemptContext["metrics"];
+  flowHash: string;
+  env: AttemptContext["meta"]["env"];
+  /** The variant snapshot's content signature for the case. */
+  sig: string | undefined;
+  pin: string | undefined;
+  requestedEffort: AttemptContext["requestedEffort"];
+  credentialEnv: AttemptContext["credentialEnv"];
+  pairwise?: PairwiseDecls;
+  skillTracked?: string;
+  searchCorpus?: NonNullable<AttemptContext["meta"]["searchCorpus"]>;
+  ablate: boolean;
+  allowModelSplit: boolean;
+}
+
+/** One attempt's row context: the case, the pass's settings, and the attempt's own evidence. */
+export function attemptContext(c: HillclimbCase, rep: number, report: JobReport, i: AttemptContextInput): AttemptContext {
+  return {
+    caseId: c.id,
+    ...(c.originalId !== undefined ? { originalId: c.originalId } : {}),
+    scenarioName: c.name,
+    prompt: c.scenario.prompt,
+    assertions: c.scenario.assert,
+    expectDenied: c.scenario.expect_denied ?? [],
+    metrics: i.metrics,
+    ...(i.pairwise ? { pairwise: i.pairwise } : {}),
+    rep,
+    pin: i.pin,
+    requestedEffort: i.requestedEffort,
+    credentialEnv: i.credentialEnv,
+    ...(i.sig !== undefined ? { expectedContentSig: i.sig } : {}),
+    events: report.events,
+    ...(report.transcript !== undefined ? { transcript: report.transcript } : {}),
+    ...(report.transcriptWhere !== undefined ? { transcriptWhere: report.transcriptWhere } : {}),
+    attemptS: report.attemptS,
+    runnerTimeout: report.runnerTimeout,
+    tags: [basename(dirname(c.file))],
+    ...(report.skillInvoked !== undefined ? { skillInvoked: report.skillInvoked } : {}),
+    meta: {
+      flowHash: i.flowHash,
+      env: i.env,
+      ...(report.runDir !== undefined ? { runDir: report.runDir } : {}),
+      ...(i.sig !== undefined ? { contentSig: i.sig } : {}),
+      // The skill hash the run itself staged (evidence), not one recomputed here.
+      ...(typeof report.result?.fingerprint?.skillHash === "string" ? { skillHash: report.result.fingerprint.skillHash } : {}),
+      ...(i.skillTracked !== undefined ? { skillTracked: i.skillTracked } : {}),
+      ...(i.ablate ? { ablated: true } : {}),
+      ...(c.scenario.on_unanswered === "llm" ? { nonDeterministic: true } : {}),
+      ...(i.allowModelSplit ? { modelSplitAllowed: true } : {}),
+      ...(i.searchCorpus ? { searchCorpus: i.searchCorpus } : {}),
+    },
+  };
+}
+
+/** Build an attempt's row and write it with everything that goes beside it: an errors row, or a results row then its
+ *  trace, sidecars, input and output copies. A row that cannot be built is an errors row. `metaExtra` joins the
+ *  row's meta. `postWriteError` is a write after the results row that failed: the attempt stays scored. */
+export function recordAttempt(o: {
+  writer: FlowWriter;
+  variant: string;
+  c: HillclimbCase;
+  rep: number;
+  report: JobReport;
+  ctx: AttemptContext;
+  secrets: readonly string[];
+  uploads: readonly string[];
+  noCopyInputs: boolean;
+  metaExtra?: Record<string, unknown>;
+}): { dest: "results" | "errors"; row: Record<string, unknown>; postWriteError?: unknown } {
+  const { writer, variant: v, c, rep, report, ctx } = o;
+  let out: ReturnType<typeof attemptRow>;
+  try {
+    out = attemptRow(
+      { ...(report.result ? { result: report.result } : {}), ...(report.thrown !== undefined ? { thrown: report.thrown } : {}) },
+      ctx,
+    );
+  } catch (e) {
+    rethrowIfExit(e);
+    // A row that cannot be built is this attempt's failure, not the pass's.
+    out = {
+      dest: "errors",
+      row: {
+        prompt_id: c.id,
+        rep,
+        ...(c.originalId !== undefined ? { original_id: c.originalId } : {}),
+        failure_class: "error",
+        error: `could not build the row: ${message(e)}`,
+        retries: 0,
+        judge_retries: 0,
+        latency_s: report.attemptS,
+        // The attempt's spend stays countable; counters it could not report are said, not zeroed.
+        meta: {
+          failure_rule: "row_build",
+          // What the attempt asked for, as on every other error row.
+          ...(ctx.pin !== undefined ? { model_requested: ctx.pin } : {}),
+          ...(ctx.requestedEffort !== undefined ? { effort: ctx.requestedEffort.effort } : {}),
+          ...(ctx.requestedEffort?.noSelector ? { effort_selector: false } : {}),
+          retries_unrecorded: true,
+          judge_retries_unrecorded: true,
+          ...(typeof report.result?.cost?.usd === "number" ? { cost_usd: report.result.cost.usd } : {}),
+          ...(typeof report.result?.deciderCostUsd === "number" ? { decider_usd: report.result.deciderCostUsd } : {}),
+          ...fallbackBilling(report, ctx),
+          ...(report.runDir !== undefined ? { run_dir: report.runDir, run_id: basename(report.runDir) } : {}),
+        },
+      },
+    };
+  }
+  const row = out.row as Record<string, unknown>;
+  if (o.metaExtra) row.meta = { ...(row.meta as Record<string, unknown> | undefined), ...o.metaExtra };
+  if (out.dest === "errors") {
+    writer.appendError(out.row);
+    return { dest: "errors", row };
+  }
+  const meta = row.meta as Record<string, unknown>;
+  // The session's uploads: attached to the row now, copied after it (unless --no-copy-inputs).
+  let inputs: ReturnType<typeof planInputCopy> | undefined;
+  if (o.uploads.length && o.noCopyInputs) meta.inputs_not_copied = true;
+  else if (o.uploads.length) {
+    inputs = planInputCopy([...o.uploads], OUTPUT_CAPS);
+    if (inputs.copy.length) out.row.attachments = inputs.copy.map((i) => ({ kind: attachmentKind(i.name), ref: `inputs/${i.name}` }));
+    if (inputs.skipped.length) meta.inputs_skipped = inputs.skipped;
+  }
+  // The trace is built (pure) BEFORE the row, so the row can say how complete it is; only the writes
+  // come after the row (runner-scaffold.mjs l.529-547).
+  const prefix = `${v}/out/${c.id}_rep${rep}/blobs/`;
+  let trace: ReturnType<typeof turnsFromEvents> | undefined;
+  let traceError: unknown;
+  let outputs: ReturnType<typeof planOutputCopy> | undefined;
+  try {
+    trace = turnsFromEvents({
+      events: report.events,
+      prompt: c.scenario.prompt,
+      system: report.system,
+      ...(report.subagentAppend !== undefined ? { subagentAppend: report.subagentAppend } : {}),
+      children: report.children,
+      sidecarPrefix: prefix,
+      redact: (t) => redactDeep(t, o.secrets),
+    });
+    meta.subagent_turns = trace.subagentTurns;
+    // The files the run authored: attached to the final assistant turn now, copied after the row.
+    if (report.result?.workDir) {
+      outputs = planOutputCopy(report.result.workDir, authoredOutputs(report.result), OUTPUT_CAPS);
+      const filesPrefix = `${v}/out/${c.id}_rep${rep}/files/`;
+      const last = [...trace.turns].reverse().find((t) => t.role === "assistant");
+      if (last && outputs.copy.length)
+        last.attachments = outputs.copy.map((x) => ({ kind: attachmentKind(x.rel), ref: filesPrefix + x.rel }));
+      if (outputs.skipped.length) meta.outputs_skipped = outputs.skipped;
+    }
+  } catch (e) {
+    rethrowIfExit(e);
+    traceError = e;
+  }
+  writer.appendResult(out.row);
+  // Past this point the attempt is scored: a failed post-row write counts as failed but writes no error
+  // row, which would double-count its spend (runner-scaffold.mjs l.529, 541-548).
+  try {
+    if (traceError !== undefined) throw traceError;
+    for (const sc of trace!.sidecars) writer.writeUnderFlow(prefix + sc.name, sc.data);
+    for (const i of inputs?.copy ?? []) writer.writeUnderFlow(`inputs/${i.name}`, asFlowData(i.data));
+    // Text is redacted like every other byte in the flow; a binary is copied as it is.
+    for (const x of outputs?.copy ?? []) writer.writeUnderFlow(`${v}/out/${c.id}_rep${rep}/files/${x.rel}`, asFlowData(x.data));
+    writer.writeTrace(c.id, rep, trace!.turns);
+    return { dest: "results", row };
+  } catch (e) {
+    rethrowIfExit(e);
+    return { dest: "results", row, postWriteError: e };
   }
 }
 
@@ -761,12 +977,12 @@ export function readStateIfPresent(flowArg: string, cwd: string): Record<string,
 
 /** What a variant's rows say they tracked: a registered id, NONE (this pass tracks no skill), or UNRECORDED (a row with
  *  no `meta.skill_tracked`: one that tracked none, or one written before the field existed). */
-type Tracked = string;
-const NONE: Tracked = "";
+export type Tracked = string;
+export const NONE: Tracked = "";
 const UNRECORDED: Tracked = "\0unrecorded";
 
 /** Per variant with scored rows: what its rows' `meta.skill_tracked` says. */
-function skillTrackedByVariant(snap: ReturnType<typeof loadFlowSnapshot>): Map<string, Set<Tracked>> {
+export function skillTrackedByVariant(snap: ReturnType<typeof loadFlowSnapshot>): Map<string, Set<Tracked>> {
   const out = new Map<string, Set<Tracked>>();
   for (const [variant, vs] of Object.entries(snap.variants))
     for (const line of (vs.results ?? "").split("\n")) {
@@ -784,7 +1000,7 @@ function skillTrackedByVariant(snap: ReturnType<typeof loadFlowSnapshot>): Map<s
   return out;
 }
 
-const trackedText = (s: ReadonlySet<Tracked>): string =>
+export const trackedText = (s: ReadonlySet<Tracked>): string =>
   [...s]
     .sort()
     .map((t) => (t === NONE ? "no skill" : t === UNRECORDED ? "unrecorded" : t))
@@ -922,7 +1138,7 @@ function requestedMix(
 }
 
 /** A row in the flow whose `meta.ablated` disagrees with this run, named as `<variant>/<prompt_id>`. */
-function ablationMix(snap: ReturnType<typeof loadFlowSnapshot>, ablate: boolean): string | undefined {
+export function ablationMix(snap: ReturnType<typeof loadFlowSnapshot>, ablate: boolean): string | undefined {
   for (const [variant, vs] of Object.entries(snap.variants))
     for (const line of (vs.results ?? "").split("\n")) {
       if (!line.trim()) continue;

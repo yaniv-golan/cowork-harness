@@ -15,6 +15,8 @@ export interface GraderProbeTarget {
 export interface JudgeCheckOutcome {
   refusal?: string;
   lines: string[];
+  /** What the probes that reported a cost spent, summed (absent when none did). */
+  costUsd?: number;
 }
 
 export type JudgeCheck = (targets: readonly GraderProbeTarget[]) => Promise<JudgeCheckOutcome>;
@@ -46,6 +48,8 @@ export async function runJudgeCheck(
 ): Promise<JudgeCheckOutcome> {
   const lines: string[] = [];
   const seen = new Set<string>();
+  let costUsd: number | undefined;
+  const spent = () => (costUsd !== undefined ? { costUsd } : {});
   for (const t of targets) {
     const key = `${t.role}\u0000${t.model}`;
     if (seen.has(key)) continue;
@@ -53,6 +57,7 @@ export async function runJudgeCheck(
     const o = await probe(t.model, t.role);
     const who = ROLE_NAME[t.role];
     if (o.status === "ok") {
+      if (o.costUsd !== undefined) costUsd = (costUsd ?? 0) + o.costUsd;
       lines.push(`${who} credential: ${o.credential} works for ${o.model} (${fmtCost(o.costUsd)})`);
       continue;
     }
@@ -73,10 +78,11 @@ export async function runJudgeCheck(
           : "check the credential with `cowork-harness doctor`; COWORK_HARNESS_GRADER_AUTH picks which credential the graders get";
     return {
       lines,
+      ...spent(),
       refusal:
         `the ${who}'s call was refused before any agent run (${o.message}; model ${t.model}, credential ${o.credential}). ` +
         `Every grade would fail the same way, so nothing was run. Fix: ${fix}.`,
     };
   }
-  return { lines };
+  return { lines, ...spent() };
 }

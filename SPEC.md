@@ -616,13 +616,13 @@ there are three families:
   preview's fields), `critique --corpus-only`'s corpus payload (with its corpus hashes, `corpusManifest`
   and `source`), `critique --compare` (`mode: "compare"`, `publicSafe`, `note`, `noiseFloorControl`, `groups`,
   `fingerprints`, `possibleRewordings`, `excluded`, `clustering`, and `candidateGroups` under `--cluster lexical`), `eval` and `eval report` (`evalDir`, `arms`, `pins`,
-  `sections`, `summary`, `cost`, `stoppedEarly`), `eval --dry-run` (`dryRun: true`, `plan` — no `evalDir`, none
+  `sections`, `summary`, `cost`, `stoppedEarly`; `eval report --headroom` adds `headroom: {arm: {label, role}, rows}`, experimental), `eval --dry-run` (`dryRun: true`, `plan` — no `evalDir`, none
   is created; §12 covers `plan.cost`'s summary keys and nothing else of `plan`), `hillclimb run` (`flow`, `variant`, `scheduled`, `scored` — the
-  rows written to `results.jsonl` this pass, named so it never shadows the envelope's `ok` — `failed`, `exitCode`, `stopped` (absent unless the pass stopped on a grader failure), and on `--dry-run`
+  rows written to `results.jsonl` this pass, named so it never shadows the envelope's `ok` — `failed`, `exitCode`, `stopped` (absent unless the pass stopped mid-run: `{reason: "grader_credential", source, status?, atJob, case, rep}` on a grader failure, `{reason: "budget", spentUsd, capUsd, atJob, case, rep}` on `--max-budget-usd` (`spentUsd` is the spend recorded so far, an unpriced slot at its estimate), the error then carrying `error.code: "budget_stopped"`), and on `--dry-run`
   `dryRun: true` with the estimate at `plan.cost`, where `eval --dry-run` puts it), `hillclimb check` (`reading`, `disclaimer`, `profile`, `findings`, `errors`, `notes`, `warnings`),
   `hillclimb state-template` (`state`, `metrics_md`, and with `--flow` `metrics_md_file`; `notes` when a column was left
   undeclared, experimental), `hillclimb freeze-ref` (payload experimental, §12: `frozen`, `added`, `exists`, `refused`,
-  `exitCode`), `hillclimb regrade` (payload experimental, §12: `flow`, `variants` (each `{variant, rewritten, judged, rebuilt, ownRefOnly, promoted, listedAfterJudge, judgeUsd?, judgeUnpriced, judgeStopped, listed, reevaluated, remeasured, agentFailed, evidenceChanged, regradeFiles, backup?}`), `exitCode`; so are `<variant>/regrade.md`, the `regrade-<sha16>.bak.jsonl` backups and the rows' `meta.regrade_*` and `meta.assert_sig` keys; a row a judged entry of which the current harness would show its judge different evidence than it was graded on is in `evidenceChanged` and is never silently kept or re-graded — listed and kept without `--rejudge`, re-judged on the current evidence with it, recording `evidence_changed` and both document hashes in `meta.regrade_evidence` — except a row whose current document would be less redacted than the graded one, listed in both modes unless `--allow-scrub-change` is also given; and a row with a part of its judge input not proven scrubbed with a set covering its run's, listed unless `--allow-scrub-change`), `verify-cassettes` (§11.1), `doctor` (§11.2), `rehash`,
+  `exitCode`), `hillclimb seed` (payload experimental, §12: `flow`, `variant`, `seeded`, `errors`, `snapshot?`; rows it writes carry `meta.seeded_from`), `hillclimb regrade` (payload experimental, §12: `flow`, `variants` (each `{variant, rewritten, judged, rebuilt, ownRefOnly, promoted, listedAfterJudge, judgeUsd?, judgeUnpriced, judgeStopped, listed, reevaluated, remeasured, agentFailed, evidenceChanged, regradeFiles, backup?}`), `exitCode`; so are `<variant>/regrade.md`, the `regrade-<sha16>.bak.jsonl` backups and the rows' `meta.regrade_*` and `meta.assert_sig` keys; a row a judged entry of which the current harness would show its judge different evidence than it was graded on is in `evidenceChanged` and is never silently kept or re-graded — listed and kept without `--rejudge`, re-judged on the current evidence with it, recording `evidence_changed` and both document hashes in `meta.regrade_evidence` — except a row whose current document would be less redacted than the graded one, listed in both modes unless `--allow-scrub-change` is also given; and a row with a part of its judge input not proven scrubbed with a set covering its run's, listed unless `--allow-scrub-change`), `verify-cassettes` (§11.1), `doctor` (§11.2), `rehash`,
   `answer` (`gate`, `answers`), `fixture export` (exit `0` written, `2` usage or refusal; payload experimental,
   §12: `message`, `written`, `skipped`, `refused` (`[]`), `notes`, `bytes`, `outputsDir`, `partial`, `result`, and with
   `--session-paths` `substituted`; a
@@ -688,14 +688,16 @@ scheduled job with no record (a stop on a refused grader credential included: `s
 a refusal before the first run (`--max-budget-usd` included) · `3` an arm snapshot could not be copied or failed its
 staging preflight. `eval --dry-run`: `0` the plan was printed · `2` any refusal the real eval would make before its
 first run · `3` as above, or the temp dir is inside a git work tree or git cannot tell. `hillclimb run`: `0` every
-attempt ok · `1` a failed attempt, a mid-run stop (a refused grader credential included: `stopped`), or a variant
-served two model ids for one pin (unless `--allow-model-split`) · `2` refused before spending. `hillclimb check`: `0` clean · `1`
+attempt ok · `1` a failed attempt (a `gate_failed` row from `--gate-cmd` included), a mid-run stop (a refused grader
+credential or `--max-budget-usd` included: `stopped`), or a variant served two model ids for one pin (unless
+`--allow-model-split`) · `2` refused before spending (a `--max-budget-usd` below every open slot's estimate included). `hillclimb check`: `0` clean · `1`
 an error finding (one of the published schema's checks, a `_state.json` metric declaration, a changed frozen
 reference, `metrics.sig_mixed`, a column whose rows carry two declaration signatures, or `served_model.split` not
 opted into); its warnings and notes
 never change the exit code · `2` usage, a missing flow dir or a target that does not load. `hillclimb state-template`:
 `0` printed · `2` usage or refusal. `hillclimb freeze-ref`: `0` nothing refused · `1` a case refused · `2` usage.
-`hillclimb regrade`: `0` rewritten or nothing to do · `1` some rows listed (not re-graded) or a failure after the
+`hillclimb seed`: `0` seeded · `1` a write failed (what was written is removed) · `2` usage or refusal, nothing
+written. `hillclimb regrade`: `0` rewritten or nothing to do · `1` some rows listed (not re-graded) or a failure after the
 first judge call · `2` refused before any judge call.
 
 **`regrade`** re-grades a kept run's judged asserts (`semantic_matches`, `semantic_pairwise`) with the judge and prints one payload-shaped
@@ -837,6 +839,8 @@ estimate that was refused (`enforced` is `true`, or `"lower_bound"` when the kno
 exceeds the cap). Exit codes are unchanged (`1` on `record`, `2` on `run`/`skill`/`eval`). `error.code` narrows a
 category and never replaces one; it is **absent** on every other error, so `error.code ===
 "budget_exceeded"` is the whole test for "refused on cost" and a load failure is never mistaken for it.
+`hillclimb run`'s `--max-budget-usd` is a per-pass cap, not this pre-flight: a pass it stops mid-run exits `1` with
+**`error.code: "budget_stopped"`** and the payload's `stopped.reason: "budget"`, never `budget_exceeded`.
 When the refusal replaces a payload envelope, that payload's findings stay on the error envelope as the
 same top-level keys: a `record <dir/> --dry-run` refusal carries `dryRun`, `target`, `scenarios`,
 `skipped`, `broken[]`, `refusals[]` and `inputErrors[]`; a `record <file> --dry-run` refusal carries
@@ -956,7 +960,7 @@ assertions (never user-authored themselves):
   "results":[],  // [] except record's post-run refusal: the refused run, beside the non-null error
   "budget?": { /* §11 --max-budget-usd marker — present when a pre-flight ran */ },
   "error": { "category": "usage|unanswered|boundary|runtime|internal", "message": "string", "hint?": "string",
-             "code?": "budget_exceeded|doc_drift|unchecked_content|task_unverifiable|rubric_unverifiable|evidence_unverifiable|reference_unverifiable|no_semantic_asserts", "budget?": { /* §11 --max-budget-usd */ } } }
+             "code?": "budget_exceeded|budget_stopped|doc_drift|unchecked_content|task_unverifiable|rubric_unverifiable|evidence_unverifiable|reference_unverifiable|no_semantic_asserts", "budget?": { /* §11 --max-budget-usd */ } } }
 ```
 `error.code` narrows a category, never replaces it: `budget_exceeded` is the `--max-budget-usd` refusal (§11);
 `doc_drift` and `unchecked_content` are `regrade`'s evidence refusals and the four `*_unverifiable` codes its scrub
@@ -1248,7 +1252,10 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   `meanUsd`, `p50Usd`, `p95Usd`, `worstObservedUsd`, `lowerBound`, `unpriced[]`, `pricedRuns` and `thinnest` (null
   when nothing is priced). **Their one basis:** each scenario's prior runs in the runs dir's index on the
   schedule's effective tier (`cowork` resolved) and its baseline, turn 1 only, `hillclimb:`-labelled runs
-  excluded, agent cost only (no judge or decider spend). `worstObservedUsd` is on that same basis — the sum over
+  excluded, agent cost only (no judge or decider spend). Since 5.0.0, a scenario with no priced run on its own
+  baseline is priced from the nearest older baseline with priced runs on the same basis, else the nearest newer
+  one (named per scenario as `items[].pricedFromBaseline`, experimental); it is `unpriced` only with no priced run
+  on any baseline. `worstObservedUsd` is on that same basis — the sum over
   the priced scenarios of jobs × the most expensive run on it — and is NOT the `--max-budget-usd` gate's figure,
   which reads a wider basis (any tier, baseline or turn, hillclimb runs included; the experimental
   `budgetGateWorstUsd`). Each dollar key sums the priced scenarios only; an unpriced one adds $0, is named in

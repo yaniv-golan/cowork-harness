@@ -118,6 +118,8 @@ function buildFlow(
     judgeTies?: boolean;
     /** alpha's pairwise assert judges both orders. */
     orderBoth?: boolean;
+    /** More `hillclimb run` flags for both passes (e.g. `--gate-cmd true`). */
+    runArgs?: string[];
   } = {},
 ) {
   const plugin = join(work, "plugin", "my-plugin");
@@ -157,7 +159,7 @@ function buildFlow(
   const reps = String(opts.reps ?? 1);
   const sel = opts.skill !== undefined ? ["--skill", opts.skill] : [];
   for (const pass of [["--approve-harness"], ["--variant", "v1"]]) {
-    const r = cli("run", "evals", "--flow", "flow", ...pass, "--concurrency", "1", "--reps", reps, ...sel);
+    const r = cli("run", "evals", "--flow", "flow", ...pass, "--concurrency", "1", "--reps", reps, ...sel, ...(opts.runArgs ?? []));
     expect(r.status, r.stderr).toBe(0);
   }
   // In-process calls read the same runs root and judge binary.
@@ -829,6 +831,31 @@ describe.runIf(POSIX)("hillclimb regrade applies run's harness gate to a flow ap
     );
     expect(out.error?.message).not.toContain("_session.yaml");
     expect(stateOf()).toMatchObject({ harness_skill: "x" });
+  }, 180_000);
+});
+
+describe.runIf(POSIX)("hillclimb regrade on a flow approved with --gate-cmd: re-hashes the recorded hash, never runs it", () => {
+  const stateOf = () => JSON.parse(readFileSync(join(f.cwd, "flow", "_state.json"), "utf8")) as Record<string, unknown>;
+  const GATE = ["--gate-cmd", "true"];
+
+  it("nothing changed: regrade passes the gate", async () => {
+    buildFlow({ runArgs: GATE });
+    expect(stateOf().harness_gate_sha).toMatch(/^[0-9a-f]{64}$/);
+    const out = await regradeFlow(ARGS(), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
+    expect(out.exitCode, JSON.stringify(out.error)).toBe(0);
+  }, 180_000);
+
+  it("regrade --approve-harness keeps harness_gate_sha, and the next `run --gate-cmd true` is approved", async () => {
+    const { cli, evals } = buildFlow({ runArgs: GATE });
+    const gateSha = stateOf().harness_gate_sha;
+    const sc = join(evals, "alpha.yaml");
+    writeFileSync(sc, readFileSync(sc, "utf8").replace("rubric: ['answers']", "rubric: ['answers', 'is brief']"));
+    const out = await regradeFlow(ARGS({ approveHarness: true }), DEPS({ regradeOptions: { pairwiseComplete: verdict("A") } }));
+    expect(out.exitCode, JSON.stringify(out.error)).toBe(0);
+    expect(stateOf().harness_gate_sha).toBe(gateSha);
+    const r = cli("run", "evals", "--flow", "flow", "--variant", "v1", ...GATE, "--dry-run");
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stderr).toMatch(/harness gate: approved/);
   }, 180_000);
 });
 

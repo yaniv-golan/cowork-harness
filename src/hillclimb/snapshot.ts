@@ -62,6 +62,34 @@ const digest = (dir: string, rels: readonly string[]): string => {
   return h.digest("hex");
 };
 
+/** `hillclimb seed`: install `src` (an eval arm's snapshot) as a variant's snapshot that does not exist yet, as
+ *  `variantSnapshot` lays one out: `<root>/<flowHash>/<variant>/<name>` and its `.complete` marker, copied whole (the
+ *  arm dir is already the file set its reps mounted). Refused when either already exists. */
+export function installVariantSnapshot(
+  src: string,
+  opts: { snapshotRoot: string; flowHash: string; variant: string; name: string },
+): { dir: string; marker: string } {
+  if (isInsideGitWorkTree(opts.snapshotRoot))
+    throw new UsageError(
+      `the snapshot dir ${tildeify(opts.snapshotRoot)} is inside a git work tree: the stager delivers a mount's git-tracked files only, so the variant's plugin would mount EMPTY; set ${SNAPSHOT_ROOT_ENV} to an absolute directory outside any git work tree`,
+    );
+  const dir = join(opts.snapshotRoot, opts.flowHash, opts.variant, opts.name);
+  const marker = `${dir}.complete`;
+  if (existsSync(dir) || existsSync(marker))
+    throw new UsageError(
+      `variant ${opts.variant} already has a plugin snapshot at ${tildeify(dir)}: seed only a flow whose ${opts.variant} has never run`,
+    );
+  const tmp = `${dir}.tmp-${randomBytes(6).toString("hex")}`;
+  try {
+    snapshotDirArm(src, tmp, true, `variant ${opts.variant}`);
+    renameSync(tmp, dir);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+  writeFileSync(marker, new Date().toISOString() + "\n");
+  return { dir, marker };
+}
+
 export function variantSnapshot(
   live: string,
   opts: { snapshotRoot: string; flowHash: string; variant: string; variantRan?: boolean; checkOnly?: boolean },

@@ -52,12 +52,16 @@ import {
   HILLCLIMB_FREEZE_REF_VALUE_FLAGS,
   HILLCLIMB_FREEZE_REF_REPEATED_FLAGS,
   HILLCLIMB_FREEZE_REF_NO_DASH_VALUE,
+  HILLCLIMB_SEED_USAGE,
+  HILLCLIMB_SEED_VALUE_FLAGS,
+  HILLCLIMB_SEED_NO_DASH_VALUE,
   HILLCLIMB_REGRADE_USAGE,
   HILLCLIMB_STATE_TEMPLATE_USAGE,
   HILLCLIMB_USAGE,
 } from "./usage.js";
 import { regradeFlow } from "./regrade.js";
 import { freezeRefCommand } from "./freeze-ref.js";
+import { seedBaseline } from "./seed.js";
 import { flowHasPairwise } from "./grade-keys.js";
 import { discoverFlowRefs, metricRefNames } from "./pairwise.js";
 import { flowMetricUnion, rowAssertSigs } from "./metric-keys.js";
@@ -438,6 +442,8 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         undefined,
         {
           payload,
+          // A budget stop is told apart from every other mid-run stop by its code, not its prose.
+          ...(outcome.error.code !== undefined ? { error: { code: outcome.error.code } } : {}),
         },
       );
     if (json) writeAllSync(1, scrub(jsonPayloadEnvelope(`${CMD} run`, outcome.exitCode === 0, payload), secrets) + "\n");
@@ -643,6 +649,58 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
         for (const c of r.exists) err(`${c}: already frozen`, secrets);
         for (const f of r.refused) err(`refused ${f.case}: ${f.why}`, secrets);
       }
+      return exitWith(r.exitCode);
+    } catch (e) {
+      rethrowIfExit(e);
+      if (e instanceof UsageError) return usage(e.message, e.hint);
+      if (e instanceof FsRefusal) return usage(e.message);
+      throw e;
+    }
+  }
+
+  if (sub === "seed") {
+    let p;
+    try {
+      p = parseArgs(
+        rest,
+        withCommandGlobals({
+          booleans: [],
+          values: [...HILLCLIMB_SEED_VALUE_FLAGS],
+          repeated: [],
+          enums: { "--output-format": ["text", "json"] },
+          noDashValue: [...HILLCLIMB_SEED_NO_DASH_VALUE],
+        }),
+      );
+    } catch (e) {
+      rethrowIfExit(e);
+      return usage((e as Error).message, HILLCLIMB_SEED_USAGE);
+    }
+    if (p.flags["--help"] === true) {
+      writeAllSync(2, HILLCLIMB_SEED_USAGE + "\n");
+      return exitWith(0);
+    }
+    applyParsedCommandGlobals(CMD, p, json);
+    const fromEval = p.options["--from-eval"];
+    const arm = p.options["--arm"];
+    if (p.positionals.length !== 1 || fromEval === undefined || arm === undefined)
+      return usage(`hillclimb seed takes one scenario file or directory, --from-eval and --arm`, HILLCLIMB_SEED_USAGE);
+    try {
+      const r = await seedBaseline(
+        { target: p.positionals[0], flow: p.options["--flow"] ?? HILLCLIMB_RUN_DEFAULTS.flow, fromEval, arm },
+        { cwd: process.cwd(), env: process.env, secrets: [...secrets], stderr: (line) => err(line, secrets) },
+      );
+      const payload = {
+        flow: r.flow,
+        variant: r.variant,
+        seeded: r.seeded,
+        errors: r.errors,
+        ...(r.snapshot !== undefined ? { snapshot: r.snapshot } : {}),
+      };
+      if (json && r.error)
+        return fail(`${CMD} seed`, r.error.category, scrub(r.error.message, secrets), undefined, json, r.exitCode as 1 | 2, undefined, {
+          payload,
+        });
+      if (json) writeAllSync(1, scrub(jsonPayloadEnvelope(`${CMD} seed`, r.exitCode === 0, payload), secrets) + "\n");
       return exitWith(r.exitCode);
     } catch (e) {
       rethrowIfExit(e);

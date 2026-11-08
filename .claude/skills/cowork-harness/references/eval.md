@@ -7,7 +7,7 @@ need while running it.
 ```bash
 cowork-harness eval <scenario.yaml | dir/> --arm before=git:HEAD:plugins/my-skill --arm after=./plugins/my-skill \
   --model <concrete id> --judge-model <concrete id> [--holdout <scenario.yaml>]... [--fail-on possible|confirmed]
-cowork-harness eval report <eval-dir>     # rebuild the report from the eval dir, no spend
+cowork-harness eval report <eval-dir>     # rebuild the report, $0; --headroom: rows an arm can move
 ```
 
 ## What it does

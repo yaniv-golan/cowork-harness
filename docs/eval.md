@@ -79,7 +79,10 @@ Everything comes from the runs dir's history of each scenario (`~/.cowork-harnes
   runs left out. `stats <name> --baseline <b> --group-by fidelity` prints the same per-run figures for that
   tier, except that it counts resumed turns and hillclimb runs; the plan names both counts when they are
   non-zero. p95 is the most expensive run when a scenario has 20 or fewer; neither p95 nor the worst-observed
-  sum is a bound. A scenario with no priced run contributes $0 and makes the total a **LOWER BOUND** — on a
+  sum is a bound. A scenario with no priced run on its own baseline is priced from the nearest older baseline
+  that has priced runs on the same basis, else the nearest newer one, and the plan says which (`priced from
+  baseline <b>`; `pricedFromBaseline` in JSON): a `sync` that moves the baseline does not zero the estimate.
+  Only a scenario with no priced run on any baseline contributes $0 and makes the total a **LOWER BOUND** — on a
   fresh `--run-dir`, every scenario. History is arm-agnostic: arm B's cost may differ from arm A's past runs.
   The judge's spend is printed beside it, and is not covered by `--max-budget-usd`.
 - **Each row's rate.** Each kept run's `result.json` is re-scored by the eval's own classifier — an
@@ -255,6 +258,15 @@ The correction family is every claim row and every non-semantic assertion row of
 semantic roll-up rows and the two classification rows (the errored-by-agent rate and the invocation
 rate) are shown separately and never reach `confirmed`. `report.json` lists every rep with the bucket
 it landed in.
+
+### Where an arm still has room (`--headroom`)
+
+`eval report <eval-dir> --headroom [--arm <label|A|B>]` adds the assertion and claim rows that one arm (default B,
+the candidate) passed on some reps but not all, with headroom min(p, 1 − p), most first. A row at 0% or 100% is
+left out once the arm has 4 or more reps on it; with fewer it is listed whatever its rate, as "too few reps to
+tell". These are the rows a `hillclimb` round can still move: pick its cases from them, and seed its baseline
+from this arm with `hillclimb seed` ([hillclimb.md](./hillclimb.md#starting-the-baseline-from-an-eval)). It reads
+the eval dir only, costs nothing, and never changes the exit code; JSON carries it as `headroom`.
 
 ### What happens to a rep that went wrong
 

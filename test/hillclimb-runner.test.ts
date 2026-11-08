@@ -21,6 +21,7 @@ import {
 } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { requestedSummary, runHillclimb, type JobReport, type RunnerDeps } from "../src/hillclimb/runner.js";
 import { parseHillclimbRunArgs, type HillclimbRunArgs } from "../src/hillclimb/args.js";
 import type { RunResult } from "../src/types.js";
@@ -1069,5 +1070,246 @@ describe("one model per pin across a variant's scored rows", () => {
     behave = () => served(`${MODEL}-20251001`);
     const r = await runHillclimb(args(), deps());
     expect(r.exitCode).toBe(0);
+  });
+});
+
+describe("--gate-cmd: the gate runs once, before any rep", () => {
+  const snap = () => {
+    const d = join(cwd, "snap");
+    mkdirSync(d, { recursive: true });
+    return d;
+  };
+  const gate = (o: Partial<import("../src/hillclimb/gate-cmd.js").GateResult>, calls: unknown[] = []) =>
+    (async (x: unknown) => {
+      calls.push(x);
+      return { ok: false, code: 3, signal: null, timedOut: false, tail: "tests failed\n", wallS: 0.4, ...o };
+    }) as import("../src/hillclimb/gate-cmd.js").GateRunner;
+
+  it("a failing gate ⇒ no job, one gate_failed row per open slot ($0), exit 1, and `hillclimb check` reports nothing", async () => {
+    const calls: unknown[] = [];
+    await runHillclimb(args("--approve-harness", "--dry-run", "--gate-cmd", "npm test"), deps());
+    const r = await runHillclimb(args("--gate-cmd", "npm test", "--reps", "2"), deps({ gateSnapshot: snap(), runGate: gate({}, calls) }));
+    expect(jobs).toEqual([]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ cmd: "npm test", snapshot: join(cwd, "snap"), variant: "baseline", timeoutS: 600 });
+    expect(r).toMatchObject({ exitCode: 1, scheduled: 4, ok: 0, failed: 4 });
+    const errs = rows("baseline", "errors.jsonl");
+    expect(errs).toHaveLength(4);
+    for (const e of errs)
+      expect(e).toMatchObject({
+        failure_class: "gate_failed",
+        error: "the gate command exited 3; no rep of this variant ran",
+        retries: 0,
+        judge_retries: 0,
+        latency_s: 0.4,
+        meta: { cost_usd: 0, gate_exit: 3, gate_tail: "tests failed\n" },
+      });
+    const summary = JSON.parse(readFileSync(vfile("baseline", "summary.json"), "utf8"));
+    expect(summary.cost_rows_unrecorded).toBe(0);
+    // No rep ran: the gate rows are not cost rows at all.
+    expect(summary.cost_rows ?? 0).toBe(0);
+    const report = checkFlowDir(flowDir(), { profile: "harness" });
+    // `check` has no error, warning or note on the gate rows (the flow-wide findings — no results.jsonl yet, no
+    // declared metrics — are not about them).
+    expect(report.findings.filter((f) => /errors\.jsonl/.test(f.file ?? ""))).toEqual([]);
+    expect(report.findings.some((f) => f.file === "baseline/results.jsonl")).toBe(true);
+  });
+
+  it("the gate's tail is scrubbed with the run's secrets; a timeout records gate_timed_out", async () => {
+    await runHillclimb(args("--approve-harness", "--dry-run", "--gate-cmd", "x"), deps());
+    await runHillclimb(
+      args("--gate-cmd", "x", "--reps", "1"),
+      deps({
+        secrets: ["s3cr3t-value-123"],
+        gateSnapshot: snap(),
+        runGate: gate({ code: null, signal: "SIGKILL", timedOut: true, tail: "token s3cr3t-value-123\n" }),
+      }),
+    );
+    const e = rows("baseline", "errors.jsonl")[0];
+    expect(e.meta).toMatchObject({ gate_timed_out: true, gate_signal: "SIGKILL" });
+    expect(JSON.stringify(e)).not.toContain("s3cr3t-value-123");
+    expect(e.error).toMatch(/timed out after 600s/);
+  });
+
+  it("a passing gate ⇒ the reps run; a dry run and a pass with no open slot never run it", async () => {
+    const calls: unknown[] = [];
+    await runHillclimb(args("--approve-harness", "--dry-run", "--gate-cmd", "x"), deps());
+    await runHillclimb(args("--gate-cmd", "x", "--dry-run"), deps({ gateSnapshot: snap(), runGate: gate({ ok: true, code: 0 }, calls) }));
+    expect(calls).toHaveLength(0);
+    const r = await runHillclimb(
+      args("--gate-cmd", "x", "--reps", "1"),
+      deps({ gateSnapshot: snap(), runGate: gate({ ok: true, code: 0 }, calls) }),
+    );
+    expect(r.exitCode).toBe(0);
+    expect(jobs).toHaveLength(2);
+    expect(err.join("\n")).toMatch(/\[baseline\] gate command passed \(0\.4s\)/);
+    await runHillclimb(args("--gate-cmd", "x", "--reps", "1"), deps({ gateSnapshot: snap(), runGate: gate({ ok: true, code: 0 }, calls) }));
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a gate fixed after a failure: the next pass runs the gate_failed slots", async () => {
+    await runHillclimb(args("--approve-harness", "--dry-run", "--gate-cmd", "x"), deps());
+    await runHillclimb(args("--gate-cmd", "x", "--reps", "1"), deps({ gateSnapshot: snap(), runGate: gate({}) }));
+    expect(jobs).toEqual([]);
+    const r = await runHillclimb(
+      args("--gate-cmd", "x", "--reps", "1"),
+      deps({ gateSnapshot: snap(), runGate: gate({ ok: true, code: 0 }) }),
+    );
+    expect(r.exitCode).toBe(0);
+    expect(jobs).toHaveLength(2);
+  });
+});
+
+describe("--max-budget-usd: a per-pass cap checked before each slot", () => {
+  /** `args` without its default --concurrency 2 (each test names its own). */
+  const bargs = (...a: string[]): HillclimbRunArgs => {
+    const p = parseHillclimbRunArgs(["evals", "--flow", ".claude/hillclimb/f", ...a]);
+    if (p.help) throw new Error("help");
+    return p;
+  };
+  const priced = (usd: number) => () => ({ result: { ...excerpt, cost: { usd } } as RunResult });
+  /** One scored $1 row per case: the variant's own history. */
+  const seed = async () => {
+    await approved();
+    behave = priced(1);
+    expect((await runHillclimb(args("--reps", "1"), deps())).exitCode).toBe(0);
+    jobs = [];
+  };
+
+  it("stops before the slot that would cross: exit 1, stopped.reason budget, error.code budget_stopped, summary.json written", async () => {
+    await seed();
+    const r = await runHillclimb(bargs("--reps", "4", "--concurrency", "1", "--max-budget-usd", "2.5"), deps());
+    expect(jobs).toHaveLength(2);
+    expect(r.exitCode).toBe(1);
+    expect(r.error).toMatchObject({ category: "runtime", code: "budget_stopped" });
+    expect(r.error?.message).toMatch(/the cap is per pass: raise it, or re-run \(each pass has its own cap\)/);
+    expect(r.error?.message).not.toMatch(/re-run to resume/);
+    expect(r.stopped).toEqual({ reason: "budget", spentUsd: 2, capUsd: 2.5, atJob: 2, case: "alpha", rep: 3 });
+    const summary = JSON.parse(readFileSync(vfile("baseline", "summary.json"), "utf8"));
+    expect(summary.cost_rows).toBe(4);
+  });
+
+  it("an unpriced finished slot is charged its estimate: three no-cost failures and a $1 history stop before the fourth at $3.50", async () => {
+    await seed();
+    behave = () => "throw";
+    const r = await runHillclimb(bargs("--reps", "5", "--concurrency", "1", "--max-budget-usd", "3.5"), deps());
+    expect(jobs).toHaveLength(3);
+    expect(r.stopped).toMatchObject({ reason: "budget", spentUsd: 3, atJob: 3 });
+    expect(r.error?.message).toMatch(/unpriced 3/);
+  });
+
+  it("in-flight slots are reserved: --concurrency 4 with a cap of 1.5 slots starts exactly one", async () => {
+    await seed();
+    const r = await runHillclimb(bargs("--reps", "4", "--concurrency", "4", "--max-budget-usd", "1.5"), deps());
+    expect(jobs).toHaveLength(1);
+    expect(r.stopped).toMatchObject({ reason: "budget", atJob: 1 });
+  });
+
+  it("the grader probe's cost is the pass's starting spend", async () => {
+    await seed();
+    const r = await runHillclimb(args("--reps", "2", "--max-budget-usd", "1.5"), deps({ budgetStartUsd: 1 }));
+    expect(jobs).toHaveLength(0);
+    expect(r.stopped).toMatchObject({ reason: "budget", spentUsd: 1, atJob: 0 });
+  });
+
+  it("no history: estimated $0 (said once), and the cap is checked on what a slot spent — decider spend counted", async () => {
+    await approved();
+    behave = () => ({ result: { ...excerpt, deciderCostUsd: 3 } as RunResult });
+    const r = await runHillclimb(bargs("--reps", "2", "--concurrency", "1", "--max-budget-usd", "2"), deps());
+    expect(jobs).toHaveLength(1);
+    expect(r.stopped).toMatchObject({ reason: "budget", spentUsd: 3, atJob: 1 });
+    expect(err.filter((l) => /alpha has no cost history/.test(l))).toHaveLength(1);
+  });
+
+  it("no history at --concurrency 2: unestimated slots run one at a time, so the cap is passed by one slot at most", async () => {
+    await approved();
+    behave = priced(3);
+    const r = await runHillclimb(bargs("--reps", "2", "--concurrency", "2", "--max-budget-usd", "2"), deps());
+    // alpha rep0 starts at $0; alpha rep1 (also $0) waits for it, is then estimated at $3, and is stopped.
+    expect(jobs).toHaveLength(1);
+    expect(r.stopped).toMatchObject({ reason: "budget", spentUsd: 3, atJob: 1, case: "alpha", rep: 1 });
+  });
+
+  it("no history and the first slot finishes unpriced: the pass stops, since nothing can be charged", async () => {
+    await approved();
+    behave = () => "throw";
+    const r = await runHillclimb(bargs("--reps", "3", "--concurrency", "1", "--max-budget-usd", "2"), deps());
+    expect(jobs).toHaveLength(1);
+    expect(r.exitCode).toBe(1);
+    expect(r.error?.code).toBe("budget_stopped");
+    expect(r.error?.message).toMatch(/case alpha finished unpriced and the case has no cost history/);
+    expect(r.stopped).toMatchObject({ reason: "budget", spentUsd: 0, capUsd: 2, atJob: 1, case: "alpha", rep: 1 });
+  });
+
+  it("no history at --concurrency 2: the slot waiting behind an unpriced one is stopped too", async () => {
+    await approved();
+    behave = () => "throw";
+    const r = await runHillclimb(bargs("--reps", "2", "--concurrency", "2", "--max-budget-usd", "2"), deps());
+    expect(jobs).toHaveLength(1);
+    expect(r.stopped).toMatchObject({ reason: "budget", case: "alpha", rep: 1 });
+  });
+
+  it("(control) an unpriced slot that was the pass's last has nothing to stop", async () => {
+    await approved();
+    behave = () => "throw";
+    const r = await runHillclimb(bargs("--reps", "1", "--case", "alpha", "--concurrency", "1", "--max-budget-usd", "2"), deps());
+    expect(jobs).toHaveLength(1);
+    expect(r.stopped).toBeUndefined();
+    expect(r.error?.code).not.toBe("budget_stopped");
+  });
+
+  it("the index fallback prices a case with no rows in the variant", async () => {
+    await approved();
+    behave = priced(1);
+    const r = await runHillclimb(
+      bargs("--reps", "2", "--concurrency", "1", "--max-budget-usd", "3"),
+      deps({ budgetIndexWorstUsd: () => 2 }),
+    );
+    // Case-major order. alpha rep0: est 2 (index) → spent 1; alpha rep1: est 1 (its own p95 now) → 1+1 ≤ 3, spent 2;
+    // beta rep0: est 2 (index) → 2+2 > 3: stopped.
+    expect(jobs).toHaveLength(2);
+    expect(r.stopped).toMatchObject({ reason: "budget", spentUsd: 2, case: "beta", rep: 0 });
+  });
+
+  it("(control) no flag: no budget line and no stop; a grader stop keeps its own shape", async () => {
+    await seed();
+    const r = await runHillclimb(args("--reps", "2"), deps());
+    expect(r.stopped).toBeUndefined();
+    expect(err.join("\n")).not.toMatch(/budget/);
+  });
+});
+
+describe("--gate-cmd in the harness sha: its hash, never its text", () => {
+  const h = (s: string) => createHash("sha256").update(s).digest("hex");
+  const CMD = "npm test -- --token-free-but-distinctive-7f3a";
+  const state = () => JSON.parse(readFileSync(join(flowDir(), "_state.json"), "utf8"));
+
+  it("approval records harness_gate_sha and the <gate-cmd> entry, prints the command, and never writes its text", async () => {
+    const r = await runHillclimb(args("--approve-harness", "--dry-run", "--gate-cmd", CMD), deps());
+    expect(r.exitCode).toBe(0);
+    const st = state();
+    expect(st.harness_gate_sha).toBe(h(CMD));
+    expect(st.harness_files["<gate-cmd>"]).toBe(h(h(CMD)));
+    expect(readFileSync(join(flowDir(), "_state.json"), "utf8")).not.toContain("distinctive-7f3a");
+    expect(err.join("\n")).toContain(`gate command (runs on this host before the variant's reps): ${CMD}`);
+  });
+
+  it("the sha moves with the command and with its removal; the refusal names which", async () => {
+    await runHillclimb(args("--approve-harness", "--dry-run", "--gate-cmd", CMD), deps());
+    const sha = state().harness_sha;
+    let r = await runHillclimb(args("--gate-cmd", `${CMD} x`), deps());
+    expect(r.exitCode).toBe(2);
+    expect(r.error?.message).toMatch(/harness changed since last approved run: --gate-cmd changed;/);
+    r = await runHillclimb(args(), deps());
+    expect(r.error?.message).toMatch(/--gate-cmd removed/);
+    await approved();
+    expect(state().harness_sha).not.toBe(sha);
+    expect(state().harness_gate_sha).toBeUndefined();
+    r = await runHillclimb(args("--gate-cmd", CMD), deps());
+    expect(r.error?.message).toMatch(/--gate-cmd added/);
+  });
+
+  it("--gate-timeout without --gate-cmd is a usage error", () => {
+    expect(() => args("--gate-timeout", "5")).toThrow(/--gate-timeout.*--gate-cmd/);
   });
 });
