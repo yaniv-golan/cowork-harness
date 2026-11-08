@@ -93,7 +93,17 @@ const PROBE_FILE = fileURLToPath(import.meta.url);
 export function probeSpawn(name: string, cpuLimitS: number = PROBE_CPU_LIMIT_S): { file: string; args: string[]; options: SpawnOptions } {
   return {
     file: "/bin/sh",
-    args: ["-c", 'ulimit -t "$1"; shift; exec "$@"', "sh", String(cpuLimitS), process.execPath, "--import", "tsx", PROBE_FILE, name],
+    args: [
+      "-c",
+      'ulimit -t "$1" || exit 97; shift; exec "$@"',
+      "sh",
+      String(cpuLimitS),
+      process.execPath,
+      "--import",
+      "tsx",
+      PROBE_FILE,
+      name,
+    ],
     options: { stdio: ["ignore", "pipe", "pipe"] },
   };
 }
@@ -108,8 +118,8 @@ export interface ProbeRun {
 const live = new Set<ChildProcess>();
 
 /** Runs a probe to its end. Its only kill is the CPU limit in `probeSpawn`; wall time passing is never a failure. */
-export function runProbe(name: string, o: { cpuLimitS?: number; onSpawn?: (child: ChildProcess) => void } = {}): Promise<ProbeRun> {
-  const { file, args, options } = probeSpawn(name, o.cpuLimitS);
+export function runProbe(name: string, o: { onSpawn?: (child: ChildProcess) => void } = {}): Promise<ProbeRun> {
+  const { file, args, options } = probeSpawn(name);
   return new Promise((resolve, reject) => {
     const child = spawn(file, args, options);
     live.add(child);

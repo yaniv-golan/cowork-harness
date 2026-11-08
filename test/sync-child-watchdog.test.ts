@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -171,13 +171,13 @@ describe("the sync-child watchdog", () => {
     // The last write comes right after the kill that lets the fixture finish. Held open here, it is still going when
     // the fork exits, which a write that truncates summary.json first would leave empty.
     const r = await runFixture(`${IMPORTS}it("hangs", () => { spawnSync("sh", ["-c", "sleep 600"]); });\n`, {
-      env: { COWORK_TEST_HANG_STALL_FINAL_SUMMARY_MS: "30000" },
+      env: { COWORK_TEST_HANG_STALL_FINAL_SUMMARY_MS: "120000" },
     });
     expect(r.code, r.out).not.toBe(0);
-    expect(r.ms).toBeLessThan(30_000);
     expect(r.events).toHaveLength(1);
     const ev = r.events[0]!;
     expect(ev.summary.stacks).toBe("pending"); // so the stalled write really was the one in progress
+    expect(readdirSync(ev.dir)).toContain("summary.json.tmp");
     expect(ev.summary.children.map((c) => c.command)).toContain("sleep 600");
     expect(r.out).toMatch(/this test blocked its process past the sync-child watchdog's limit: .*sleep 600/);
     expect(r.out).toMatch(/blocked \d+s on .*sleep 600/);
@@ -193,6 +193,36 @@ describe("the sync-child watchdog", () => {
     expect(r.events).toHaveLength(1);
     expect(r.events[0]!.summary.killed).toBe(false);
     expect(r.events[0]!.summary.children).toEqual([]);
+  }, 180_000);
+
+  it("reaches what an exited detached child left behind, through its process group", async () => {
+    // The shell exits at once and stays a zombie, because the spin stops this thread's event loop. Its background sleep
+    // is re-parented out of the fork's tree and shares only the shell's process group.
+    const pidFile = join(work, "orphan.pid");
+    const liveState = (pid: number) => spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim();
+    let orphan = 0;
+    try {
+      const r = await runFixture(
+        `import { spawn } from "node:child_process";\nimport { it } from "vitest";\nit("spins", () => { spawn("sh", ["-c", "sleep 600 & echo $! > '${pidFile}'; exit 0"], { detached: true, stdio: "ignore" }); const end = Date.now() + 8000; while (Date.now() < end); });\n`,
+      );
+      orphan = Number(readFileSync(pidFile, "utf8").trim());
+      expect(orphan).toBeGreaterThan(1);
+      expect(r.out).toMatch(/no child process: this test's own thread was blocked/);
+      const s = r.events[0]!.summary as unknown as { killed: boolean; children: unknown[]; listing: string };
+      expect(s.killed).toBe(false); // no proof the blocker has gone, so the retry would keep running
+      expect(s.children).toEqual([]);
+      expect(s.listing).toMatch(/signalled the process groups/);
+      const state = liveState(orphan); // a container's PID 1 may never reap it: dead is gone, or a zombie
+      expect(state === "" || state.startsWith("Z"), `orphan ${orphan} is still running (${state})`).toBe(true);
+    } finally {
+      if (orphan > 1) {
+        try {
+          process.kill(orphan, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+    }
   }, 180_000);
 
   it("retries when its first process listing fails, instead of leaving the hang in place", async () => {

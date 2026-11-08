@@ -69,9 +69,7 @@ async function descendants(root) {
     .split("\n")
     .map((l) => l.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/))
     .filter(Boolean)
-    // A zombie has already exited: a blocked main thread is just not reaping it. It is neither hung nor killable.
-    .filter((m) => !m[4].startsWith("Z"))
-    .map((m) => ({ pid: +m[1], ppid: +m[2], pgid: +m[3], command: m[5] }));
+    .map((m) => ({ pid: +m[1], ppid: +m[2], pgid: +m[3], zombie: m[4].startsWith("Z"), command: m[5] }));
   const out = [];
   const walk = (p, depth) => {
     for (const c of rows)
@@ -82,7 +80,13 @@ async function descendants(root) {
   };
   walk(root, 1);
   const self = rows.find((r) => r.pid === root);
-  return { kids: out, ownPgid: self ? self.pgid : -1 };
+  // A zombie has already exited, and a blocked main thread is just not reaping it: it is neither hung nor killable, so
+  // it is not reported. Its process group is kept: that is the only way left to reach what it left behind.
+  return {
+    kids: out.filter((k) => !k.zombie),
+    zombiePgids: out.filter((k) => k.zombie).map((k) => k.pgid),
+    ownPgid: self ? self.pgid : -1,
+  };
 }
 
 async function stacks(target) {
@@ -162,7 +166,26 @@ async function dumpAndKill(ep) {
     writeSummary(ep.dir, ep.summary);
     return false;
   }
-  const { kids, ownPgid } = listing;
+  const { kids, zombiePgids, ownPgid } = listing;
+  const killGroups = (pgids) => {
+    let signalled = false;
+    for (const g of new Set(pgids)) {
+      if (g <= 1 || g === ownPgid) continue;
+      try {
+        process.kill(-g, "SIGKILL");
+        signalled = true;
+      } catch {
+        /* already gone */
+      }
+    }
+    return signalled;
+  };
+  // Signalling only an exited child's group does not count as a kill: it is no proof the blocker has gone, so the
+  // retry keeps running.
+  const noteZombieGroups = () => {
+    ep.summary.listing += "; signalled the process groups of children that had already exited, to reach what they left behind";
+    writeSummary(ep.dir, ep.summary);
+  };
   ep.summary.listing = "ok";
   ep.summary.children = kids.map(({ pid: p, ppid, pgid, command, depth }) => ({ pid: p, ppid, pgid, command, depth }));
   ep.summary.killed = kids.length > 0;
@@ -170,7 +193,10 @@ async function dumpAndKill(ep) {
     ep.summary.listing =
       "ok, but a sync call is blocked with no child under this fork: a re-parented descendant may hold its pipe (see the CI job-level dump); retried";
   writeSummary(ep.dir, ep.summary);
-  if (kids.length === 0) return false;
+  if (kids.length === 0) {
+    if (killGroups(zombiePgids)) noteZombieGroups();
+    return false;
+  }
   for (const k of kids) writeFileSync(join(ep.dir, `stacks-${k.pid}.txt`), `${k.command}\n\n${await stacks(k.pid)}`);
   // Kill only after the dumps, so the stacks show the children as they hung.
   for (const k of [...kids].sort((a, b) => b.depth - a.depth)) {
@@ -180,15 +206,8 @@ async function dumpAndKill(ep) {
       /* already gone */
     }
   }
-  for (const g of new Set(kids.map((k) => k.pgid))) {
-    if (g > 1 && g !== ownPgid) {
-      try {
-        process.kill(-g, "SIGKILL");
-      } catch {
-        /* already gone */
-      }
-    }
-  }
+  killGroups(kids.map((k) => k.pgid));
+  if (killGroups(zombiePgids)) noteZombieGroups();
   return true;
 }
 

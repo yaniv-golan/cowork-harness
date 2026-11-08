@@ -1,5 +1,13 @@
 import { afterEach, describe, it, expect } from "vitest";
-import { PROBES, SPIN_PROBE, SPINNING, killLiveProbes, probeSpawn, runProbe } from "./helpers/outputs-delete-basis-probe.js";
+import {
+  PROBES,
+  PROBE_CPU_LIMIT_S,
+  SPIN_PROBE,
+  SPINNING,
+  killLiveProbes,
+  probeSpawn,
+  runProbe,
+} from "./helpers/outputs-delete-basis-probe.js";
 import { BASIS_STATEMENT_CAP, BASIS_COMMAND_CAP } from "../src/run/execute.js";
 
 /**
@@ -72,6 +80,7 @@ describe("the probe's hang killer counts CPU time, never wall time", () => {
     expect(options).not.toHaveProperty("timeout");
     expect(options).not.toHaveProperty("killSignal");
     expect(args[1]).not.toContain(name);
+    expect(args[1]).toContain("|| exit 97"); // a limit that could not be set must not run the probe unbounded
     expect(args.at(-1)).toBe(name);
   });
 
@@ -90,10 +99,13 @@ describe("the probe's hang killer counts CPU time, never wall time", () => {
 
   it("a probe that spins is killed by the CPU limit, after its whole import graph has loaded", async () => {
     // No signal name: macOS sends SIGXCPU and Linux SIGKILL. A SIGXCPU listener anywhere in the import graph would
-    // leave the spin running on macOS, and this would time out. The limit leaves room for the import on a loaded runner.
-    const r = await runProbe(SPIN_PROBE, { cpuLimitS: 10 });
+    // leave the spin running on macOS, and this would time out. Half the limit, not all of it: the limit counts every
+    // thread's CPU, so helper threads during the import can run it down faster than wall time passes.
+    const t0 = Date.now();
+    const r = await runProbe(SPIN_PROBE);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(0.5 * PROBE_CPU_LIMIT_S * 1000);
     expect(r.stdout).toContain(SPINNING);
     expect(r.status, r.stderr).toBeNull();
     expect(r.signal, r.stderr).not.toBeNull();
-  }, 90_000);
+  }, 120_000);
 });
