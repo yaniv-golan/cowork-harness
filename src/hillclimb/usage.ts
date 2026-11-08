@@ -135,11 +135,14 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
   --gate-cmd CMD          run CMD (sh -c) once per pass on a throwaway copy of the variant's plugin snapshot, before any
                           rep (env COWORK_HARNESS_VARIANT_DIR, COWORK_HARNESS_VARIANT_ID); non-zero fails every open
                           slot as gate_failed with no agent run. Its text joins the harness sha (only its hash is
-                          recorded), so it needs --approve-harness and the same text on every pass
+                          recorded), so it needs --approve-harness and the same text on every pass. It runs with
+                          your full environment, credentials included (its tail is scrubbed with the harness's
+                          secret set: name others in COWORK_HARNESS_SCRUB_KEYS)
   --gate-timeout S        seconds before a running gate has failed (default 600)
   --max-budget-usd X      per-pass cap: no slot starts whose estimate would take this pass's spend, plus the
                           estimates of slots in flight, past X (exit 1, stopped.reason budget); a slot with no
-                          recorded cost is charged its estimate. Each pass has its own cap. Unlike run and eval,
+                          recorded cost is charged its estimate, and slots with no estimate run one at a time (so
+                          they pass X by one slot's cost at most). Each pass has its own cap. Unlike run and eval,
                           where the flag is a pre-flight refusal, this stops mid-pass; it refuses before spending
                           only when even the cheapest open slot's estimate is over X
   --decider-cmd CMD | --decider-dir DIR   answer unscripted questions (one channel; --concurrency 1)

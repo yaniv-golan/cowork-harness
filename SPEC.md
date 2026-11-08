@@ -618,7 +618,7 @@ there are three families:
   `fingerprints`, `possibleRewordings`, `excluded`, `clustering`, and `candidateGroups` under `--cluster lexical`), `eval` and `eval report` (`evalDir`, `arms`, `pins`,
   `sections`, `summary`, `cost`, `stoppedEarly`; `eval report --headroom` adds `headroom: {arm: {label, role}, rows}`, experimental), `eval --dry-run` (`dryRun: true`, `plan` — no `evalDir`, none
   is created; §12 covers `plan.cost`'s summary keys and nothing else of `plan`), `hillclimb run` (`flow`, `variant`, `scheduled`, `scored` — the
-  rows written to `results.jsonl` this pass, named so it never shadows the envelope's `ok` — `failed`, `exitCode`, `stopped` (absent unless the pass stopped mid-run: `{reason: "grader_credential", source, status?, atJob, case, rep}` on a grader failure, `{reason: "budget", spentUsd, capUsd, atJob, case, rep}` on `--max-budget-usd`, the error then carrying `error.code: "budget_stopped"`), and on `--dry-run`
+  rows written to `results.jsonl` this pass, named so it never shadows the envelope's `ok` — `failed`, `exitCode`, `stopped` (absent unless the pass stopped mid-run: `{reason: "grader_credential", source, status?, atJob, case, rep}` on a grader failure, `{reason: "budget", spentUsd, capUsd, atJob, case, rep}` on `--max-budget-usd` (`spentUsd` is the spend recorded so far, an unpriced slot at its estimate), the error then carrying `error.code: "budget_stopped"`), and on `--dry-run`
   `dryRun: true` with the estimate at `plan.cost`, where `eval --dry-run` puts it), `hillclimb check` (`reading`, `disclaimer`, `profile`, `findings`, `errors`, `notes`, `warnings`),
   `hillclimb state-template` (`state`, `metrics_md`, and with `--flow` `metrics_md_file`; `notes` when a column was left
   undeclared, experimental), `hillclimb freeze-ref` (payload experimental, §12: `frozen`, `added`, `exists`, `refused`,
@@ -1252,7 +1252,10 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   `meanUsd`, `p50Usd`, `p95Usd`, `worstObservedUsd`, `lowerBound`, `unpriced[]`, `pricedRuns` and `thinnest` (null
   when nothing is priced). **Their one basis:** each scenario's prior runs in the runs dir's index on the
   schedule's effective tier (`cowork` resolved) and its baseline, turn 1 only, `hillclimb:`-labelled runs
-  excluded, agent cost only (no judge or decider spend). `worstObservedUsd` is on that same basis — the sum over
+  excluded, agent cost only (no judge or decider spend). Since 5.0.0, a scenario with no priced run on its own
+  baseline is priced from the nearest older baseline with priced runs on the same basis, else the nearest newer
+  one (named per scenario as `items[].pricedFromBaseline`, experimental); it is `unpriced` only with no priced run
+  on any baseline. `worstObservedUsd` is on that same basis — the sum over
   the priced scenarios of jobs × the most expensive run on it — and is NOT the `--max-budget-usd` gate's figure,
   which reads a wider basis (any tier, baseline or turn, hillclimb runs included; the experimental
   `budgetGateWorstUsd`). Each dollar key sums the priced scenarios only; an unpriced one adds $0, is named in

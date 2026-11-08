@@ -170,13 +170,18 @@ cowork-harness hillclimb seed evals/ --from-eval <eval-dir> --arm after --flow ~
 each of its kept reps a baseline row, built by the same code a live attempt uses: the rows are graded under the
 current scenario and carry `meta.seeded_from` (the eval id, arm, eval rep and run id). The baseline's next pass
 finds every (case, rep) present and runs nothing. A seeded rep that a live pass would also have rejected (another
-served model, an unconfirmed effort) is written as an `errors.jsonl` row, and the next pass re-runs it.
+served model, an unconfirmed effort, a rep whose run dir kept no result) is written as an `errors.jsonl` row, and
+the next pass re-runs it. A seeded row's `meta.wall_s` is the agent's own duration, not the attempt's wall clock,
+and an eval rep that timed out is an errors row by its termination rule rather than as `timeout`; nothing a pass,
+`check` or the cost summary reads differs.
 
 It refuses (exit 2, nothing written) unless each case matches the eval's scenario of the same name (scenario and
 session files, assertions, Desktop baseline, agent and judge pins), every rep of the arm kept its run dir, and the
 baseline has no rows and no snapshot yet. An eval served from a frozen search corpus, an eval that stopped early,
-a `semantic_pairwise` or protocol-tier case and a `plugins.from_host` eval are refused too. It does not approve
-the harness: run `--dry-run --approve-harness` as usual. Exit 1 means a write failed; what it wrote is removed.
+a `semantic_pairwise` or protocol-tier case, a `plugins.from_host` eval and an arm whose reps for one pin were
+served two model ids are refused too. It does not approve the harness: run `--dry-run --approve-harness` as usual.
+Exit 1 means a write failed; what it wrote is removed, except the input copies under the flow's `inputs/` (the
+bytes a live pass writes there too).
 
 `eval report <eval-dir> --headroom` helps pick the cases: it lists the rows the arm passed on some reps but not
 all, which is where a round has room to move ([eval.md](./eval.md)).
@@ -288,7 +293,9 @@ Three things live outside the flow dir, and the loop needs all three for the who
   `meta.failure_rule: "effort_not_sent"`) and `judge_invalid` (the row's `error` names the cause, and
   `meta.judge_invalid_cause` records it: `call` for a failed judge call, with `meta.judge_error_status`,
   `meta.judge_error_retryable` and `meta.judge_error_message`, or `malformed` for a malformed grade; the slot re-runs with
-  `hillclimb run … --case <id> --reps <rep+1>`, or a `regrade` promotes it: see below); with `--search-corpus`, also `search_pool_mismatch`
+  `hillclimb run … --case <id> --reps <rep+1>`, or a `regrade` promotes it: see below), `gate_failed` (`--gate-cmd`
+failed before any rep ran: `meta.gate_exit`, `meta.gate_signal`, `meta.gate_timed_out`, `meta.gate_tail`, and
+`meta.cost_usd: 0`; it precludes every other class, since no rep ran); with `--search-corpus`, also `search_pool_mismatch`
   (the rep was refused before it ran because the pool copy changed, or was served from another pool) and
   `search_refused` (a search the frozen corpus refused: the rep worked from different evidence, so it is never
   scored). When several apply, a timeout wins, then a pool mismatch, then an infrastructure error, then a refused
@@ -501,10 +508,13 @@ rows, and no fixed multiplier reproduces it. So:
   the estimates of the slots in flight, plus its own estimate, stays within `X`; the next pass starts again from
   zero, so recompute the loop's total from the files after every round, as the loop's guide does. A slot's
   estimate is the variant's p95 cost for that case (agent, judge and decider), else the runs index's worst observed
-  agent run (which leaves judge spend out), else 0 (the pass says so once). A slot whose row records no cost is
-  charged its estimate. Spend in flight can still go past `X` when a slot costs more than its estimate: the cap
+  agent run (which leaves judge spend out), else 0 (the pass says so once). A slot with no estimate waits while
+  another such slot is in flight, so slots priced at $0 can take the pass past `X` by one slot's cost at most; once
+  a slot of the case is priced, the next has an estimate. A slot whose row records no cost is charged its estimate.
+  A started slot that costs more than its estimate can also take the pass past `X`, by the difference: the cap
   bounds what starts, not what a started slot spends. The grader probe's cost counts from the start. A stop exits 1
-  with the envelope's `stopped.reason: "budget"` (`spentUsd`, `capUsd`, and the slot it stopped at) and
+  with the envelope's `stopped.reason: "budget"` (`spentUsd`, the spend recorded so far with any unpriced slot at
+  its estimate; `capUsd`; and the slot it stopped at) and
   `error.code: "budget_stopped"`; the slots it did not start stay open for the next pass. It refuses before
   spending (exit 2) only when every open slot's estimate is over `X`, and `--dry-run` prints the cap.
   (`--max-budget-usd` on `run` and `eval` is a pre-flight refusal only.)
@@ -730,15 +740,25 @@ the scenarios' directory when it holds exactly them, else the case's own file (o
   variant's other cases ran prints one warning per distinct value those cases ran.
 - **A verifier gate (`--gate-cmd CMD`).** Once per pass, after the dry-run and before any rep, the pass runs
   `CMD` with `sh -c` on a throwaway copy of the variant's plugin snapshot (the git-tracked files only, when the
-  plugin is in a git tree), with the full environment plus `COWORK_HARNESS_VARIANT_DIR` (the copy) and
-  `COWORK_HARNESS_VARIANT_ID`. A non-zero exit, a signal, or `--gate-timeout` (default 600 s; the gate's process
-  group is killed) writes one `gate_failed` row to `errors.jsonl` per open slot, at no agent cost and with the
-  output's last 4 KiB (secrets scrubbed), and the pass exits 1; the slots stay open. Use it to reject a variant
-  that breaks a build, a lint or a schema before any rep is paid for. The gate pins the command's text, never the
-  files of a verifier it calls: `_state.json` keeps only the text's hash (`harness_gate_sha`), so a changed text
-  needs `--approve-harness`, and every `run` pass must pass the same text (`regrade` never runs the gate and keeps
-  the approved hash). The grader probe has
-  already run, and been paid for, when the gate runs.
+  plugin is in a git tree; symlinks kept as written, so an in-plugin link cannot reach the real snapshot), with
+  `COWORK_HARNESS_VARIANT_DIR` (the copy) and `COWORK_HARNESS_VARIANT_ID` set. A non-zero exit, a signal, or
+  `--gate-timeout` (default 600 s; the gate's process group is killed, and a descendant that left the group and
+  still holds the output open does not keep the pass waiting) writes one `gate_failed` row to `errors.jsonl` per
+  open slot, at no agent cost and with the output's last 4 KiB, and the pass exits 1; the slots stay open. A
+  variant whose only rows are `gate_failed` has not run, so the next pass takes a fresh snapshot of the plugin as
+  fixed. Use it to reject a variant that breaks a build, a lint or a schema before any rep is paid for. The grader
+  probe has already run, and been paid for, when the gate runs.
+  - **It runs on this host with your privileges and your full environment, credentials included.** The output's
+    tail is scrubbed with the harness's own secret set only (its credential variables plus `COWORK_HARNESS_SCRUB_KEYS`
+    and `COWORK_HARNESS_SCRUB_VALUES`): set `COWORK_HARNESS_SCRUB_KEYS` to any other variable a verifier might print,
+    or the loop reads it in `errors.jsonl`.
+  - **It pins the command's text, never the files of a verifier it calls.** `_state.json` keeps only the text's hash
+    (`harness_gate_sha`), so a changed text needs `--approve-harness`, and every `run` pass must pass the same text
+    (`regrade` never runs the gate and keeps the approved hash). Pin a verifier's own files by listing them in
+    `harness_paths` outside the plugin dir, or make the command self-contained.
+  - **Its working directory is the loop-written copy.** Whatever an interpreter reads from its cwd (`python -m`,
+    `PYTHONPATH=.`, an `.npmrc` or a config file in the plugin) is under the loop's control, even when the verifier
+    itself lives outside the plugin.
 - **No answer key in reach.** A pass is refused when the agent could read the flow dir, a scenario or session
   file, a `harness_paths` file or the runs root through a mount, a workspace fixture or the plugin. A file
   listed in `harness_paths` that sits inside a workspace fixture counts as an input and is not refused, so keep
