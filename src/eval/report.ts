@@ -48,7 +48,9 @@ import { confirmedAddsNoEvidence, familyReach, metricAaFalseConfirm, sectionFami
 import { readManifest, type EvalManifest } from "./manifest.js";
 import { readRunsLines, repEvidenceOf, RUNS_FILE, type GradedAssertion, type RunsLine } from "./runs.js";
 import { redactHostPaths } from "../run/host-path-tokens.js";
-import { normalizeModelId } from "../run/model-provenance.js";
+import { modelIdMatches, normalizeModelId } from "../run/model-provenance.js";
+import { readStopped, type StoppedEarly } from "./stopped.js";
+import { isLiveModelId } from "../types.js";
 import { expandHome } from "../session.js";
 
 export const REPORT_JSON = "report.json";
@@ -245,6 +247,14 @@ export interface EvalReport {
     refusalImbalances: RefusalImbalance[];
     failOnHit: boolean;
     judgeDisagreement: boolean;
+    /** Per scenario, the scored reps' served main model under its pin was not one id (a dated pin's snapshot rolled,
+     *  or an undated pin was served two snapshots): the comparison is across two models. Each makes the eval exit 1. */
+    agentModelDisagreements: Array<{ scenario: string; pinned: string; models: string[] }>;
+    /** Per (arm, scenario), the reps excluded because the agent was not served its pin: what was pinned and what the
+     *  agent reported instead (its live main-loop ids; none when it reported no live model). */
+    modelMismatch: Array<{ arm: string; scenario: string; pinned: string; served: string[]; reps: number }>;
+    /** Scheduled jobs with no line in runs.jsonl. Any makes the eval exit 1: the eval stopped (see `stoppedEarly`), was
+     *  interrupted or killed, or ended on a requested exit, and an eval cannot be resumed. */
     missingJobs: number;
     tornFinalLine: boolean;
     /** Reps whose evidence was not the pinned pool's (refused before they ran, or served off another pool). Any
@@ -261,7 +271,8 @@ export interface EvalReport {
     exitCode: 0 | 1;
   };
   cost: { agentUsd: number; judgeUsd: number };
-  stoppedEarly: null;
+  /** Why the eval stopped scheduling jobs, from the eval dir's `stopped.json`; null when it did not stop. */
+  stoppedEarly: StoppedEarly | null;
   redactedHostPaths: number;
   /** Present when the eval pinned a frozen search corpus. */
   searchCorpus?: ReportSearchCorpus;
@@ -270,6 +281,24 @@ export interface EvalReport {
 const SCORED: ReadonlySet<RepBucket> = new Set(["valid", "judge_invalid", "errored_agent"]);
 /** The agent's errors and every infrastructure exclusion: an (arm, scenario) whose every rep is in this set errored. */
 const ERRORED: ReadonlySet<RepBucket> = new Set(["errored_infra", "errored_agent", ...INFRA_EXCLUDED]);
+/** Every bucket a rep is left out of the comparison for: infrastructure, a skill content drift, a pin the agent did not
+ *  honour, a changed judge prompt. An (arm, scenario) whose every rep is here never ran what the eval compares. */
+const EXCLUDED: ReadonlySet<RepBucket> = new Set(
+  // A Record over every bucket, so a bucket added later is a compile error here until it is placed.
+  Object.entries({
+    valid: false,
+    judge_invalid: false,
+    errored_agent: false,
+    errored_infra: true,
+    search_refused: true,
+    search_pool_mismatch: true,
+    arm_source_drift: true,
+    model_mismatch: true,
+    judge_prompt_mismatch: true,
+  } satisfies Record<RepBucket, boolean>).flatMap(([b, excluded]) => (excluded ? [b as RepBucket] : [])),
+);
+/** An (arm, scenario) whose every rep is here is listed in `erroredArms`. */
+const LISTED: ReadonlySet<RepBucket> = new Set([...ERRORED, ...EXCLUDED]);
 
 /** The frozen search corpus, side by side per arm (from each scored rep's persisted counts). */
 export interface ReportSearchCorpus {
@@ -773,14 +802,15 @@ export function buildEvalReport(evalDir: string): EvalReport {
   // skill that crashes every time) and is scored; the header still names it.
   const allErrored = (arm: string, scenario: string) => {
     const mine = classified.filter((x) => x.line.arm === arm && x.line.scenario === scenario);
-    return mine.length > 0 && mine.every((x) => ERRORED.has(x.c.bucket)) ? mine : null;
+    return mine.length > 0 && mine.every((x) => LISTED.has(x.c.bucket)) ? mine : null;
   };
   const erroredArms: EvalReport["summary"]["erroredArms"] = [];
   for (const sc of m.scenarios) {
     const per = m.arms.map((a) => allErrored(a.label, sc.name));
     const both = per.every((x) => x !== null);
-    // Infrastructure in any mix (a pool mismatch, a refused search, an infra error): that arm never ran on the evidence.
-    const anyAllInfra = per.some((x) => x !== null && x.every((y) => INFRA_EXCLUDED.has(y.c.bucket)));
+    // Exclusions in any mix (infrastructure, a skill drift, a pin not honoured, a changed judge prompt): that arm never
+    // ran what the eval compares.
+    const anyAllExcluded = per.some((x) => x !== null && x.every((y) => EXCLUDED.has(y.c.bucket)));
     m.arms.forEach((a, i) => {
       const mine = per[i];
       if (mine === null) return;
@@ -794,7 +824,7 @@ export function buildEvalReport(evalDir: string): EvalReport {
       const dominant = [...counts.values()].sort(
         (p, q) => q.count - p.count || `${p.bucket}${p.rule}`.localeCompare(`${q.bucket}${q.rule}`),
       )[0];
-      erroredArms.push({ arm: a.label, scenario: sc.name, reps: mine.length, dominant, rowsInsufficient: both || anyAllInfra });
+      erroredArms.push({ arm: a.label, scenario: sc.name, reps: mine.length, dominant, rowsInsufficient: both || anyAllExcluded });
     });
   }
   const comparedNothing = new Set(erroredArms.filter((e) => e.rowsInsufficient).map((e) => e.scenario));
@@ -884,6 +914,33 @@ export function buildEvalReport(evalDir: string): EvalReport {
       judgeSeen.set(k, e);
     });
   }
+  // The agent's served main model must be one id per scenario across every scored rep, both arms: matching the pin
+  // (`modelIdMatches`) admits any snapshot of an undated pin, so two snapshots in one eval would compare two models.
+  const pinOf = (scenario: string) => m.pins.agent.find((p) => p.scenario === scenario)?.model;
+  const agentSeen = new Map<string, Set<string>>();
+  for (const { line, c } of classified) {
+    const pin = pinOf(line.scenario);
+    if (!SCORED.has(c.bucket) || pin === undefined) continue;
+    const served = (line.models ?? []).filter((x) => isLiveModelId(x) && modelIdMatches(pin, x)).map(normalizeModelId);
+    if (!served.length) continue;
+    const e = agentSeen.get(line.scenario) ?? new Set<string>();
+    for (const x of served) e.add(x);
+    agentSeen.set(line.scenario, e);
+  }
+  const agentModelDisagreements = [...agentSeen.entries()]
+    .filter(([, ms]) => ms.size > 1)
+    .map(([scenario, ms]) => ({ scenario, pinned: pinOf(scenario)!, models: [...ms].sort() }));
+  // D4: what each arm was served instead of its pin, for the reps excluded as model_mismatch.
+  const modelMismatch = m.arms.flatMap((a) =>
+    m.scenarios.flatMap((sc) => {
+      const mine = classified.filter((x) => x.line.arm === a.label && x.line.scenario === sc.name && x.c.bucket === "model_mismatch");
+      const pinned = pinOf(sc.name);
+      if (!mine.length || pinned === undefined) return [];
+      const served = [...new Set(mine.flatMap((x) => (x.line.models ?? []).filter(isLiveModelId)))].sort();
+      return [{ arm: a.label, scenario: sc.name, pinned, served, reps: mine.length }];
+    }),
+  );
+
   const judgeDisagreements = [...judgeSeen.values()]
     .filter((e) => e.models.size > 1)
     .map((e) => ({ scenario: e.scenario, assertionIndex: e.assertionIndex, models: [...e.models].sort() }));
@@ -963,6 +1020,7 @@ export function buildEvalReport(evalDir: string): EvalReport {
   const judgeCallFailures = judgeCallFailuresOf(m, classified);
   const recordedIdx = new Set(lines.map((l) => l.index));
   const missingJobs = m.settings.reps * m.scenarios.length * 2 - recordedIdx.size;
+  const stoppedEarly = readStopped(evalDir);
   return {
     schemaVersion: 0,
     evalId: m.evalId,
@@ -997,6 +1055,8 @@ export function buildEvalReport(evalDir: string): EvalReport {
       allInsufficient,
       failOnHit,
       judgeDisagreement,
+      agentModelDisagreements,
+      modelMismatch,
       missingJobs,
       tornFinalLine,
       refusalImbalances,
@@ -1006,6 +1066,9 @@ export function buildEvalReport(evalDir: string): EvalReport {
         failOnHit ||
         allInsufficient ||
         judgeDisagreement ||
+        agentModelDisagreements.length > 0 ||
+        missingJobs > 0 ||
+        stoppedEarly !== null ||
         comparedNothing.size > 0 ||
         notCompared > 0 ||
         (searchPoolMismatch?.reps ?? 0) > 0
@@ -1016,7 +1079,7 @@ export function buildEvalReport(evalDir: string): EvalReport {
       agentUsd: sumFinite(lines.map((l) => l.result?.cost?.usd)),
       judgeUsd: sumFinite(lines.flatMap((l) => (l.grades[0]?.assertions ?? []).map((a) => a.judgeCostUsd))),
     },
-    stoppedEarly: null,
+    stoppedEarly,
     redactedHostPaths: 0,
     ...(searchCorpus ? { searchCorpus } : {}),
   };
@@ -1268,6 +1331,12 @@ export function erroredHint(d: { bucket: RepBucket; rule: string }): string {
   if (d.bucket === "errored_agent") return "The agent failed in every rep: read the run dirs.";
   if (d.bucket === "search_pool_mismatch")
     return "The reps were refused before they ran, or served off another pool: the eval's pool copy (search-pool/ in the eval dir) changed. Re-run the eval.";
+  if (d.bucket === "arm_source_drift")
+    return "The arm's skill content changed while the eval ran (its reps do not match the snapshot): re-run the eval without editing the skill.";
+  if (d.bucket === "model_mismatch")
+    return "The agent was not served the pinned model (see `pinned · served` below): pin the id the agent reports (`models[0]` of a prior result.json).";
+  if (d.bucket === "judge_prompt_mismatch")
+    return "The reps were graded with another judge prompt than the eval pinned: re-run the eval on one harness version.";
   if (d.bucket === "search_refused")
     return "Searches were refused in every rep, so the arm worked from different evidence: read each run's search-corpus.jsonl for the refusal reason.";
   switch (d.rule) {
@@ -1409,12 +1478,23 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
       `  - medians over ${md.eligibleReps} scored rep(s): cost ${fmtUsd(md.costUsd.median)} (n=${md.costUsd.n}), judge ${fmtUsd(md.judgeCostUsd.median)} (n=${md.judgeCostUsd.n}), turns ${md.turns.median ?? "—"} (n=${md.turns.n}), duration ${md.durationMs.median === undefined ? "—" : `${Math.round(md.durationMs.median / 1000)}s`} (n=${md.durationMs.n})`,
     );
   }
-  if (rep.summary.missingJobs > 0) L.push(`- ⚠ ${rep.summary.missingJobs} scheduled job(s) have no record (the eval did not finish).`);
+  if (rep.summary.missingJobs > 0) {
+    const st = rep.stoppedEarly;
+    L.push(
+      `- ⚠ ${rep.summary.missingJobs} scheduled job(s) have no record (exit 1): ` +
+        (st
+          ? `the eval stopped after job ${st.atJob}, whose ${st.source === "decider" ? "LLM decider" : "judge"} call failed${st.status !== undefined ? ` (API ${st.status})` : ""} the way every later grade would. Fix the grader credential or model, then run the eval again.`
+          : "the eval did not finish (interrupted, killed, or ended on a requested exit)."),
+    );
+  } else if (rep.stoppedEarly)
+    L.push(
+      `- ⚠ A ${rep.stoppedEarly.source === "decider" ? "LLM decider" : "judge"} call failed the way every later grade would at job ${rep.stoppedEarly.atJob} (exit 1).`,
+    );
   if (rep.summary.tornFinalLine) L.push("- ⚠ runs.jsonl ends in a torn line (skipped).");
   L.push("");
   for (const e of rep.summary.erroredArms)
     L.push(
-      `**⚠ Every rep of arm ${e.arm} in ${e.scenario} errored** — ${e.dominant.bucket} (${e.dominant.rule}) ${e.dominant.count}/${e.reps}. ` +
+      `**⚠ Every rep of arm ${e.arm} in ${e.scenario} ${ERRORED.has(e.dominant.bucket) ? "errored" : "was excluded"}** — ${e.dominant.bucket} (${e.dominant.rule}) ${e.dominant.count}/${e.reps}. ` +
         (e.rowsInsufficient
           ? `Nothing was compared: ${e.scenario}'s rows are insufficient (exit 1). `
           : "Each of those reps is scored as failing every row (the other arm ran). ") +
@@ -1459,6 +1539,19 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
         "values the scorer, the capture or a cap left out; the row is graded on the rest, and a scorer that fails exactly on the bad runs hides a regression. Read those run dirs.",
       "",
     );
+  }
+  if (rep.summary.agentModelDisagreements.length) {
+    L.push("**⚠ Agent model differed across reps** (exit 1): the scored reps were served more than one model under one pin.");
+    for (const d of rep.summary.agentModelDisagreements) L.push(`- ${d.scenario}: pinned ${d.pinned} · served ${d.models.join(", ")}`);
+    L.push("");
+  }
+  if (rep.summary.modelMismatch.length) {
+    L.push("**Reps excluded: the agent was not served its pin**");
+    for (const x of rep.summary.modelMismatch)
+      L.push(
+        `- ${x.arm} ${x.scenario} (${x.reps} rep(s)): pinned ${x.pinned} · served ${x.served.length ? x.served.join(", ") : "(no live model)"}`,
+      );
+    L.push("");
   }
   if (rep.judgeDisagreements.length) {
     L.push("**⚠ Judge model differed across reps** (exit 1):");

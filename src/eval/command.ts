@@ -28,6 +28,8 @@ import {
 } from "../run/execute.js";
 import { buildFingerprint } from "../run/cassette.js";
 import { resolveInputs } from "../run/inputs.js";
+import { graderCredentialFailure } from "../run/grader-stop.js";
+import { writeStopped, type StoppedEarly } from "./stopped.js";
 import { pMapBounded } from "../async-pool.js";
 import { envOutputFormat, parseOutputFormat, pkgVersion } from "../run/envelope.js";
 import { tildeify } from "../io.js";
@@ -1162,10 +1164,14 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
     const runsFile = join(evalDir, RUNS_FILE);
     const snapByLabel = new Map(snaps.map((s) => [s.spec.label, s]));
     let done = 0;
+    // A grader failure every later grade would repeat (a rejected credential, an unknown model, a spent quota) stops
+    // the schedule: no later job starts, the ones running finish and write their lines. Recorded in stopped.json.
+    let stopped: StoppedEarly | undefined;
     await pMapBounded(
       jobs,
       args.concurrency,
       async (job) => {
+        if (stopped !== undefined) return;
         const s = scenarios[job.scenarioIndex];
         const session = sessions.get(`${job.arm}\0${job.scenario}`)!;
         const expectedDir = evalJobRunDir({ scenario: s.scenario, job });
@@ -1222,6 +1228,20 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
           }),
         );
         done++;
+        const failure = graderCredentialFailure(result, thrown);
+        if (failure !== undefined && stopped === undefined) {
+          stopped = {
+            reason: "grader_credential",
+            source: failure.source,
+            ...(failure.status !== undefined ? { status: failure.status } : {}),
+            atJob: job.index,
+          };
+          writeStopped(evalDir, stopped);
+          process.stderr.write(
+            `[eval] stopping: job ${job.index}'s ${failure.source === "decider" ? "LLM decider" : "judge"} call failed${failure.status !== undefined ? ` (API ${failure.status})` : ""} ` +
+              `the way every later grade would; no further job starts (rows already written are kept)\n`,
+          );
+        }
         say(
           `[eval] ${done}/${jobs.length} ${job.arm} ${job.scenario} r${job.rep}: ${thrown !== undefined ? `threw ${(thrown as Error)?.name ?? "error"}: ${String((thrown as Error)?.message ?? thrown).split("\n")[0]}` : `result ${result?.result}`}`,
         );
