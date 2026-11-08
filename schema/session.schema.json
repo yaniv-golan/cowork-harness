@@ -362,6 +362,13 @@
         "disable_experimental_betas": {
           "type": "boolean"
         },
+        "passthrough": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          }
+        },
         "artifacts_root": {
           "type": "string",
           "minLength": 1,

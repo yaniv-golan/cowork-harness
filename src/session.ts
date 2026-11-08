@@ -271,12 +271,12 @@ export const SessionConfig = z.strictObject({
     .default({}),
 
   // --- tier-uniform agent-env knob ---
-  // hostloop AND protocol spawn the agent over the OPERATOR's full shell env (`...process.env` /
-  // `{...plan.baseEnv}`), while container/microvm build a constructed allowlist. So an operator-exported
-  // CLAUDE_CODE_SUBAGENT_MODEL / ENABLE_TOOL_SEARCH / CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS silently
-  // affects only the env-inheriting tiers. This field is the authored, uniform replacement: it applies
-  // across ALL FOUR tiers, and FIVE keys are SCRUBBED from the operator layer on
-  // hostloop/protocol (the only tiers that inherit it) so an unset stray shell value can never leak
+  // protocol spawns the agent over the OPERATOR's full shell env (`{...plan.baseEnv}`); hostloop copies Desktop's
+  // named keys plus `passthrough`; container/microvm build a constructed allowlist. So an operator-exported
+  // CLAUDE_CODE_SUBAGENT_MODEL / ENABLE_TOOL_SEARCH / CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS would silently
+  // affect protocol only. This field is the authored, uniform replacement: it applies
+  // across ALL FOUR tiers, and the SCRUBBED keys are removed from the operator layer on
+  // hostloop/protocol (the tiers that read it) so an unset stray shell value can never leak
   // through. Precedence is TIER-QUALIFIED: hostloop/container/microvm layer a baseline `spawn.env`, so
   // it's knob > baseline spawn.env > operator env (scrubbed); protocol has no baseline `spawn.env` overlay
   // (it spawns from `{...plan.baseEnv}`), so it's the two-layer knob > operator env (scrubbed). Separately,
@@ -299,6 +299,13 @@ export const SessionConfig = z.strictObject({
       // the runtime that knows its own outputs path (artifactsRootEnv), so one session file means the same place on
       // every tier. Not mapped by agentEnvOverrides for that reason. Refused on the host loop, whose shell runs in a
       // separate container that never sees the agent's env.
+      // Names of operator-env variables the hostloop agent is given beside the ones Desktop copies (PATH, HOME, LOGNAME,
+      // SHELL, USER, TERM, CLAUDE_CODE_TMPDIR). Protocol inherits the operator's env anyway; container and microvm
+      // refuse a non-empty list. The names the harness sets or deletes itself, and every credential, are refused before
+      // the run (passthroughRefusal: it needs the baseline, so it is not a schema rule). Recorded in result.json.
+      passthrough: z
+        .array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/, { message: "passthrough: an environment variable name" }))
+        .optional(),
       artifacts_root: z
         .string()
         .min(1)
@@ -329,7 +336,7 @@ export const SessionConfig = z.strictObject({
  *  THE MEMBERSHIP RULE, because the list stopped being self-evident when it grew past three. It used to
  *  be exactly the keys `agentEnvOverrides` maps, i.e. derivable. It is now: **a key is scrubbed when it
  *  (a) is user-settable from a shell, (b) changes agent behaviour this harness models or reports on, and
- *  (c) is NOT set by the Cowork spawn** — so inheriting it makes the two env-inheriting tiers diverge
+ *  (c) is NOT set by the Cowork spawn** — so inheriting it makes the tiers that read the operator's env diverge
  *  from the other two with nothing in the baseline to justify the difference. Dozens of keys in the
  *  binary's settable-env table meet (a) alone; (b) and (c) select nine of these. **Or (d): Desktop itself lets no
  *  user-supplied value of the key reach an agent it spawns** (it strips it from the user env it forwards), whether or
@@ -498,6 +505,10 @@ export interface LaunchPlan {
   // treats `plan.agentEnv ?? {}` as a no-op; buildLaunchPlan always carries a concrete (possibly empty)
   // object from the session field.
   agentEnv?: Record<string, string>;
+  /** `agent_env.passthrough` at the tiers it applies to (hostloop, protocol), else absent. hostloop copies these names
+   *  from the operator's env beside Desktop's own set; protocol inherits the operator's env anyway. Checked before the
+   *  run (`passthroughRefusal`). Recorded as `RunResult.agentEnvPassthrough`. */
+  agentEnvPassthrough?: string[];
   /** `agent_env.artifacts_root` as AUTHORED (relative to outputs). Each runtime resolves it against its own
    *  agent-visible outputs path with `artifactsRootEnv` and layers the result with the knob. */
   artifactsRoot?: string;
@@ -1619,6 +1630,9 @@ export function buildLaunchPlan(
     agentMaxTurns: session.agent_max_turns,
     includeHookEvents: includeHookEventsFor(presentMounts),
     agentEnv: agentEnvOverrides(session.agent_env),
+    ...(session.agent_env.passthrough?.length && (tier === "hostloop" || tier === "protocol")
+      ? { agentEnvPassthrough: [...session.agent_env.passthrough] }
+      : {}),
     ...(session.agent_env.artifacts_root !== undefined ? { artifactsRoot: session.agent_env.artifacts_root } : {}),
     ...(session.answer_channel ? { answerChannel: session.answer_channel } : {}),
     ...resolvePermissionMode(session, opts.deviceBridge === true),

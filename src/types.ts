@@ -3517,6 +3517,12 @@ export interface RunResult {
    *  and what a scenario plugin or skill of the same name replaced; and `setHash` over the delivered set. Names and
    *  hashes only, never a file body. Absent when the session has no `from_host`. */
   hostInputs?: HostInputs;
+  /** `agent_env.passthrough` at the tier the run used: the operator-env names the hostloop agent was given beside the
+   *  ones Desktop copies, or (at protocol) the names the session listed, which the agent inherits with the rest of the
+   *  operator's env. Names only, never a value. Absent when the session lists none, at container and microvm (which
+   *  refuse a list), on chat and on replay. A listed name this environment did not set is still listed: a names-only
+   *  stderr line says it was not passed. */
+  agentEnvPassthrough?: string[];
   /** MCP round-trips the harness answered with a JSON-RPC error (no handler, or the handler threw).
    *  Live-only — MCP round-trips are harness-computed, not in the SDK stdout stream, so absent on
    *  replay (the assertion then fails evidence-unavailable, never vacuously passes). */

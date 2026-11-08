@@ -142,7 +142,7 @@ export const AUTO_MEMORY_GATE = "123929380";
 
 /** The agent env key Desktop sets to "1" when the session has no auto-memory directory.
  *
- *  On the two tiers that inherit the operator's shell (hostloop, protocol) the builders DELETE the operator's own
+ *  On the two tiers that read the operator's env (protocol whole, hostloop by name) the builders DELETE the operator's own
  *  export of this key before overlaying `autoMemoryEnv`. That only matters when the recorded gate is ON — when it
  *  is off our "1" overwrites the export anyway — and in that state production sends no such key, and its host-loop
  *  env never inherits the operator's shell either; letting the export through would make hostloop/protocol differ

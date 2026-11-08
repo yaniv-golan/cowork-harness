@@ -206,17 +206,17 @@ the session from there; your own `~/.claude` is never read.
 
 ### Agent-env knob (tier-uniform)
 
-`hostloop` and `protocol` spawn the agent over the **operator's full shell env** (`...process.env` /
-`{...plan.baseEnv}`; at `hostloop`, with `CLAUDE_CODE_OAUTH_TOKEN` set, less `ANTHROPIC_API_KEY`,
-`ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_CUSTOM_HEADERS`), while `container`/`microvm` build a **constructed allowlist**. Left alone, that means
-an operator-exported `CLAUDE_CODE_SUBAGENT_MODEL`, `ENABLE_TOOL_SEARCH`, or
-`CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` silently affects only the two env-inheriting tiers — the exact
-same session behaves differently depending on which fidelity tier you run it at. `agent_env` is the
-authored, uniform replacement: it applies across **all four execution tiers**
+`protocol` spawns the agent over the **operator's full shell env** (`{...plan.baseEnv}`). `hostloop` copies only
+the names Desktop copies into its host-loop agent (`PATH`, `HOME`, `LOGNAME`, `SHELL`, `USER`, `TERM`, and
+`CLAUDE_CODE_TMPDIR` when set), plus any you list in `agent_env.passthrough` (below); everything else in your
+shell, including any credential besides the one the harness gives the agent, stays out. `container`/`microvm`
+build a **constructed allowlist** inside the sandbox. Left alone, that means an operator-exported
+`CLAUDE_CODE_SUBAGENT_MODEL`, `ENABLE_TOOL_SEARCH`, or `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` would silently
+affect `protocol` only — the exact same session would behave differently depending on which fidelity tier you
+run it at. `agent_env` is the authored, uniform replacement: it applies across **all four execution tiers**
 (`protocol`/`container`/`microvm`/`hostloop`; `fidelity: cowork` resolves to one of them), and **fourteen**
-keys are **scrubbed from the operator layer** on `hostloop`/`protocol` (the only tiers that inherit one)
-before any baseline/knob overlay — so a stray shell value can never leak through on some tiers and not
-others. Three of them are the keys above. Three more set effort and thinking, and the session's `effort` and
+keys are **scrubbed from the operator layer** on `hostloop`/`protocol` (the tiers that read one) before any
+baseline/knob overlay — so a stray shell value can never leak through on some tiers and not others. Three of them are the keys above. Three more set effort and thinking, and the session's `effort` and
 `extended_thinking` fields are their replacement: `CLAUDE_CODE_EFFORT_LEVEL`, which the agent reads ahead of
 `--effort` (so an export would replace the session's `effort`), `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT`, which makes
 it send an effort for a model it has no effort data for (it cannot turn effort on for the models the agent lists
@@ -226,7 +226,7 @@ no authored replacement: `CLAUDE_CODE_SUBAGENT_MODEL_FORCE`, which promotes the 
 sub-agent's frontmatter and a per-dispatch `model:`, and
 `CLAUDE_CODE_COORDINATOR_FORCE_WORKER_INHERIT_MODEL`, which discards the dispatch `model:` when
 `CLAUDE_CODE_COORDINATOR_MODE` is also set. Real Cowork sets neither, so exporting one in your shell would
-change sub-agent model resolution on two tiers only. If you need either, set it inside the run rather than
+change sub-agent model resolution at `protocol` only. If you need either, set it inside the run rather than
 in the environment the harness inherits. Five mirror Desktop, which lets no value of them from your settings
 reach an agent it spawns: `CLAUDE_CODE_SIMPLE` (set to `1` it puts the agent in its bare mode, without plugins, hooks,
 auto-memory or `CLAUDE.md`), `CLAUDE_AGENT_SDK_MCP_NO_PREFIX`, `CLAUDE_CODE_PROCESS_WRAPPER`,
@@ -234,7 +234,7 @@ auto-memory or `CLAUDE.md`), `CLAUDE_AGENT_SDK_MCP_NO_PREFIX`, `CLAUDE_CODE_PROC
 `CLAUDE_CODE_ENTRYPOINT_ON_REQUESTS` to an empty string itself, and so does the baseline on every tier that applies
 it. The fourteenth, `COWORK_ARTIFACTS_ROOT`, is
 the key `agent_env.artifacts_root` below sets; Cowork never sets it, so an export of it would move where a skill writes
-its run status on two tiers only.
+its run status at `protocol` only.
 
 | Field | Type | Env key | Notes |
 |---|---|---|---|
@@ -242,6 +242,7 @@ its run status on two tiers only.
 | `agent_env.tool_search` | enum | `ENABLE_TOOL_SEARCH` | `"auto"` \| `"off"`. **Naming trap:** unset (key absent) is binary mode `tst` — ToolSearch is **ON** first-party by default. There is no `"standard"` value to set here; the binary's own `"standard"` mode name means **DISABLED**, not "the standard/default mode" — `tool_search: "off"` is the correct way to disable it, emitting `ENABLE_TOOL_SEARCH="off"` (the binary's actual disable spelling). |
 | `agent_env.disable_experimental_betas` | boolean | `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` | `true` emits `"1"`; also disables ToolSearch as a side effect on the binary side. Omit/`false` emits no key. |
 | `agent_env.artifacts_root` | string | `COWORK_ARTIFACTS_ROOT` | A path **relative to outputs** (no leading `/`, no `..`, no backslash). Each tier resolves it against outputs **as the agent sees it** — `/sessions/<id>/mnt/outputs/<path>` in `container`/`microvm`, the staged host path on `protocol` — so one session file names the same place everywhere, and an `artifact_json` path `outputs/<path>/…` reads what the skill wrote. For a skill that takes its run-status directory from this variable. **Refused at `hostloop`** (and `cowork`, which can resolve there): the host loop runs shell commands in a separate container that never sees the agent's environment, so a script would not see the variable. The session fingerprint hashes the authored string, not the per-tier path. |
+| `agent_env.passthrough` | string list | (the names listed) | Names from your environment to give the `hostloop` agent beside the ones Desktop copies, for example `[SSH_AUTH_SOCK, NODE_EXTRA_CA_CERTS, HTTPS_PROXY, LANG]`: a plugin MCP server or hook that needs one of these at `hostloop` gets it only through this list. Values are never recorded; `result.json`'s `agentEnvPassthrough` lists the names, and a name your environment does not set is reported on stderr. Accepted at `protocol` too, where the agent inherits your environment anyway. **Refused** at `container`/`microvm` (a fixed sandbox environment), for any credential (the agent gets exactly one, from `CLAUDE_CODE_OAUTH_TOKEN` or else `ANTHROPIC_API_KEY`), for any name the harness sets or removes itself for that baseline, at `protocol` for the names Cowork strips there, and for `ANTHROPIC_CUSTOM_HEADERS` while the agent is given the OAuth token (use `ANTHROPIC_API_KEY` to send custom headers). A value carrying a secret (for example a proxy URL with `user:pass@`) is not redacted from the run's records unless you add its name to `COWORK_HARNESS_SCRUB_KEYS`. |
 
 **Precedence is tier-qualified** (not a single uniform three-layer rule):
 
@@ -361,8 +362,9 @@ reads the host. `verify-cassettes --host-inputs` compares it with this machine: 
 **What rides along.** A plugin brings its hooks and its `.mcp.json` MCP servers. Hooks turn on
 `--include-hook-events`, which changes the frame stream. A plugin MCP server that needs a host toolchain, or an
 env var from your shell, may not start at `container` or `microvm`. At `protocol` and `hostloop` the agent runs on
-your machine, so those MCP servers start there, with your shell's environment (less the variables the harness
-strips). At `protocol` a plugin's hooks run as your own processes too: a run whose installed set has a plugin with
+your machine, so those MCP servers start there: at `protocol` with your shell's environment (less the variables the
+harness strips), at `hostloop` with only the names Desktop copies and those in `agent_env.passthrough` — list
+`SSH_AUTH_SOCK`, `NODE_EXTRA_CA_CERTS`, `HTTPS_PROXY` or `LANG` there if a server needs one. At `protocol` a plugin's hooks run as your own processes too: a run whose installed set has a plugin with
 hooks is refused until the scenario sets `allow_host_hooks: true`. At `hostloop`, `CLAUDE_PLUGIN_ROOT` is set
 only when exactly one plugin is mounted, so with `from_host` it is unset for your own plugin too. **Not
 included:** MCP servers from `~/.claude.json`, `settings.json` hooks, project- and local-scope plugins, and

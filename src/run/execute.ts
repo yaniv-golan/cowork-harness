@@ -5,6 +5,7 @@ import { searchCorpusAssertRefusal } from "../search-corpus/assert-keys.js";
 import { effectivePool, PoolBuildError, resolvePoolDir } from "../search-corpus/pool.js";
 import { inlineSchemaFiles } from "./schema-files.js";
 import { ANSWER_CHANNEL_NONE_LABEL, answerChannelRefusal, artifactsRootRefusal } from "../answer-channel.js";
+import { passthroughRefusal, passthroughUnsetNotice } from "../runtime/passthrough.js";
 import {
   agentAnchorsRefusal,
   searchCorpusRefusal,
@@ -99,7 +100,7 @@ import {
   type LaunchPlan,
   type LegStage,
 } from "../session.js";
-import { spawnProtocol, protocolCredentialRefusal } from "../runtime/protocol.js";
+import { spawnProtocol, credentialRefusal, buildProtocolEnv } from "../runtime/protocol.js";
 import { tokenCheck, type DoctorCheck } from "./doctor.js";
 import {
   hookFailureBlocksForAgent,
@@ -111,6 +112,7 @@ import { currentTurnAgentVersions } from "./recorded-agent-version.js";
 import { spawnContainer } from "../runtime/container.js";
 import {
   buildHostLoopNativeEnv,
+  hostLoopAgentEnv,
   hostLoopSessionRoots,
   spawnHostLoop,
   WORKSPACE_TOOL_ALIASES,
@@ -353,6 +355,7 @@ export function searchCorpusPreflight(o: {
     folderHostPaths: [],
     extra: runtimeAuthEnv(),
     agentEnv: agentEnvOverrides(o.session.agent_env),
+    passthrough: o.session.agent_env.passthrough,
   });
   const why = searchCorpusRefusal({
     fidelity: o.effectiveFidelity,
@@ -811,11 +814,26 @@ export function runHookFailureBlocks(
   workRoot: string,
   sessionId: string,
   outDir: string,
+  baseline: PlatformBaseline,
 ): HookFailureBlocks {
-  return hookFailureBlocksForAgent(currentTurnAgentVersions(outDir), () => scanRunHookSources(plan, tier, workRoot, sessionId));
+  return hookFailureBlocksForAgent(currentTurnAgentVersions(outDir), () => scanRunHookSources(plan, tier, workRoot, sessionId, baseline));
 }
 
-function scanRunHookSources(plan: LaunchPlan, tier: string, workRoot: string, sessionId: string): HookFailureBlocks {
+/** The env the agent was spawned with at `tier`, as the spawn builds it: hostloop's named-key env (`hostLoopAgentEnv`),
+ *  protocol's (`buildProtocolEnv`), and the sandbox tiers' allowlist base (`plan.baseEnv`). */
+export function agentEnvForTier(plan: LaunchPlan, tier: string, baseline: PlatformBaseline): NodeJS.ProcessEnv {
+  if (tier === "hostloop") return hostLoopAgentEnv(baseline, plan);
+  if (tier === "protocol") return buildProtocolEnv(plan, baseline);
+  return plan.baseEnv;
+}
+
+function scanRunHookSources(
+  plan: LaunchPlan,
+  tier: string,
+  workRoot: string,
+  sessionId: string,
+  baseline: PlatformBaseline,
+): HookFailureBlocks {
   const hostNative = tier === "hostloop" || tier === "protocol";
   // The config dir the agent ran with: the materialized one (hostloop's CLAUDE_CONFIG_DIR, and the source of the
   // sandbox tiers' copy), the copy the sandbox tiers bind at mnt/.claude (the run dir's for container, the VM work
@@ -835,8 +853,8 @@ function scanRunHookSources(plan: LaunchPlan, tier: string, workRoot: string, se
     // Only protocol loads project and local settings (from its cwd, the work dir); the others pass --setting-sources user.
     projectClaudeDirs: tier === "protocol" ? [join(workRoot, ".claude")] : [],
     managedSettingsDirs: hostNative ? hostManagedSettingsDirs() : [],
-    // Host-native tiers inherit the operator's env; the sandboxed ones get an allowlist drawn from baseEnv.
-    spawnEnv: hostNative ? { ...process.env, ...plan.baseEnv } : plan.baseEnv,
+    // The env the agent was spawned with at this tier, built by the same function the spawn uses.
+    spawnEnv: agentEnvForTier(plan, tier, baseline),
     knownEvents: new Set<string>(KNOWN_HOOK_EVENTS),
   });
 }
@@ -978,6 +996,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // Only what the USER chose counts as a decider here (`onUnansweredFlag`, not a caller's resolved `onUnanswered`).
   const channelRefusal =
     artifactsRootRefusal(session, effectiveFidelity, scenario.fidelity) ??
+    passthroughRefusal(session, effectiveFidelity, baseline) ??
     answerChannelRefusal({
       scenario,
       session,
@@ -993,6 +1012,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       probeHostCli: () => hostCliSupportsPermissionPrompts(strippedEnv(baseline)),
     });
   if (channelRefusal) throw new UsageError(channelRefusal);
+  if (effectiveFidelity === "hostloop") {
+    const unset = passthroughUnsetNotice(session.agent_env.passthrough);
+    if (unset) process.stderr.write(unset + "\n");
+  }
 
   // Every declared source (plugins, skills, uploads, folders, marketplaces) is resolved and checked HERE,
   // before the run directory exists: a path that does not exist is a UsageError, and a run refused for it
@@ -1978,9 +2001,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     if (unansweredErr) {
       const turn = currentTurn(outDir);
       const partialResult = buildPartialResult({
-        hookFailureBlocks: runHookFailureBlocks(plan, effectiveFidelity, workRoot, sessionId, outDir),
+        hookFailureBlocks: runHookFailureBlocks(plan, effectiveFidelity, workRoot, sessionId, outDir, baseline),
         deviceBridge: scenario.device_bridge === true ? bridgeRecord() : undefined,
         hostInputs: plan.hostInputs,
+        agentEnvPassthrough: plan.agentEnvPassthrough,
         fsDiff, // the turn's outputs diff — keep a filesystem-proven delete on the partial result
         outputsMountMode,
         turn,
@@ -2141,7 +2165,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       authoredCaptureOpts({ workRoot, runDir: outDir, resume: plan.resume, priorityGlobs, totalBytes: authoredTotalBytes() }),
     );
 
-    const hookFailureBlocks = runHookFailureBlocks(plan, effectiveFidelity, workRoot, sessionId, outDir);
+    const hookFailureBlocks = runHookFailureBlocks(plan, effectiveFidelity, workRoot, sessionId, outDir, baseline);
     const assertCtx: AssertContext = {
       transcript: record.transcript,
       finalMessage: record.resultText,
@@ -2577,6 +2601,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       hookFailureBlocks, // the onFailure: "block" inventory the hook keys read failed frames by
       deviceBridge: scenario.device_bridge === true ? bridgeRecord() : undefined, // what the bridge modeled, and how it differs
       hostInputs: plan.hostInputs, // what plugins.from_host took from the host, hashed over the staged copy
+      agentEnvPassthrough: plan.agentEnvPassthrough, // the passthrough names that apply at this tier (names only)
       mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
       hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
       fileToolAttempts: record.fileToolAttempts, // uncollapsed — content-class, same as toolResults/decisions above
@@ -3171,6 +3196,7 @@ export function launchSourcesPreflight(
   const tier = effectiveTier(scenario.fidelity, baseline);
   const channelRefusal =
     artifactsRootRefusal(session, tier, scenario.fidelity) ??
+    passthroughRefusal(session, tier, baseline) ??
     answerChannelRefusal({
       scenario,
       session,
@@ -3348,20 +3374,28 @@ export function loadSessionFromFile(sessionRef: string): ReturnType<typeof loadS
  *  session — the input check does ({@link launchSourcesPreflight}: an unreadable file, a schema the session
  *  rejects), and so does the real run — and a dry run over files whose session paths do not exist on this
  *  machine must not start failing on a model question it cannot answer. */
-/** A batch's protocol credential refusal, or undefined: every scenario at `fidelity: protocol` needs a credential in
- *  the environment (doctor's `tokenCheck("protocol")` — the one predicate), and one refusal names them all, before any
- *  run dir exists. Run LAST among the pre-flights (after dry-run, model and budget), so a scenario refused for those
- *  reasons gets that reason. `spawnProtocol` refuses the same way as the backstop for a path without this pre-flight. */
-export function protocolCredentialPreflight(
-  scenarios: ReadonlyArray<{ name: string; fidelity: string }>,
-  check: () => DoctorCheck = () => tokenCheck("protocol"),
+/** A batch's credential refusal, or undefined: every scenario needs a credential in the environment that its tier
+ *  hands the agent (doctor's `tokenCheck(tier)` — the one predicate), and one refusal per tier names its scenarios,
+ *  before any run dir exists. Run LAST among the pre-flights (after dry-run, model and budget), so a scenario refused
+ *  for those reasons gets that reason. `spawnProtocol` refuses the same way as the backstop for a path without this
+ *  pre-flight. */
+export function credentialPreflight(
+  scenarios: ReadonlyArray<{ name: string; fidelity?: string }>,
+  check: (tier: Scenario["fidelity"]) => DoctorCheck = (tier) => tokenCheck(tier),
 ): string | undefined {
-  const names = scenarios.filter((s) => s.fidelity === "protocol").map((s) => s.name);
-  if (!names.length) return undefined;
-  const c = check();
-  return c.status === "fail"
-    ? protocolCredentialRefusal(names.length === 1 ? `scenario "${names[0]}"` : `scenarios ${names.join(", ")}`, c)
-    : undefined;
+  const byTier = new Map<Scenario["fidelity"], string[]>();
+  for (const s of scenarios) {
+    if (!s.fidelity) continue;
+    const tier = s.fidelity as Scenario["fidelity"];
+    byTier.set(tier, [...(byTier.get(tier) ?? []), s.name]);
+  }
+  const refusals: string[] = [];
+  for (const [tier, names] of byTier) {
+    const c = check(tier);
+    if (c.status === "fail")
+      refusals.push(credentialRefusal(names.length === 1 ? `scenario "${names[0]}"` : `scenarios ${names.join(", ")}`, c, tier));
+  }
+  return refusals.length ? refusals.join("\n") : undefined;
 }
 
 /** A batch in which two or more scenarios pin the same `plugins.config_dir`, as a refusal, or undefined. The first of
@@ -3589,6 +3623,8 @@ export function buildPartialResult(args: {
   deviceBridge?: DeviceBridgeRecord;
   /** What `plugins.from_host` took from the host (`LaunchPlan.hostInputs`). */
   hostInputs?: HostInputs;
+  /** `LaunchPlan.agentEnvPassthrough`. */
+  agentEnvPassthrough?: string[];
   /** True when this partial run was ablated (--ablate-skill). */
   ablated?: boolean;
   scenarioName: string;
@@ -3796,6 +3832,7 @@ export function buildPartialResult(args: {
     hookFailureBlocks: args.hookFailureBlocks,
     deviceBridge: args.deviceBridge,
     hostInputs: args.hostInputs,
+    agentEnvPassthrough: args.agentEnvPassthrough,
     mcpErrors: record.mcpErrors, // uncollapsed — an empty [] is the real "no MCP errors" signal no_mcp_error needs
     hookEvents: record.hookEvents, // uncollapsed — an empty [] on a no-Task scenario is the real "nothing hook-blocked" signal no_hook_blocked needs
     fileToolAttempts: record.fileToolAttempts, // uncollapsed — content-class, same as toolResults/decisions above

@@ -684,6 +684,8 @@ describe.skipIf(!can)("CLI arg guards — run --matrix (E3)", () => {
     const d = mkdtempSync(join(tmpdir(), "g-matrix-"));
     writeFileSync(join(d, "s.yaml"), "fidelity: container\nprompt: hi\n");
     writeFileSync(join(d, "m.yaml"), "baselines: [a, b]\n");
+    // A credential, so the run's credential pre-flight (a usage refusal) passes and the cells are resolved.
+    writeFileSync(join(d, ".env"), "CLAUDE_CODE_OAUTH_TOKEN=stub-not-a-real-token\n");
     const r = run(["run", "s.yaml", "--matrix", "m.yaml", "--repeat", "2", "--model", "claude-sonnet-5"], d);
     // The combination passes ARG validation (the former v1 rejection is gone). The fake baselines then
     // fail cell RESOLUTION — a run failure (1), observably distinct from a usage error (2).

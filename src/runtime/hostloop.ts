@@ -35,7 +35,12 @@ import { BACKGROUND_TASKS_ENV_KEY, baseAgentArgs, hostNativeSpawnEnv, dockerRunA
 import { buildPluginPathRewrites, type PluginPathRewrite } from "../hostloop/plugin-path-rewrite.js";
 import { agentSpawnOptions, agentTreeAgent } from "./agent-tree.js";
 import { AUTO_MEMORY_ENV_KEY } from "../loop-decision.js";
-import { runtimeAuthEnv, TOKEN_PATH_DROPPED_ENV_KEYS } from "./host-env.js";
+import { runtimeAuthEnv, SECRET_ENV_KEYS, SESSIONS_OAUTH_TOKEN_KEY, TOKEN_PATH_DROPPED_ENV_KEYS } from "./host-env.js";
+import { hostInheritedKeys } from "../sync/spawn-env-registry.js";
+
+/** Desktop passes its own `CLAUDE_CODE_TMPDIR` into the host-loop spawn when it is set (spawn-env registry, class
+ *  `host-derived`); the harness passes the operator's the same way. */
+export const HOST_TMPDIR_KEY = "CLAUDE_CODE_TMPDIR";
 import { resolveHostLoopBindMounts, stageHostLoopWorkspace } from "./hostloop-stage.js";
 import { capturePreRunManifest } from "../run/pre-run-manifest.js";
 import { checkHostLoopPathGate, PATH_GATE_TOOL_NAMES, type HostLoopPathGateConfig } from "../hostloop/pretooluse-path-hook.js";
@@ -75,25 +80,21 @@ export const WORKSPACE_TOOL_ALIASES: Record<string, string> = { Bash: "mcp__work
 export const VM_LOOP_TOOL_ALIASES: Record<string, string> = { WebFetch: "mcp__workspace__web_fetch" };
 
 /**
- * Pure builder for the hostloop native process's env: `hostNativeSpawnEnv`'s contract-layer output
- * layered over this REAL macOS process's own `...process.env` base (unlike container/microvm, which
- * spawn into a container with an explicit `-e KEY[=value]` allowlist — see dockerRunArgv — this process
- * inherits the operator's whole shell env). Real Cowork never sets `MAX_THINKING_TOKENS` (the
- * `--max-thinking-tokens`/`--thinking disabled` flag is the sole delivery channel — see
- * `hostNativeSpawnEnv`'s doc comment); a stray host `MAX_THINKING_TOKENS` already in the operator's shell
- * would otherwise leak straight through `...process.env` and — were the ELF to still read the env —
- * silently outrank the flag. Strip it explicitly. Extracted from `spawnHostLoop` so this env-construction
- * step is unit-testable without spawning anything.
+ * Pure builder for the hostloop native process's env: `hostNativeSpawnEnv`'s contract-layer output layered over a
+ * NAMED-KEY operator layer, as Desktop builds its host-loop spawn. Desktop copies `PATH`, `HOME`, `LOGNAME`, `SHELL`,
+ * `USER` and `TERM` from its own process env (and `CLAUDE_CODE_TMPDIR` when set) and constructs the rest; it never
+ * hands the agent a whole shell. The harness copies the same names from the operator's env (`hostInheritedKeys`),
+ * plus the names the session lists in `agent_env.passthrough`, and nothing else: an operator's `ANTHROPIC_BASE_URL`,
+ * proxy variables or `CLAUDE_CODE_SESSIONS_OAUTH_TOKEN` reach the agent only when the session names them.
+ * Extracted from `spawnHostLoop` so this env-construction step is unit-testable without spawning anything.
  *
- * Layers apply in precedence order — knob > baseline spawn.env > operator env (scrubbed):
- *   1. the operator's shell (`...process.env`), but with `SCRUBBED_AGENT_ENV_KEYS` deleted from THIS
- *      layer alone, before anything else touches it — container/microvm never inherit these keys, so
- *      leaking them only here (and on protocol) is exactly the asymmetry `agent_env` closes. Scrubbing
- *      AFTER the baseline overlay would also erase a value the baseline legitimately sets; scrubbing
- *      the operator layer first keeps that value intact. When `extra` gives the agent the OAuth token,
- *      `TOKEN_PATH_DROPPED_ENV_KEYS` (the API key, the bearer token, the custom headers) are deleted from
- *      this layer too, so the token is the only credential the agent's env carries, as in Desktop.
- *   2. `hostNativeSpawnEnv`'s baseline-derived output (may legitimately set any scrubbed key).
+ * Layers apply in precedence order — knob > baseline spawn.env > operator layer:
+ *   1. the operator layer: the copied names and the passthrough names, then every credential name,
+ *      `SCRUBBED_AGENT_ENV_KEYS` and the two baseline-owned switches deleted from THIS layer alone (a passthrough of any of them is refused before the run,
+ *      `passthroughRefusal`). When `extra` gives the agent the OAuth token, `TOKEN_PATH_DROPPED_ENV_KEYS` are deleted
+ *      here too, so the token is the only credential the agent's env carries, as in Desktop.
+ *   2. `hostNativeSpawnEnv`'s baseline-derived output (may legitimately set any scrubbed key), then
+ *      `MAX_THINKING_TOKENS` removed: real Cowork never sets it (the flag is the sole channel).
  *   3. the authored `agentEnv` knob, applied last so it always wins.
  */
 export function buildHostLoopNativeEnv(
@@ -103,10 +104,17 @@ export function buildHostLoopNativeEnv(
     /** The operator layer (default: this process's env). `sync` passes `{}` to compare against Desktop's spawn
      *  without reading the maintainer's shell (src/sync/observed-spawn-env.ts harnessHostLoopKeys). */
     operatorEnv?: NodeJS.ProcessEnv;
+    /** `agent_env.passthrough`: operator-env names copied beside Desktop's own set (`hostInheritedKeys`). */
+    passthrough?: readonly string[];
   },
 ): NodeJS.ProcessEnv {
-  const nativeEnv: NodeJS.ProcessEnv = { ...(opts.operatorEnv ?? process.env) };
+  const from = opts.operatorEnv ?? process.env;
+  const nativeEnv: NodeJS.ProcessEnv = {};
+  for (const k of [...hostInheritedKeys(), HOST_TMPDIR_KEY, ...(opts.passthrough ?? [])]) if (from[k] !== undefined) nativeEnv[k] = from[k];
   for (const k of SCRUBBED_AGENT_ENV_KEYS) delete nativeEnv[k];
+  // No credential is copied: the agent's one credential comes from `extra` (runtimeAuthEnv). A passthrough of these is
+  // refused before the run (passthroughRefusal); this is the builder's own backstop.
+  for (const k of [...SECRET_ENV_KEYS, SESSIONS_OAUTH_TOKEN_KEY]) delete nativeEnv[k];
   delete nativeEnv[AUTO_MEMORY_ENV_KEY]; // owned by hostNativeSpawnEnv's autoMemoryEnv overlay — see AUTO_MEMORY_ENV_KEY
   // Owned by the baseline's spawn.env, which hostNativeSpawnEnv overlays: on a baseline that pins no value the
   // operator's export must not reach the agent either, as on protocol (backgroundTasksEnv).
@@ -119,6 +127,26 @@ export function buildHostLoopNativeEnv(
   delete nativeEnv.MAX_THINKING_TOKENS;
   Object.assign(nativeEnv, opts.agentEnv ?? {});
   return nativeEnv;
+}
+
+/** The env the hostloop agent is spawned with, for this plan. The spawn calls it, and so does the run's hook scan
+ *  (`scanRunHookSources`), so the scan reads the env the agent actually got. `claudePluginRoot` is the single staged
+ *  plugin's host root, or "" (its value does not matter to the scan). */
+export function hostLoopAgentEnv(
+  baseline: PlatformBaseline,
+  plan: Pick<LaunchPlan, "configDir" | "mounts" | "agentEnv" | "agentEnvPassthrough">,
+  claudePluginRoot = "",
+): NodeJS.ProcessEnv {
+  return buildHostLoopNativeEnv(baseline, {
+    configDir: plan.configDir,
+    extra: { CLAUDE_PLUGIN_ROOT: claudePluginRoot, ...runtimeAuthEnv() },
+    // Real host paths of connected folders (never staged copies) — the only spawn tier where these
+    // are meaningful, since container/microvm folders are staged as copies with no real host path.
+    folderHostPaths: plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => mt.hostPath),
+    // The tier-uniform agent_env knob — wins over both the (scrubbed) operator layer and baseline spawn.env.
+    agentEnv: plan.agentEnv,
+    passthrough: plan.agentEnvPassthrough,
+  });
 }
 
 /** True iff wire and spawner cwd differ after best-effort realpath canonicalization. A symlinked run-dir
@@ -440,15 +468,7 @@ function spawnHostLoopTracked(
       : // gate off (allowlist fallback) — keep web_fetch pre-approved alongside bash + present_files + the discovery tools
         ["mcp__workspace__bash", "mcp__workspace__web_fetch", ...coworkTools, ...SKILLS_PLUGINS_TOOL_NAMES],
   });
-  const nativeEnv = buildHostLoopNativeEnv(baseline, {
-    configDir: plan.configDir,
-    extra: { CLAUDE_PLUGIN_ROOT: claudePluginRootHost ?? "", ...runtimeAuthEnv() },
-    // Real host paths of connected folders (never staged copies) — the only spawn tier where these
-    // are meaningful, since container/microvm folders are staged as copies with no real host path.
-    folderHostPaths: plan.mounts.filter((mt) => mt.kind === "folder").map((mt) => mt.hostPath),
-    // The tier-uniform agent_env knob — wins over both the (scrubbed) operator layer and baseline spawn.env.
-    agentEnv: plan.agentEnv,
-  });
+  const nativeEnv = hostLoopAgentEnv(baseline, plan, claudePluginRootHost ?? "");
   // Layered here, after buildHostLoopNativeEnv, so sync's comparison with Desktop's spawn (which calls that builder)
   // never sees them: the harness sets them only under --search-corpus.
   if (opts.searchCorpusEnv) Object.assign(nativeEnv, opts.searchCorpusEnv);

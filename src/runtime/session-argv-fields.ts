@@ -54,6 +54,7 @@ export const SESSION_ARGV_FIELDS = {
   },
   stagedSkills: { argv: false, why: "staged into the config dir" },
   agentEnv: { argv: false, why: "spawn env" },
+  agentEnvPassthrough: { argv: false, why: "spawn env (hostloop copies these names from the operator env)" },
   artifactsRoot: { argv: false, why: "spawn env (COWORK_ARTIFACTS_ROOT)" },
   permissionModeSource: { argv: false, why: "provenance of permissionMode, for reports" },
   permissionParity: { argv: false, why: "decided by the harness's permission handler" },

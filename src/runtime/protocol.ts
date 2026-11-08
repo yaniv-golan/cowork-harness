@@ -17,6 +17,7 @@ import { agentSpawnOptions } from "./agent-tree.js";
 import { stageWorkspaceFixture } from "../fixture/workspace.js";
 import { carryLegFolders } from "./stage.js";
 import { autoMemoryEnv, AUTO_MEMORY_ENV_KEY } from "../loop-decision.js";
+import { SESSIONS_OAUTH_TOKEN_KEY } from "./host-env.js";
 
 /**
  * Pure builder for L0's spawn env. Protocol spawns the host `claude` over the OPERATOR's full shell env
@@ -50,6 +51,9 @@ export function buildProtocolEnv(plan: LaunchPlan, baseline: PlatformBaseline, o
 export function protocolOperatorEnv(plan: Pick<LaunchPlan, "baseEnv" | "agentEnv">): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...plan.baseEnv };
   for (const k of SCRUBBED_AGENT_ENV_KEYS) delete env[k];
+  // A credential Desktop builds as "" and then deletes, so its agent never has it: an operator export must not reach
+  // this agent either (the knob cannot carry it).
+  delete env[SESSIONS_OAUTH_TOKEN_KEY];
   Object.assign(env, plan.agentEnv ?? {});
   // The OAuth token, applied HERE so the documented `knob > operator env` layering stays in one function — an
   // `env.X = …` at the call site would silently outrank `plan.agentEnv`.
@@ -149,10 +153,10 @@ export function spawnProtocol(
   //
   // Auth: the agent always gets the run's managed config dir, so its credential must travel in the environment (a
   // Keychain or `/login` session lives in the operator's config dir, which it never reads). The batch pre-flight
-  // (`protocolCredentialPreflight`) refuses before any run dir exists; this is the backstop for every path that
+  // (`credentialPreflight`) refuses before any run dir exists; this is the backstop for every path that
   // reaches the spawn without it (chat). One predicate: doctor's `tokenCheck`.
   const cred = tokenCheck("protocol");
-  if (cred.status === "fail") throw new UsageError(protocolCredentialRefusal(scenario.name, cred));
+  if (cred.status === "fail") throw new UsageError(credentialRefusal(scenario.name, cred));
   assertProtocolConfigSealed(plan.configDir);
   // Scrub the inheritance-asymmetric operator keys, then overlay the agent_env knob — see buildProtocolEnv.
   const env: NodeJS.ProcessEnv = buildProtocolEnv(plan, baseline, join(work, "outputs"));
@@ -170,9 +174,9 @@ export function spawnProtocol(
 
 /** The refusal for a protocol run with no credential in the environment: doctor's own detail and remedy, so the text
  *  and the predicate cannot drift. `who` names the scenario(s). */
-export function protocolCredentialRefusal(who: string, check: DoctorCheck): string {
+export function credentialRefusal(who: string, check: DoctorCheck, tier = "protocol"): string {
   return (
-    `${who}: fidelity protocol needs a credential in the environment (env / .env) — ${check.detail}. ` +
+    `${who}: fidelity ${tier} needs a credential in the environment (env / .env) — ${check.detail}. ` +
     `The agent runs with a managed config dir, so a Keychain or /login session is not used.` +
     (check.remedy ? ` Fix: ${check.remedy}` : "")
   );

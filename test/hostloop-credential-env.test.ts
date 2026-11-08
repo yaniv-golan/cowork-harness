@@ -13,9 +13,9 @@ import { bundle } from "./helpers/search-anchor-bundle.js";
 import type { PlatformBaseline, Scenario } from "../src/types.js";
 import type { loadSession } from "../src/session.js";
 
-// The hostloop agent inherits the operator's whole shell. When the harness gives it the OAuth token, the operator's
-// other credential keys must not reach it beside the token. Every case stubs all four names: runtimeAuthEnv reads
-// process.env, so an unstubbed name would make the outcome depend on the machine running the test.
+// The hostloop agent gets named keys from the operator's env (Desktop's copied set, plus `agent_env.passthrough`), never a
+// credential: the one it is given comes from runtimeAuthEnv (the OAuth token, else the API key). Every case stubs all
+// four names: runtimeAuthEnv reads process.env, so an unstubbed name would make the outcome depend on the machine.
 
 const NAMES = ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS"] as const;
 type Name = (typeof NAMES)[number];
@@ -40,11 +40,11 @@ const cases: Array<[string, Partial<Record<Name, string>>, Name[]]> = [
   ["token only → unchanged", { CLAUDE_CODE_OAUTH_TOKEN: "t" }, ["CLAUDE_CODE_OAUTH_TOKEN"]],
   ["key only (no token) → the key, unchanged", { ANTHROPIC_API_KEY: "k" }, ["ANTHROPIC_API_KEY"]],
   [
-    "no token: key + bearer token + custom headers → all kept (a gateway that needs its header keeps working)",
+    "no token: key + bearer token + custom headers → the key alone (the others reach it only by passthrough)",
     { ANTHROPIC_API_KEY: "k", ANTHROPIC_AUTH_TOKEN: "b", ANTHROPIC_CUSTOM_HEADERS: "x-h: 1" },
-    ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_CUSTOM_HEADERS"],
+    ["ANTHROPIC_API_KEY"],
   ],
-  ["bearer token only → kept", { ANTHROPIC_AUTH_TOKEN: "b" }, ["ANTHROPIC_AUTH_TOKEN"]],
+  ["bearer token only → none (it reaches the agent at protocol only)", { ANTHROPIC_AUTH_TOKEN: "b" }, []],
 ];
 
 describe("hostloop agent env: the token is the only credential when the agent is given it", () => {
@@ -63,20 +63,37 @@ describe("hostloop agent env: the token is the only credential when the agent is
     expect(env.TZ).toBeTruthy();
   });
 
-  // The trigger is what `extra` gives the agent, never process.env: these two separate the views.
-  it("extra without the token keeps the operator's key, even with a token in process.env", () => {
+  // The credential comes from `extra`, never from the operator layer: an operator export is not copied either way.
+  it("an operator layer's key is not copied: with extra carrying none, the agent has no credential", () => {
     stubCredentials({ CLAUDE_CODE_OAUTH_TOKEN: "t" });
     const env = buildHostLoopNativeEnv(BASE, { configDir: "/tmp/cfg", operatorEnv: { ANTHROPIC_API_KEY: "k" }, extra: { TZ: "UTC" } });
-    expect(credentialKeys(env)).toEqual(["ANTHROPIC_API_KEY"]);
+    expect(credentialKeys(env)).toEqual([]);
   });
-  it("extra with the token drops the operator's key, even with no token in process.env", () => {
+  it("extra with the token: the token alone, whatever the operator layer holds", () => {
     stubCredentials({});
     const env = buildHostLoopNativeEnv(BASE, {
       configDir: "/tmp/cfg",
-      operatorEnv: { ANTHROPIC_API_KEY: "k" },
+      operatorEnv: { ANTHROPIC_API_KEY: "k", ANTHROPIC_AUTH_TOKEN: "b" },
       extra: { CLAUDE_CODE_OAUTH_TOKEN: "t" },
     });
     expect(credentialKeys(env)).toEqual(["CLAUDE_CODE_OAUTH_TOKEN"]);
+  });
+  // The token-path delete still runs after the copy: a passthrough can never re-admit a credential beside the token
+  // (passthroughRefusal refuses these names first; this is the builder's own backstop).
+  it("with the token, a passthrough of the dropped keys does not re-admit them", () => {
+    stubCredentials({});
+    const env = buildHostLoopNativeEnv(BASE, {
+      configDir: "/tmp/cfg",
+      operatorEnv: { ANTHROPIC_API_KEY: "k", ANTHROPIC_CUSTOM_HEADERS: "h" },
+      passthrough: ["ANTHROPIC_API_KEY", "ANTHROPIC_CUSTOM_HEADERS"],
+      extra: { CLAUDE_CODE_OAUTH_TOKEN: "t" },
+    });
+    expect(credentialKeys(env)).toEqual(["CLAUDE_CODE_OAUTH_TOKEN"]);
+  });
+  it("with the API key, a passthrough of ANTHROPIC_CUSTOM_HEADERS reaches the agent", () => {
+    stubCredentials({ ANTHROPIC_API_KEY: "k", ANTHROPIC_CUSTOM_HEADERS: "x-h: 1" });
+    const env = buildHostLoopNativeEnv(BASE, { configDir: "/tmp/cfg", extra: runtimeAuthEnv(), passthrough: ["ANTHROPIC_CUSTOM_HEADERS"] });
+    expect(credentialKeys(env)).toEqual(["ANTHROPIC_API_KEY", "ANTHROPIC_CUSTOM_HEADERS"]);
   });
 
   // Deleted from the operator layer before the overlay: a key the baseline's spawn env sets survives.
@@ -90,11 +107,12 @@ describe("hostloop agent env: the token is the only credential when the agent is
     expect(env.ANTHROPIC_CUSTOM_HEADERS).toBe("from-baseline");
   });
 
-  it("leaves the rest of the operator's shell alone (ANTHROPIC_BASE_URL is still inherited)", () => {
-    stubCredentials({ CLAUDE_CODE_OAUTH_TOKEN: "t", ANTHROPIC_API_KEY: "k" });
+  it("ANTHROPIC_BASE_URL reaches the agent only when the session passes it through", () => {
+    stubCredentials({ ANTHROPIC_API_KEY: "k" });
     vi.stubEnv("ANTHROPIC_BASE_URL", "https://proxy.example");
-    const env = buildHostLoopNativeEnv(BASE, { configDir: "/tmp/cfg", extra: runtimeAuthEnv() });
-    expect(env.ANTHROPIC_BASE_URL).toBe("https://proxy.example");
+    expect(buildHostLoopNativeEnv(BASE, { configDir: "/tmp/cfg", extra: runtimeAuthEnv() }).ANTHROPIC_BASE_URL).toBeUndefined();
+    const passed = buildHostLoopNativeEnv(BASE, { configDir: "/tmp/cfg", extra: runtimeAuthEnv(), passthrough: ["ANTHROPIC_BASE_URL"] });
+    expect(passed.ANTHROPIC_BASE_URL).toBe("https://proxy.example");
   });
 
   it("sync's comparison (an empty operator layer) keeps the same key set whatever the maintainer exports", () => {

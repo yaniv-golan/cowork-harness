@@ -12,7 +12,7 @@ import { loadBaseline, resolveAgentBinary } from "../baseline.js";
 import { loadSession, buildLaunchPlan, resolveLaunchSources, userVisibleRootsFromPlan, readonlyFolderRootsFromPlan } from "../session.js";
 import { spawnContainer } from "../runtime/container.js";
 import { spawnHostLoop, WORKSPACE_TOOL_ALIASES } from "../runtime/hostloop.js";
-import { spawnProtocol, protocolCredentialRefusal } from "../runtime/protocol.js";
+import { spawnProtocol, credentialRefusal } from "../runtime/protocol.js";
 import { tokenCheck } from "./doctor.js";
 import { renderPrompts } from "../prompt.js";
 import { makeDisplayTranslator, vmPathContextFromPlan, linkifyForTerminal, shouldLinkify } from "./display-translate.js";
@@ -273,12 +273,12 @@ export async function cmdChat(args: string[]) {
     checkHostHookConsent(hookRoots, allowHostHooks);
     logHostHookNotice(hookRoots, warn);
   }
-  // protocol's agent gets only an environment credential (a managed config dir holds no login): refused here, before
-  // the run dir exists, with the same predicate spawnProtocol's backstop uses.
-  if (fidelity === "protocol") {
-    const cred = tokenCheck("protocol");
+  // Every tier's agent gets only an environment credential (a managed config dir holds no login), and only the one its
+  // tier hands over: refused here, before the run dir exists, with doctor's predicate for this tier.
+  {
+    const cred = tokenCheck(fidelity);
     if (cred.status === "fail") {
-      log(`chat: ${protocolCredentialRefusal("this `chat` session", cred)}\n`);
+      log(`chat: ${credentialRefusal("this `chat` session", cred, fidelity)}\n`);
       exitWith(2);
     }
   }
@@ -641,7 +641,7 @@ export async function cmdChat(args: string[]) {
         pinnedModel: session.model,
         outDir,
         workRoot,
-        hookFailureBlocks: runHookFailureBlocks(plan, fidelity, workRoot, sessionId, outDir),
+        hookFailureBlocks: runHookFailureBlocks(plan, fidelity, workRoot, sessionId, outDir, baseline),
         userVisibleRoots: userVisibleRootsFromPlan(plan),
         readonlyFolderRoots: readonlyFolderRootsFromPlan(plan),
         egress: sidecar ? sidecar.collect().entries : [],

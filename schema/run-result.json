@@ -83,6 +83,11 @@
         }
       ]
     },
+    "agentEnvPassthrough": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "`agent_env.passthrough` at the tier the run used: the operator-env names the hostloop agent was given beside the ones Desktop copies, or (at protocol) the names the session listed. Names only, never a value. Absent when the session lists none, at container and microvm, on chat and on replay."
+    },
     "hostInputs": {
       "type": "object",
       "description": "What `plugins.from_host` took from the host: each plugin's key, version, `gitCommitSha` and sha256 over its staged copy (every file's bytes and executable bit, every directory, every in-tree symlink); each skill's name and sha256; what `from_host: true` skipped (not installed, or not at user scope); and `setHash`. Names and hashes only, never a file body. Absent when the session has no `from_host`.",

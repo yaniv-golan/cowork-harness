@@ -634,18 +634,42 @@ describe("doctor — tokenCheck is the token row runDoctorChecks reports", () =>
 // A rejected ANTHROPIC_AUTH_TOKEN where it reaches the agent (protocol; hostloop with no OAuth token) is retried by the
 // agent until the run's timeout — measured at protocol against a local 401 server, inferred at hostloop — so the `ok`
 // row says so. Status unchanged.
-describe("doctor — the ANTHROPIC_AUTH_TOKEN-only caveat", () => {
+describe("doctor — an ANTHROPIC_AUTH_TOKEN-only setup", () => {
   const authOnly = probe({ hasToken: () => true, authTokenOnly: () => true });
-  it.each([
-    ["protocol", "the run ends as a timeout, not as an auth error"],
-    ["hostloop", "the run is expected to end as a timeout, not as an auth error (inferred from protocol, not measured here)"],
-  ] as const)("at %s: ok, with the timeout caveat (inferred at hostloop)", (tier, says) => {
-    const tok = tokenCheck(tier, authOnly);
+  it("at protocol, where it reaches the agent: ok, with the timeout caveat", () => {
+    const tok = tokenCheck("protocol", authOnly);
     expect(tok.status).toBe("ok");
-    expect(tok.detail).toBe(`found (env / .env) — ANTHROPIC_AUTH_TOKEN only: if the agent rejects it, ${says}`);
+    expect(tok.detail).toBe(
+      "found (env / .env) — ANTHROPIC_AUTH_TOKEN only: if the agent rejects it, the run ends as a timeout, not as an auth error",
+    );
   });
-  it.each(["container", "microvm"] as const)("at %s (where it never reaches the agent): no caveat", (tier) => {
-    expect(tokenCheck(tier, authOnly).detail).toBe("found (env / .env)");
+  it.each(["container", "microvm", "hostloop", "cowork"] as const)(
+    "at %s, where it never reaches the agent: FAIL, with the reason and the way out",
+    (tier) => {
+      const tok = tokenCheck(tier, authOnly);
+      expect(tok.status).toBe("fail");
+      expect(tok.detail).toBe(
+        `only ANTHROPIC_AUTH_TOKEN is set, and it reaches the agent at fidelity protocol only: at fidelity ${tier} the agent is given CLAUDE_CODE_OAUTH_TOKEN, else ANTHROPIC_API_KEY`,
+      );
+      expect(tok.remedy).toContain("CLAUDE_CODE_OAUTH_TOKEN");
+      expect(tok.remedy).toContain("agent_env.passthrough");
+      expect(tok.remedy).toContain("An ANTHROPIC_AUTH_TOKEN gateway runs at fidelity protocol");
+    },
+  );
+  it("with no credential, only protocol's remedy offers ANTHROPIC_AUTH_TOKEN", () => {
+    const none = probe({
+      hasToken: () => false,
+      authTokenOnly: () => false,
+      hasKeychainToken: () => false,
+      worktreeEnv: () => null,
+      platform: () => "linux",
+    });
+    expect(tokenCheck("protocol", none).remedy).toContain("ANTHROPIC_AUTH_TOKEN");
+    expect(tokenCheck("protocol", none).detail).toBe("no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN");
+    for (const tier of ["container", "microvm", "hostloop"] as const) {
+      expect(tokenCheck(tier, none).remedy, tier).not.toContain("ANTHROPIC_AUTH_TOKEN");
+      expect(tokenCheck(tier, none).detail, tier).toBe("no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY");
+    }
   });
   it("another credential set: no caveat", () => {
     expect(tokenCheck("protocol", probe({ hasToken: () => true, authTokenOnly: () => false })).detail).toBe("found (env / .env)");
@@ -999,30 +1023,26 @@ describe("doctor — container agent remedy for a pruned pin", () => {
 
 describe("authFailureHint — what a run the agent could not authenticate says", () => {
   const ok = { id: "token", title: "Auth token", status: "ok" as const, detail: "found (env / .env)", required: true };
-  it("names ANTHROPIC_AUTH_TOKEN as unused only where the agent's env is an allowlist (container, microvm)", async () => {
+  it("names ANTHROPIC_AUTH_TOKEN as unused at every tier but protocol", async () => {
     const { authFailureHint } = await import("../src/run/doctor.js");
     const env = { ANTHROPIC_AUTH_TOKEN: "sk-test-SECRET-9" };
-    for (const tier of ["container", "microvm"] as const) {
+    for (const tier of ["container", "microvm", "hostloop"] as const) {
       const h = authFailureHint(tier, ok, env);
       expect(h).toContain(
         `ANTHROPIC_AUTH_TOKEN is set, but at fidelity ${tier} only CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY reach the agent`,
       );
       expect(h).not.toContain("sk-test-SECRET-9");
     }
-    // hostloop and protocol spawn the agent from the harness's env: the variable reaches it there.
-    for (const tier of ["hostloop", "protocol"] as const) {
-      const h = authFailureHint(tier, ok, env);
-      expect(h).toContain("CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN");
-      expect(h).toContain("a credential is set, so the agent rejected it");
-    }
+    // protocol spawns the agent from the harness's env: the variable reaches it there.
+    const h = authFailureHint("protocol", ok, env);
+    expect(h).toContain("CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN");
+    expect(h).toContain("a credential is set, so the agent rejected it");
   });
 
-  it("at hostloop with the OAuth token set, says the token alone reaches the agent", async () => {
+  it("at hostloop, names the token-else-key pair, as at container", async () => {
     const { authFailureHint } = await import("../src/run/doctor.js");
     const h = authFailureHint("hostloop", ok, { CLAUDE_CODE_OAUTH_TOKEN: "tok-SECRET-1", ANTHROPIC_API_KEY: "sk-SECRET-2" });
-    expect(h).toContain(
-      "CLAUDE_CODE_OAUTH_TOKEN alone while it is set (ANTHROPIC_API_KEY and ANTHROPIC_AUTH_TOKEN do not reach the agent then)",
-    );
+    expect(h).toContain("At fidelity hostloop the agent takes CLAUDE_CODE_OAUTH_TOKEN, else ANTHROPIC_API_KEY,");
     expect(h).not.toContain("SECRET");
     // protocol still inherits every key.
     expect(authFailureHint("protocol", ok, { CLAUDE_CODE_OAUTH_TOKEN: "t" })).toContain(
@@ -1034,7 +1054,7 @@ describe("authFailureHint — what a run the agent could not authenticate says",
     const { authFailureHint, tokenCheck } = await import("../src/run/doctor.js");
     const probe = { platform: () => "linux", hasToken: () => false, hasKeychainToken: () => false, worktreeEnv: () => null };
     const h = authFailureHint("container", tokenCheck("container", probe as never), {});
-    expect(h).toContain("Now: no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN. Fix: export CLAUDE_CODE_OAUTH_TOKEN=");
+    expect(h).toContain("Now: no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY. Fix: export CLAUDE_CODE_OAUTH_TOKEN=");
     expect(h).toContain("Check with: cowork-harness doctor --tier container");
   });
 });

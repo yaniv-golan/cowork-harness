@@ -1,9 +1,10 @@
-// A protocol scenario with no credential in the environment is refused before anything runs, on every lane that
-// drives the agent: `run` (file, directory, matrix, `legs:`), `skill`, and `record` (whose own guard refuses ANY tier with no
-// credential in the environment, before its other checks; for protocol that is the same predicate), and `chat`.
-// `critique`, which never runs at protocol, gets doctor's check for its own tier. A batch names every
-// protocol scenario in one refusal and none of the others. The check runs LAST among the pre-spend refusals, so a
-// missing model is still reported as that, and `--dry-run` (which spends nothing) is not refused.
+// A scenario with no credential its tier hands the agent is refused before anything runs, on every lane that drives
+// the agent: `run` (file, directory, matrix, `legs:`), `skill`, `record` (whose own guard refuses ANY tier with no
+// credential at all, before its other checks) and `chat`. `critique` gets doctor's check for its own tier. Every tier
+// takes CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY; ANTHROPIC_AUTH_TOKEN reaches the agent at protocol only, so an
+// ANTHROPIC_AUTH_TOKEN-only setup is refused at every other tier. A batch names each tier's scenarios in one refusal.
+// The check runs LAST among the pre-spend refusals, so a missing model is still reported as that, and `--dry-run`
+// (which spends nothing) is not refused.
 //
 // Token-free: every call blanks the three credential variables, sets COWORK_HARNESS_FORBID_SPAWN (a missing check
 // ends at the spawn guard, never at an agent), and runs from a temp cwd under a temp HOME, so neither a ./.env nor
@@ -17,6 +18,8 @@ import { join, resolve } from "node:path";
 const CLI = resolve("dist/cli.js");
 const can = existsSync(CLI);
 const REFUSAL = "fidelity protocol needs a credential in the environment (env / .env)";
+const refusalAt = (tier: string) => `fidelity ${tier} needs a credential in the environment (env / .env)`;
+const AUTH_TOKEN_ONLY = "only ANTHROPIC_AUTH_TOKEN is set, and it reaches the agent at fidelity protocol only";
 const SPAWN_GUARD = /COWORK_HARNESS_FORBID_SPAWN is set/;
 
 function cli(args: string[], cwd: string, env: Record<string, string> = {}) {
@@ -52,15 +55,31 @@ function work(scenarios: Record<string, string>, model = true): string {
   return d;
 }
 
-describe.skipIf(!can)("protocol credential pre-flight", () => {
-  it("run <dir/>: one refusal (exit 2) names every protocol scenario and no other, before any runs", () => {
+describe.skipIf(!can)("credential pre-flight", () => {
+  it("run <dir/>: one refusal (exit 2) per tier names that tier's scenarios, before any runs", () => {
     const d = work({ alpha: "protocol", beta: "protocol", gamma: "container" });
     const r = cli(["run", "sc/"], d);
     expect(r.code, r.all).toBe(2);
     expect(r.all).toContain(`scenarios alpha, beta: ${REFUSAL}`);
-    expect(r.all).not.toMatch(/gamma/);
+    expect(r.all).toContain(`scenario "gamma": ${refusalAt("container")}`);
     expect(r.all).not.toMatch(SPAWN_GUARD);
     expect(existsSync(join(d, ".runs"))).toBe(false);
+  });
+
+  it("ANTHROPIC_AUTH_TOKEN alone passes at protocol and is refused at container and hostloop, with the reason", () => {
+    const d = work({ alpha: "protocol", gamma: "container", delta: "hostloop" });
+    const env = { ANTHROPIC_AUTH_TOKEN: "stub-not-a-real-credential" };
+    expect(cli(["run", "sc/alpha.yaml"], d, env).all).toMatch(SPAWN_GUARD);
+    for (const [name, tier] of [
+      ["gamma", "container"],
+      ["delta", "hostloop"],
+    ]) {
+      const r = cli(["run", `sc/${name}.yaml`], d, env);
+      expect(r.code, r.all).toBe(2);
+      expect(r.all).toContain(`scenario "${name}": ${refusalAt(tier)} — ${AUTH_TOKEN_ONLY}`);
+      expect(r.all).toContain("agent_env.passthrough");
+      expect(r.all).not.toMatch(SPAWN_GUARD);
+    }
   });
 
   it("run <file>: names the one scenario", () => {
@@ -70,9 +89,11 @@ describe.skipIf(!can)("protocol credential pre-flight", () => {
     expect(r.all).toContain(`scenario "alpha": ${REFUSAL}`);
   });
 
-  it("a directory with no protocol scenario is not asked for one", () => {
+  it("a container scenario is asked for a credential too, and either kind passes there", () => {
     const d = work({ gamma: "container" });
-    expect(cli(["run", "sc/"], d).all).not.toContain(REFUSAL);
+    expect(cli(["run", "sc/"], d).all).toContain(refusalAt("container"));
+    for (const key of ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"])
+      expect(cli(["run", "sc/"], d, { [key]: "stub-not-a-real-credential" }).all, key).not.toContain(refusalAt("container"));
   });
 
   it("a missing model is reported first: the credential check runs last", () => {
@@ -152,6 +173,27 @@ describe.skipIf(!can)("protocol credential pre-flight", () => {
     expect(r.all).toContain(`this \`chat\` session: ${REFUSAL}`);
     expect(r.all).not.toMatch(SPAWN_GUARD);
     expect(existsSync(join(d, ".runs"))).toBe(false);
+  });
+
+  it("chat at container (its default): refused (exit 2) before the run dir exists", () => {
+    const d = work({});
+    mkdirSync(join(d, "sk"));
+    writeFileSync(join(d, "sk", "SKILL.md"), "---\nname: sk\ndescription: a stub skill\n---\nbody\n");
+    const r = cli(["chat", "sk", "--model", "claude-sonnet-5"], d, { ANTHROPIC_AUTH_TOKEN: "stub-not-a-real-credential" });
+    expect(r.code, r.all).toBe(2);
+    expect(r.all).toContain(`this \`chat\` session: ${refusalAt("container")} — ${AUTH_TOKEN_ONLY}`);
+    expect(r.all).not.toMatch(SPAWN_GUARD);
+    expect(existsSync(join(d, ".runs"))).toBe(false);
+  });
+
+  it("record at container with ANTHROPIC_AUTH_TOKEN alone: past the any-credential guard, refused by the tier check (exit 1)", () => {
+    const d = work({ gamma: "container" });
+    for (const target of ["sc/", "sc/gamma.yaml"]) {
+      const r = cli(["record", target], d, { ANTHROPIC_AUTH_TOKEN: "stub-not-a-real-credential" });
+      expect(r.code, r.all).toBe(1);
+      expect(r.all).toContain(`record: scenario "gamma": ${refusalAt("container")} — ${AUTH_TOKEN_ONLY}`);
+      expect(r.all).not.toMatch(SPAWN_GUARD);
+    }
   });
 
   it("critique (container, its default): doctor's check for its tier refuses (exit 2) before the task turn", () => {

@@ -4,7 +4,7 @@
  *    the flag too); only a hook's effort value outranks it;
  *  - `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` sends an effort parameter for a model the binary has no effort data for;
  *  - `CLAUDE_CODE_DISABLE_THINKING` turns thinking off whatever the thinking flag says.
- *  Two consumers drop them from an inherited environment: the agent spawn on the env-inheriting tiers
+ *  Two consumers drop them from an inherited environment: the agent spawn on the tiers that read the operator's env
  *  (`SCRUBBED_AGENT_ENV_KEYS`) and every host-`claude` grader call (`llm-transport`). */
 export const EFFORT_THINKING_ENV_KEYS = [
   "CLAUDE_CODE_EFFORT_LEVEL",

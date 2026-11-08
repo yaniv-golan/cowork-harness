@@ -58,7 +58,7 @@ import {
   loadSessionFromFile,
   firstLine,
   unresolvedModelPreflight,
-  protocolCredentialPreflight,
+  credentialPreflight,
   sharedConfigDirPreflight,
   scenarioInputRefusal,
   UnansweredError,
@@ -2113,8 +2113,8 @@ async function cmdRun(rawArgs: string[]) {
     );
     if (singleRun) fail("run", "usage", singleRun, undefined, o.json);
     if (maxBudgetUsd !== undefined && repeatN === undefined) preflightBudget("run", scenario.name, maxBudgetUsd, o.json);
-    // Last, as on the per-file arm: without it every protocol cell would fail at its own spawn as a "cell error".
-    const noCredential = protocolCredentialPreflight([scenario]);
+    // Last, as on the per-file arm: without it every cell with no credential would fail at its own spawn as a "cell error".
+    const noCredential = credentialPreflight([scenario]);
     if (noCredential) fail("run", "usage", noCredential, undefined, o.json);
     const results: RunResult[] = [];
     // Every cell resolves its own overridden scenario/session first (shared by both branches below) —
@@ -2308,8 +2308,8 @@ async function cmdRun(rawArgs: string[]) {
   if (sharedDir) fail("run", "usage", sharedDir, undefined, o.json);
   if (maxBudgetUsd !== undefined && repeatN === undefined)
     for (const scenario of loaded) preflightBudget("run", scenario.name, maxBudgetUsd, o.json);
-  // Last: a protocol scenario with no credential in the environment, named with every other one, before any runs.
-  const noCredential = protocolCredentialPreflight(loaded);
+  // Last: a scenario whose tier has no credential in the environment, named with every other one, before any runs.
+  const noCredential = credentialPreflight(loaded);
   if (noCredential) fail("run", "usage", noCredential, undefined, o.json);
 
   const results: RunResult[] = [];
@@ -2896,7 +2896,7 @@ async function cmdSkill(rawArgs: string[]) {
   // covers exactly the lane that had none — the open-ended one, where you know least what you will spend.
   if (repeatN === undefined && maxBudgetUsd !== undefined) preflightBudget("skill", scenario.name, maxBudgetUsd, o.json);
   // Last: protocol with no credential in the environment, refused before staging (spawnProtocol is the backstop).
-  const noCredential = protocolCredentialPreflight([scenario]);
+  const noCredential = credentialPreflight([scenario]);
   if (noCredential) fail("skill", "usage", noCredential, undefined, o.json);
   const runSkillOnce = (label: string, rethrowUnanswered = false) =>
     runOneScenario({

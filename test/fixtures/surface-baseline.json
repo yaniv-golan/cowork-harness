@@ -4874,6 +4874,12 @@
       ".ablated": {
         "type": "boolean"
       },
+      ".agentEnvPassthrough": {
+        "type": "array"
+      },
+      ".agentEnvPassthrough[]": {
+        "type": "string"
+      },
       ".answerChannel": {
         "type": "string",
         "enum": ["none"]
@@ -8367,6 +8373,13 @@
       },
       ".agent_env.disable_experimental_betas": {
         "type": "boolean"
+      },
+      ".agent_env.passthrough": {
+        "type": "array"
+      },
+      ".agent_env.passthrough[]": {
+        "type": "string",
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
       },
       ".agent_env.subagent_model": {
         "type": "string"
