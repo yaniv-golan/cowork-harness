@@ -31,6 +31,8 @@
      (c) <env>'s `Model:` line renders {{modelName}} = session.model or "Claude"; the agent's
          base prompt states the concrete model id, so with no session model set the two are
          fuzzier than production (which substitutes the picker's model).
+     (d) A lag, not a choice: this copy describes task tracking and sub-agents generically, while
+         Desktop's bundled prompt names specific tools from 4.23118.0 on (docs/fidelity-gaps.md).
      <sharing_files> now INSTRUCTS `computer://{{workspaceFolder}}/…` links faithfully — the
      prior divergence here (the computer:// example adapted away because {{workspaceFolder}}
      rendered a /sessions/… path) no longer exists. Resolution/verification lives outside this
