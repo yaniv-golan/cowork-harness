@@ -41,7 +41,7 @@ describe("Lima gateway IP is overridable and threaded into the firewall rule", (
     expect(vmGatewayIp()).toBe("10.0.2.2");
   });
 
-  it("#95: rejects a COWORK_HARNESS_VM_GATEWAY that isn't a canonical IPv4 literal (no shell injection into root provisioning)", () => {
+  it("rejects a COWORK_HARNESS_VM_GATEWAY that isn't a canonical IPv4 literal (no shell injection into root provisioning)", () => {
     // The value is interpolated into a root-run `iptables -A OUTPUT -d ${gatewayIp}` via `sh -c`; anything
     // but a clean IPv4 literal must be refused loud rather than reaching that shell.
     for (const bad of [
@@ -59,7 +59,7 @@ describe("Lima gateway IP is overridable and threaded into the firewall rule", (
     }
   });
 
-  it("#95: still accepts ordinary IPv4 overrides unchanged", () => {
+  it("still accepts ordinary IPv4 overrides unchanged", () => {
     for (const ok of ["192.168.5.2", "10.0.2.2", "127.0.0.1", "255.255.255.255", "0.0.0.0"]) {
       process.env.COWORK_HARNESS_VM_GATEWAY = ok;
       expect(vmGatewayIp()).toBe(ok);
