@@ -3520,8 +3520,8 @@ export interface RunResult {
   /** `agent_env.passthrough` at the tier the run used: the operator-env names the hostloop agent was given beside the
    *  ones Desktop copies, or (at protocol) the names the session listed, which the agent inherits with the rest of the
    *  operator's env. Names only, never a value. Absent when the session lists none, at container and microvm (which
-   *  refuse a list), on chat and on replay. A listed name this environment did not set is still listed: a names-only
-   *  stderr line says it was not passed. */
+   *  refuse a list), on chat and on replay. A listed name this environment left unset or empty is still listed: a names-only
+   *  stderr line names it (at hostloop and protocol, once per leg on a multi-leg run). */
   agentEnvPassthrough?: string[];
   /** MCP round-trips the harness answered with a JSON-RPC error (no handler, or the handler threw).
    *  Live-only — MCP round-trips are harness-computed, not in the SDK stdout stream, so absent on

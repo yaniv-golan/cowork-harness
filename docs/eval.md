@@ -420,9 +420,9 @@ grades none, and its exit code is unchanged. Re-run the eval to grade them.
   doctor's message and fix. A token in the environment or `.env` is required at every tier: each one gives the
   agent a managed config dir, so a Claude Code login in the macOS Keychain or your config dir is not used. The check
   cannot see a token that is present but expired — a rep that then fails to authenticate is excluded as
-  infrastructure (above). At `protocol`, a rejected `ANTHROPIC_AUTH_TOKEN` is not reported as an auth failure: the
-  agent retries it until the run's timeout, so the rep ends as a timeout. `hostloop` passes the token the same way and
-  is expected to behave alike; that is inferred, not measured.
+  infrastructure (above). `ANTHROPIC_AUTH_TOKEN` reaches the agent at `protocol` only: a setup with only it set is
+  refused before spend at any other tier. At `protocol`, a rejected `ANTHROPIC_AUTH_TOKEN` is not reported as an auth
+  failure: the agent retries it until the run's timeout, so the rep ends as a timeout.
 
 - **A frozen search corpus** (`--search-corpus`): the pool must load and verify; a mixed pool needs
   `--allow-mixed-pool`; each arm × scenario must pass the checks a `run --search-corpus` makes (hostloop, the

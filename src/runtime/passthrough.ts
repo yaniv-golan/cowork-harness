@@ -75,8 +75,9 @@ export function passthroughRefusal(
   return undefined;
 }
 
-/** The names-only stderr line for passthrough names this environment does not set, or undefined. */
+/** The names-only stderr line for passthrough names this environment does not set, or sets empty (the repo's unset
+ *  idiom), or undefined. */
 export function passthroughUnsetNotice(names: readonly string[] | undefined, env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const unset = (names ?? []).filter((n) => env[n] === undefined);
-  return unset.length ? `[agent_env] passthrough: not set in this environment, so not passed: ${unset.join(", ")}` : undefined;
+  const unset = (names ?? []).filter((n) => (env[n] ?? "") === "");
+  return unset.length ? `[agent_env] passthrough: unset or empty in this environment: ${unset.join(", ")}` : undefined;
 }

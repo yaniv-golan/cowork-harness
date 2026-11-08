@@ -378,7 +378,7 @@ Assert the **binary** still matches the contract (run on `sync`, skip without to
   `hostCwd = getOutputsDir(e)`), because it runs directly on the host, not inside `/sessions/<id>`. This
   divergence is the fidelity-correct choice, not a bug — do not "fix" it to match this invariant.
 - `CLAUDE_CODE_USE_COWORK_PLUGINS` never set; host `CLAUDE_*` never blanket-forwarded.
-- extended thinking is delivered via the `--max-thinking-tokens` / `--thinking` flags, never a `MAX_THINKING_TOKENS` env var (stripped from hostloop's inherited env).
+- extended thinking is delivered via the `--max-thinking-tokens` / `--thinking` flags, never a `MAX_THINKING_TOKENS` env var (stripped from hostloop's agent env, and refused in `agent_env.passthrough`).
 - plugins via `--plugin-dir`; marketplaces resolved to plugin dirs.
 - variadic tool flags last.
 - host FS sealed (only declared binds); egress default-deny at L1/L2.

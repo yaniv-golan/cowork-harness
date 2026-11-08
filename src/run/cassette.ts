@@ -4998,7 +4998,7 @@ function failNoRecordCredential(asJson: boolean) {
   return fail(
     "record",
     "runtime",
-    "record: no model credentials — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN " +
+    "record: no model credentials — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, or at fidelity protocol ANTHROPIC_AUTH_TOKEN " +
       "(in-Docker the macOS Keychain is not accessible; run `cowork-harness doctor` for full diagnostics)",
     undefined,
     asJson,
@@ -5796,7 +5796,7 @@ export async function cmdRecord(args: string[]) {
     if (staleSharedDir) return fail("record", "usage", `record: ${staleSharedDir}`, undefined, asJson);
     // A scenario whose tier has no credential in the environment would spend the batch's earlier items first.
     const staleNoCredential = credentialPreflight(staleLoaded);
-    if (staleNoCredential) return fail("record", "usage", `record: ${staleNoCredential}`, undefined, asJson, 1);
+    if (staleNoCredential) return fail("record", "usage", `record: ${staleNoCredential}`, undefined, asJson);
     if (maxBudgetUsd !== undefined) {
       preflightBatchBudget("record", staleNames, maxBudgetUsd, asJson);
       if (concurrency > 1) warn(CONCURRENCY_BUDGET_CAVEAT(concurrency));
@@ -6070,7 +6070,7 @@ export async function cmdRecord(args: string[]) {
         }
       }),
     );
-    if (noCredential) return fail("record", "usage", `record: ${noCredential}`, undefined, asJson, 1);
+    if (noCredential) return fail("record", "usage", `record: ${noCredential}`, undefined, asJson);
 
     const total = disc.scenarios.length;
     // Budget pre-flight for the whole batch, BEFORE the first spawn — same rationale as the redaction
@@ -6187,7 +6187,7 @@ export async function cmdRecord(args: string[]) {
   if (maxBudgetUsd !== undefined) preflightBudget("record", scenario!.name, maxBudgetUsd, asJson);
   // Last, as `run` orders it: no credential this scenario's tier hands the agent.
   const noCredential = credentialPreflight([scenario!]);
-  if (noCredential) return fail("record", "usage", `record: ${noCredential}`, undefined, asJson, 1);
+  if (noCredential) return fail("record", "usage", `record: ${noCredential}`, undefined, asJson);
   // `--decider-dir` opens an in-band file rendezvous for the driving agent; close it after the run
   // (mirrors `run`'s one-channel lifecycle).
   const channel = deciderDir !== undefined ? fileChannel(deciderDir) : undefined;

@@ -499,8 +499,8 @@ export function graderCredentialCheck(tier: Tier, env: NodeJS.ProcessEnv = proce
 }
 
 /** The agent-credential check for one tier — the `token` row of `runDoctorChecks`, and the ONLY credential
- *  detector: `eval`, `hillclimb`, `critique` and every run pre-flight (`credentialPreflight`: run, skill, record, chat
- *  and a multi-leg run, each at its scenario's tier) refuse on exactly this decision, so they can never disagree about a
+ *  detector: `eval`, `hillclimb`, `critique` and every run pre-flight (`credentialPreflight`: run, skill, probe-dispatch,
+ *  record, chat and a multi-leg run, each at its scenario's tier; every spawn re-checks it, `assertSpawnCredential`) refuse on exactly this decision, so they can never disagree about a
  *  tier. Refuse on `status === "fail"`. Every tier needs a credential in the environment (env / .env): each one gives
  *  the agent a managed config dir, so a Keychain or `/login` session is never used. `ANTHROPIC_AUTH_TOKEN` reaches the
  *  agent at `protocol` only: every other tier gives it the OAuth token or else the API key (`runtimeAuthEnv`), so an

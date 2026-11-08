@@ -6,10 +6,10 @@ import { buildHostLoopNativeEnv, hostLoopAgentEnv, HOST_TMPDIR_KEY } from "../sr
 import { buildProtocolEnv, protocolOperatorEnv } from "../src/runtime/protocol.js";
 import { passthroughRefusal, passthroughRefusalSet, passthroughUnsetNotice } from "../src/runtime/passthrough.js";
 import { SESSIONS_OAUTH_TOKEN_KEY } from "../src/runtime/host-env.js";
-import { hostInheritedKeys } from "../src/sync/spawn-env-registry.js";
+import { hostInheritedKeys, registryEntries } from "../src/sync/spawn-env-registry.js";
 import { agentEnvForTier } from "../src/run/execute.js";
 import { buildSessionFingerprint } from "../src/run/cassette.js";
-import { buildLaunchPlan, loadSession, SessionConfig, type LaunchPlan } from "../src/session.js";
+import { buildLaunchPlan, loadSession, SCRUBBED_AGENT_ENV_KEYS, SessionConfig, type LaunchPlan } from "../src/session.js";
 import { loadBaseline } from "../src/baseline.js";
 import type { PlatformBaseline } from "../src/types.js";
 
@@ -62,6 +62,40 @@ describe("the hostloop operator layer is Desktop's copied set", () => {
 
 describe("agent_env.passthrough: what it may name", () => {
   const refusalSet = [...passthroughRefusalSet(BASE)].sort();
+
+  // The converse of the test below: a name the builder does NOT deliver as passed must be refused, or the operator's
+  // value would be dropped or overwritten without a word. Every gated condition, both credential paths.
+  it("every name the builder overwrites or drops is in the refusal set (or is CUSTOM_HEADERS with the token)", () => {
+    const set = passthroughRefusalSet(BASE);
+    const universe = new Set([
+      ...set,
+      ...registryEntries().map((e) => e.name),
+      ...SCRUBBED_AGENT_ENV_KEYS,
+      ...(BASE.bgEnvStrip?.knownVars ?? []),
+      ...SIX,
+      HOST_TMPDIR_KEY,
+      "ANTHROPIC_CUSTOM_HEADERS",
+      "ANTHROPIC_BASE_URL",
+      "HTTPS_PROXY",
+      "PT_CONVERSE_RANDOM",
+    ]);
+    const leaks: string[] = [];
+    for (const token of [true, false])
+      for (const b of [BASE, { ...BASE, appVersion: "999999.0.0" }])
+        for (const folderHostPaths of [[], ["/f"]])
+          for (const k of universe) {
+            const env = buildHostLoopNativeEnv(b, {
+              configDir: "/tmp/cfg",
+              extra: { CLAUDE_PLUGIN_ROOT: "", TZ: "UTC", ...(token ? { CLAUDE_CODE_OAUTH_TOKEN: "t" } : { ANTHROPIC_API_KEY: "k" }) },
+              folderHostPaths,
+              operatorEnv: { [k]: "SENTINEL" },
+              passthrough: [k],
+            });
+            if (env[k] !== "SENTINEL" && !set.has(k) && !(k === "ANTHROPIC_CUSTOM_HEADERS" && token))
+              leaks.push(`${k} (token ${token}, app ${b.appVersion}, folders ${folderHostPaths.length})`);
+          }
+    expect(leaks).toEqual([]);
+  });
 
   it("the refusal set is derived from the builder, and covers what a hand list missed", () => {
     for (const k of [
@@ -144,7 +178,7 @@ describe("agent_env.passthrough: what it may name", () => {
 
   it("names a requested variable this environment does not set, names only", () => {
     expect(passthroughUnsetNotice(["SET_ONE", "UNSET_ONE", "EMPTY_ONE"], { SET_ONE: "v", EMPTY_ONE: "" })).toBe(
-      "[agent_env] passthrough: not set in this environment, so not passed: UNSET_ONE",
+      "[agent_env] passthrough: unset or empty in this environment: UNSET_ONE, EMPTY_ONE",
     );
     expect(passthroughUnsetNotice(["SET_ONE"], { SET_ONE: "v" })).toBeUndefined();
     expect(passthroughUnsetNotice(undefined)).toBeUndefined();

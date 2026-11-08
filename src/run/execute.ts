@@ -1012,10 +1012,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       probeHostCli: () => hostCliSupportsPermissionPrompts(strippedEnv(baseline)),
     });
   if (channelRefusal) throw new UsageError(channelRefusal);
-  if (effectiveFidelity === "hostloop") {
-    const unset = passthroughUnsetNotice(session.agent_env.passthrough);
-    if (unset) process.stderr.write(unset + "\n");
-  }
+  // Past the refusal, a passthrough is delivered (hostloop, protocol): name what this environment leaves unset. A
+  // multi-leg run reaches this once per leg.
+  const unsetPassthrough = passthroughUnsetNotice(session.agent_env.passthrough);
+  if (unsetPassthrough) process.stderr.write(unsetPassthrough + "\n");
 
   // Every declared source (plugins, skills, uploads, folders, marketplaces) is resolved and checked HERE,
   // before the run directory exists: a path that does not exist is a UsageError, and a run refused for it
@@ -3385,7 +3385,8 @@ export function credentialPreflight(
 ): string | undefined {
   const byTier = new Map<Scenario["fidelity"], string[]>();
   for (const s of scenarios) {
-    if (!s.fidelity) continue;
+    // Every caller passes a parsed scenario, whose fidelity is always set. One without would skip its check unseen.
+    if (!s.fidelity) throw new Error(`credentialPreflight: scenario "${s.name}" has no fidelity`);
     const tier = s.fidelity as Scenario["fidelity"];
     byTier.set(tier, [...(byTier.get(tier) ?? []), s.name]);
   }

@@ -3,7 +3,7 @@
 // refusal set, and the names recorded in result.json by a real protocol run with a stub agent (no model call).
 // Synthetic data only.
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -100,11 +100,21 @@ describe.runIf(POSIX)("result.json records the passthrough names (protocol, stub
   });
   afterEach(() => f.cleanup());
 
-  it("names only, as listed", async () => {
-    sessionWith(["PT_WIRING_PROBE"]);
+  it("names only, as listed; a name left unset or empty is named on stderr", async () => {
+    sessionWith(["PT_WIRING_PROBE", "PT_WIRING_UNSET", "PT_WIRING_EMPTY"]);
+    setEnv("PT_WIRING_UNSET", undefined);
+    setEnv("PT_WIRING_EMPTY", "");
     const sc = write("t.yaml", "name: t\nbaseline: latest\nsession: ./s.yaml\nfidelity: protocol\nprompt: hi\n");
-    const r = await executeScenario(parseScenarioFile(sc), {});
-    expect(r.agentEnvPassthrough).toEqual(["PT_WIRING_PROBE"]);
+    const err: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((c: string | Uint8Array) => (err.push(String(c)), true));
+    let r;
+    try {
+      r = await executeScenario(parseScenarioFile(sc), {});
+    } finally {
+      spy.mockRestore();
+    }
+    expect(err.join("")).toContain("[agent_env] passthrough: unset or empty in this environment: PT_WIRING_UNSET, PT_WIRING_EMPTY\n");
+    expect(r.agentEnvPassthrough).toEqual(["PT_WIRING_PROBE", "PT_WIRING_UNSET", "PT_WIRING_EMPTY"]);
     expect(readFileSync(f.envDump, "utf8")).toMatch(/^PT_WIRING_PROBE=/m);
   });
 });

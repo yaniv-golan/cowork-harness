@@ -318,9 +318,10 @@ export const SessionConfig = z.strictObject({
     .default({}),
 });
 
-/** Env keys that leak asymmetrically: hostloop/protocol inherit them from the operator's shell
- *  (`...process.env` / `{...plan.baseEnv}`); container/microvm never do (a constructed allowlist). Scrubbed
- *  from the OPERATOR layer alone (before any baseline/knob overlay) on the two inheriting tiers.
+/** Env keys that leak asymmetrically: protocol inherits them from the operator's shell (`{...plan.baseEnv}`) and
+ *  hostloop would copy one named in `agent_env.passthrough` (refused for these); container/microvm never read the
+ *  operator's env (a constructed allowlist). Scrubbed from the OPERATOR layer alone (before any baseline/knob overlay)
+ *  on the two tiers that read it.
  *
  *  MATCHING IS EXACT-KEY, NOT PREFIX — which is why the two `_FORCE` entries below are listed
  *  separately rather than being covered by `CLAUDE_CODE_SUBAGENT_MODEL`. Added 2026-09-06 after the

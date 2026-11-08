@@ -154,9 +154,8 @@ export function spawnProtocol(
   // Auth: the agent always gets the run's managed config dir, so its credential must travel in the environment (a
   // Keychain or `/login` session lives in the operator's config dir, which it never reads). The batch pre-flight
   // (`credentialPreflight`) refuses before any run dir exists; this is the backstop for every path that
-  // reaches the spawn without it (chat). One predicate: doctor's `tokenCheck`.
-  const cred = tokenCheck("protocol");
-  if (cred.status === "fail") throw new UsageError(credentialRefusal(scenario.name, cred));
+  // reaches the spawn without it. One predicate: doctor's `tokenCheck`.
+  assertSpawnCredential(scenario.name, "protocol");
   assertProtocolConfigSealed(plan.configDir);
   // Scrub the inheritance-asymmetric operator keys, then overlay the agent_env knob — see buildProtocolEnv.
   const env: NodeJS.ProcessEnv = buildProtocolEnv(plan, baseline, join(work, "outputs"));
@@ -172,7 +171,7 @@ export function spawnProtocol(
   return { child, runTag, workDir: work, subagentConfigRoot: plan.configDir };
 }
 
-/** The refusal for a protocol run with no credential in the environment: doctor's own detail and remedy, so the text
+/** The refusal for a run with no credential the agent can use at `tier`: doctor's own detail and remedy, so the text
  *  and the predicate cannot drift. `who` names the scenario(s). */
 export function credentialRefusal(who: string, check: DoctorCheck, tier = "protocol"): string {
   return (
@@ -180,6 +179,13 @@ export function credentialRefusal(who: string, check: DoctorCheck, tier = "proto
     `The agent runs with a managed config dir, so a Keychain or /login session is not used.` +
     (check.remedy ? ` Fix: ${check.remedy}` : "")
   );
+}
+
+/** Every tier's spawn calls this first: the commands refuse before staging (`credentialPreflight`), and this is the
+ *  backstop for any launcher that reaches a spawn without that check. One predicate: doctor's `tokenCheck`. */
+export function assertSpawnCredential(scenarioName: string, tier: string): void {
+  const cred = tokenCheck(tier as Parameters<typeof tokenCheck>[0]);
+  if (cred.status === "fail") throw new UsageError(credentialRefusal(scenarioName, cred, tier));
 }
 
 /** The protocol (L0) agent's argv, without the binary token. Session-decided flags come from `sessionFlagArgs`, the

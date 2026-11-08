@@ -587,8 +587,8 @@ Output:
 Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of silence.
             COWORK_HARNESS_NO_HEARTBEAT=1 disables it; COWORK_HARNESS_HEARTBEAT_MS tunes the interval.
 
-Auth:  Run 'doctor' to check auth. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN) from process.env >
-       --dotenv <path> > ./.env > <install>/.env.
+Auth:  Run 'doctor' to check auth. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY; ANTHROPIC_AUTH_TOKEN at protocol only)
+       from process.env > --dotenv <path> > ./.env > <install>/.env.
 
 Exit codes:  0 pass · 1 assertion/agent failure · 2 usage / unanswered-under-fail / runtime · 3 boundary/integrity.`;
 
@@ -700,8 +700,8 @@ Output:
 Long runs:  an idle "still running" heartbeat prints on stderr after ~30s of silence
             (COWORK_HARNESS_NO_HEARTBEAT=1 / COWORK_HARNESS_HEARTBEAT_MS to disable/tune).
 
-Auth:  Run 'doctor' to diagnose auth failures. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN) from
-       process.env > --dotenv <path> > ./.env > <install>/.env.
+Auth:  Run 'doctor' to diagnose auth failures. CLAUDE_CODE_OAUTH_TOKEN (or ANTHROPIC_API_KEY; ANTHROPIC_AUTH_TOKEN at
+       protocol only) from process.env > --dotenv <path> > ./.env > <install>/.env.
 
 Exit codes:  0 all pass · 1 any assertion/agent failure · 2 usage / unanswered-under-fail / runtime · 3 boundary/integrity.`;
 
@@ -3094,6 +3094,9 @@ async function cmdProbeDispatch(rawArgs: string[]) {
     // Note in --help/docs: PROMPT-SCOPED, not enforced — this just flags a prompt that fanned out.
     assert: [{ subagent_dispatched: ".*" }, { dispatch_count_max: 1 }, ...(allowStall ? [{ allow_stall: true as const }] : [])],
   });
+  // As `skill` does: a setup the agent cannot authenticate with at this tier is refused before staging.
+  const noCredential = credentialPreflight([scenario]);
+  if (noCredential) fail("probe-dispatch", "usage", noCredential, undefined, isJson);
 
   // --decider-dir/--decider-cmd (captured generically by takeCommonFlags) are honored here for free via
   // the same resolveExternal seam `skill` uses — an external channel forces the `fail` terminal

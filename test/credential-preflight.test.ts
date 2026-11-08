@@ -9,7 +9,11 @@
 // Token-free: every call blanks the three credential variables, sets COWORK_HARNESS_FORBID_SPAWN (a missing check
 // ends at the spawn guard, never at an agent), and runs from a temp cwd under a temp HOME, so neither a ./.env nor
 // the operator's own files can supply a credential the test did not choose.
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import { credentialPreflight } from "../src/run/execute.js";
+import { spawnHostLoop } from "../src/runtime/hostloop.js";
+import { spawnContainer } from "../src/runtime/container.js";
+import { spawnMicroVm } from "../src/runtime/microvm.js";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -186,11 +190,11 @@ describe.skipIf(!can)("credential pre-flight", () => {
     expect(existsSync(join(d, ".runs"))).toBe(false);
   });
 
-  it("record at container with ANTHROPIC_AUTH_TOKEN alone: past the any-credential guard, refused by the tier check (exit 1)", () => {
+  it("record at container with ANTHROPIC_AUTH_TOKEN alone: past the any-credential guard, refused by the tier check (exit 2, as every credential refusal)", () => {
     const d = work({ gamma: "container" });
     for (const target of ["sc/", "sc/gamma.yaml"]) {
       const r = cli(["record", target], d, { ANTHROPIC_AUTH_TOKEN: "stub-not-a-real-credential" });
-      expect(r.code, r.all).toBe(1);
+      expect(r.code, r.all).toBe(2);
       expect(r.all).toContain(`record: scenario "gamma": ${refusalAt("container")} — ${AUTH_TOKEN_ONLY}`);
       expect(r.all).not.toMatch(SPAWN_GUARD);
     }
@@ -218,5 +222,36 @@ describe.skipIf(!can)("credential pre-flight", () => {
     const dry = cli(["record", "sc/", "--dry-run"], d);
     expect(dry.all).not.toContain("no model credentials");
     expect(dry.all).not.toContain(REFUSAL);
+  });
+
+  it("probe-dispatch (hostloop by default): ANTHROPIC_AUTH_TOKEN alone is refused (exit 2) before staging", () => {
+    const d = work({});
+    mkdirSync(join(d, "sk"));
+    writeFileSync(join(d, "sk", "SKILL.md"), "---\nname: sk\ndescription: a stub skill\n---\nbody\n");
+    const r = cli(["probe-dispatch", "sk", "hi", "--model", "claude-sonnet-5"], d, { ANTHROPIC_AUTH_TOKEN: "stub-not-a-real-credential" });
+    expect(r.code, r.all).toBe(2);
+    expect(r.all).toContain(`${refusalAt("hostloop")} — ${AUTH_TOKEN_ONLY}`);
+    expect(r.all).not.toMatch(SPAWN_GUARD);
+    expect(existsSync(join(d, ".runs"))).toBe(false);
+  });
+});
+
+describe("credentialPreflight: a scenario with no fidelity", () => {
+  it("throws instead of skipping its check", () => {
+    expect(() => credentialPreflight([{ name: "x" }], () => ({ status: "ok" }) as never)).toThrow(/scenario "x" has no fidelity/);
+  });
+});
+
+describe("every tier's spawn re-checks the credential (the backstop for a launcher with no pre-flight)", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  it.each([
+    ["hostloop", () => spawnHostLoop({ name: "bk" } as never, {} as never, {} as never, "/nonexistent", "sid")],
+    ["container", () => spawnContainer({ name: "bk" } as never, {} as never, {} as never, "/nonexistent", "sid", {})],
+    ["microvm", () => spawnMicroVm({ name: "bk" } as never, {} as never, {} as never, "/nonexistent", "sid")],
+  ])("%s: ANTHROPIC_AUTH_TOKEN alone throws the tier's refusal before anything starts", (tier, spawn) => {
+    vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "");
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "stub-not-a-real-credential");
+    expect(spawn).toThrow(`bk: ${refusalAt(tier)} — ${AUTH_TOKEN_ONLY}`);
   });
 });

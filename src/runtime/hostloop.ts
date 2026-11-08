@@ -1,4 +1,5 @@
 import { warn } from "../io.js";
+import { assertSpawnCredential } from "./protocol.js";
 import { spawn } from "node:child_process";
 import { registerCleanup, removeContainer } from "../egress/sidecar.js";
 import { appendFileSync, readFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
@@ -364,6 +365,7 @@ export function spawnHostLoop(
   sessionId: string,
   opts: HostLoopSpawnOpts = {},
 ) {
+  assertSpawnCredential(scenario.name, "hostloop"); // before the sidecar starts
   return reapSidecarOnThrow((track) => spawnHostLoopTracked(scenario, baseline, plan, outDir, sessionId, opts, track));
 }
 
