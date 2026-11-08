@@ -31,7 +31,7 @@ export const VM_GUEST_SESSIONS_ROOT = "/sessions";
  * The VM is reused across scenarios (boot is slow); per-run state lives under mounts.
  */
 export function limaPath(): string {
-  return process.env.COWORK_LIMACTL ?? "/opt/homebrew/bin/limactl";
+  return process.env.COWORK_HARNESS_LIMACTL ?? "/opt/homebrew/bin/limactl";
 }
 
 /**
@@ -70,11 +70,11 @@ function stagedHostOf(baseline: PlatformBaseline, opts: { strict?: boolean } = {
  * NEW instance name → `vmStatus()` is `Absent` → a fresh `create` with the current config, while the
  * old VM is simply orphaned. This makes stale-config reuse impossible BY CONSTRUCTION (no drift
  * stamp, no silent reuse of a VM built from older code) and auto-migrates every config change (e.g.
- * the `/sessions` mount, an agent-version bump). `COWORK_LIMA_INSTANCE` overrides for a pinned name.
+ * the `/sessions` mount, an agent-version bump). `COWORK_HARNESS_LIMA_INSTANCE` overrides for a pinned name.
  * Orphaned old VMs accumulate until `cowork-harness vm prune` (or `limactl delete`).
  */
 export function instanceName(baseline: PlatformBaseline): string {
-  if (process.env.COWORK_LIMA_INSTANCE) return process.env.COWORK_LIMA_INSTANCE;
+  if (process.env.COWORK_HARNESS_LIMA_INSTANCE) return process.env.COWORK_HARNESS_LIMA_INSTANCE;
   const hash = createHash("sha256")
     .update(limaConfig(stagedHostOf(baseline)))
     .digest("hex")
@@ -86,13 +86,13 @@ export function instanceName(baseline: PlatformBaseline): string {
  * The Lima `vmType: vz` user-network gateway — where the host allowlist proxy listens
  * from inside the VM. `192.168.5.2` is the documented default for Apple VZ user
  * networking, but it is NOT robustly derivable from a stable `limactl` field, so we do
- * NOT live-derive it (brittle). `COWORK_VM_GATEWAY` is the override, mirroring the
- * existing `COWORK_VM_PROXY_PORT` env pattern. The SAME value MUST feed both the iptables
+ * NOT live-derive it (brittle). `COWORK_HARNESS_VM_GATEWAY` is the override, mirroring the
+ * existing `COWORK_HARNESS_VM_PROXY_PORT` env pattern. The SAME value MUST feed both the iptables
  * allow rule (applyGuestFirewall) and the proxy URL (microvm.ts), so callers thread the
  * result of this one helper into both.
  */
 export function vmGatewayIp(): string {
-  const raw = process.env.COWORK_VM_GATEWAY ?? "192.168.5.2";
+  const raw = process.env.COWORK_HARNESS_VM_GATEWAY ?? "192.168.5.2";
   // #95: this value is interpolated into a root-run iptables command inside the guest
   // (guestFirewallScript → `iptables -A OUTPUT -d ${gatewayIp}` executed via `sh -c`). Validate it as a
   // canonical IPv4 literal and reject everything else, so a malformed or hostile override can never inject
@@ -102,7 +102,8 @@ export function vmGatewayIp(): string {
   // metacharacter (`;`, `$`, backtick, whitespace, …).
   const octets = raw.split(".");
   const canonicalIPv4 = octets.length === 4 && octets.every((o) => /^\d{1,3}$/.test(o) && Number(o) <= 255 && String(Number(o)) === o);
-  if (!canonicalIPv4) throw new Error(`COWORK_VM_GATEWAY must be a canonical IPv4 literal (e.g. 192.168.5.2); got ${JSON.stringify(raw)}`);
+  if (!canonicalIPv4)
+    throw new Error(`COWORK_HARNESS_VM_GATEWAY must be a canonical IPv4 literal (e.g. 192.168.5.2); got ${JSON.stringify(raw)}`);
   return raw;
 }
 
@@ -194,9 +195,9 @@ function reasonFor(state: Exclude<VmProvisioning, "ready">, afterRestart: boolea
 }
 
 /** Wait for a reused Running guest to finish provisioning: poll every 5 s up to
- *  COWORK_VM_PROVISION_TIMEOUT_S (default 900). Returns the first non-pending state, or throws on timeout. */
+ *  COWORK_HARNESS_VM_PROVISION_TIMEOUT_S (default 900). Returns the first non-pending state, or throws on timeout. */
 function awaitProvisioning(instance: string): Exclude<VmProvisioning, "pending"> {
-  const timeoutS = envPositiveNumber("COWORK_VM_PROVISION_TIMEOUT_S", 900);
+  const timeoutS = envPositiveNumber("COWORK_HARNESS_VM_PROVISION_TIMEOUT_S", 900);
   const deadline = provisionClock.now() + timeoutS * 1000;
   let noticed = false;
   for (;;) {
@@ -204,7 +205,10 @@ function awaitProvisioning(instance: string): Exclude<VmProvisioning, "pending">
     if (state !== "pending") return state;
     const remaining = deadline - provisionClock.now();
     if (remaining <= 0)
-      throw provisioningError(instance, `still provisioning after ${timeoutS}s — raise COWORK_VM_PROVISION_TIMEOUT_S if it is just slow`);
+      throw provisioningError(
+        instance,
+        `still provisioning after ${timeoutS}s — raise COWORK_HARNESS_VM_PROVISION_TIMEOUT_S if it is just slow`,
+      );
     if (!noticed) {
       warn(`::notice:: [microvm] ${instance} is Running but still provisioning — waiting up to ${timeoutS}s\n`);
       noticed = true;
@@ -266,7 +270,7 @@ export function vmInit(baseline: PlatformBaseline): { instance: string; status: 
   // Still provisioning is not a broken VM: a Running VM is waited for, so the next run picks it up.
   if (state === "pending")
     throw new Error(
-      `microvm ${instance} has not finished provisioning (limactl start returned first) — re-run; the next run waits for provisioning to finish (COWORK_VM_PROVISION_TIMEOUT_S)`,
+      `microvm ${instance} has not finished provisioning (limactl start returned first) — re-run; the next run waits for provisioning to finish (COWORK_HARNESS_VM_PROVISION_TIMEOUT_S)`,
     );
   if (state !== "ready") throw provisioningError(instance, reasonFor(state, false));
   return { instance, status: vmStatus(instance) };

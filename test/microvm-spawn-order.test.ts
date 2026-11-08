@@ -40,7 +40,7 @@ beforeEach(() => {
   vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "stub-not-a-real-token"); // past the spawn's credential backstop
   calls.length = 0;
   vmInit.mockReset();
-  delete process.env.COWORK_LOCKDOWN;
+  delete process.env.COWORK_HARNESS_LOCKDOWN;
 });
 
 describe("spawnMicroVm ordering", () => {

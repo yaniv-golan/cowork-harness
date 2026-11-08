@@ -1476,7 +1476,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   if (
     declaredCaps.length &&
     (effectiveFidelity === "container" || effectiveFidelity === "hostloop" || effectiveFidelity === "microvm") &&
-    process.env.COWORK_SKIP_CAPABILITY_PROBE !== "1"
+    process.env.COWORK_HARNESS_SKIP_CAPABILITY_PROBE !== "1"
   ) {
     // microvm: `probeMicrovmOmitted` returns null (not an omitted-set) whenever the guest isn't
     // already `Running` (cold run — nothing to `limactl shell` into yet). `capabilityPreflightDecision`
@@ -1546,7 +1546,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
           // interface (see spawnMicroVm's vmGatewayIp), so a loopback-only bind would be unreachable.
           // Everywhere else the default loopback bind applies — see ProxyOptions.host.
           host: "0.0.0.0",
-          port: process.env.COWORK_VM_PROXY_PORT ? parseEnvPort("COWORK_VM_PROXY_PORT", 0) : 0,
+          port: process.env.COWORK_HARNESS_VM_PROXY_PORT ? parseEnvPort("COWORK_HARNESS_VM_PROXY_PORT", 0) : 0,
           logPath: join(outDir, "egress.log"),
           onDecision: (host, decision) => egress.push({ host, decision }),
         });
@@ -2347,7 +2347,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     // otherwise-green run is a likely FALSE NEGATIVE → computeVerdict fails it (unless allow_missing_capability).
     // Probing is structural (the runtime is the source of truth), so an old `:1` / custom image can't silently
     // fail-open. container/hostloop → Docker image probe; microvm → `limactl shell` guest probe. Skipped on
-    // protocol/replay (no live runtime to probe) and via COWORK_SKIP_CAPABILITY_PROBE.
+    // protocol/replay (no live runtime to probe) and via COWORK_HARNESS_SKIP_CAPABILITY_PROBE.
     let missingCapabilityUse: string[] | undefined;
     let capabilityProbe: RunResult["capabilityProbe"] = "skipped"; // default — probe didn't run this tier/lane
     let omittedFamilies: string[] | null = null; // the probe's omitted-set (null = not run / unverified)
@@ -2357,7 +2357,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
     let requiresCapabilityUnmet: RunResult["requiresCapabilityUnmet"];
     if (
       (effectiveFidelity === "container" || effectiveFidelity === "hostloop" || effectiveFidelity === "microvm") &&
-      process.env.COWORK_SKIP_CAPABILITY_PROBE !== "1"
+      process.env.COWORK_HARNESS_SKIP_CAPABILITY_PROBE !== "1"
     ) {
       const omitted =
         effectiveFidelity === "microvm"

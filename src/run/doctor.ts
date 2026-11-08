@@ -688,7 +688,7 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
       title: "Lima (limactl)",
       status: limaOk ? "ok" : "fail",
       detail: limaOk ? `${limaPath()} found` : `limactl not found (${limaPath()})`,
-      remedy: limaOk ? undefined : "install Lima (`brew install lima`) or set COWORK_LIMACTL=<path>",
+      remedy: limaOk ? undefined : "install Lima (`brew install lima`) or set COWORK_HARNESS_LIMACTL=<path>",
       required: true,
     });
     const vmStatusStr = limaOk ? probe.vmInstanceStatus() : "Absent";
@@ -711,7 +711,7 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
         return {
           status: "warn",
           detail: "instance running — still provisioning",
-          remedy: "wait for it (a run waits up to COWORK_VM_PROVISION_TIMEOUT_S), then re-run doctor",
+          remedy: "wait for it (a run waits up to COWORK_HARNESS_VM_PROVISION_TIMEOUT_S), then re-run doctor",
         };
       if (provisioning === "sealed")
         return {
@@ -748,7 +748,7 @@ export function runDoctorChecks(tier: Tier, probe: DoctorProbe = realProbe): Doc
         ? undefined
         : avail
           ? `start ${runtime} (the daemon isn't responding to \`${runtime} info\`)`
-          : `install ${runtime} (or set COWORK_CONTAINER_RUNTIME)`,
+          : `install ${runtime} (or set COWORK_HARNESS_CONTAINER_RUNTIME)`,
       required: true,
     });
 

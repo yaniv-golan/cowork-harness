@@ -103,4 +103,21 @@ describe.skipIf(!can)("protocol: sealed for every credential kind, refused witho
       }
     },
   );
+
+  it.each(["COWORK_LOCKDOWN", "COWORK_SKIP_CAPABILITY_PROBE"])(
+    "%s set: refused at startup (exit 2), naming its COWORK_HARNESS_ replacement; empty counts as unset",
+    async (name) => {
+      const f = fixture();
+      try {
+        const refused = spawnCli(f, ["run", f.scenario], { [name]: "1" });
+        expect((await exited(refused, 60_000)).code).toBe(2);
+        expect(refused.stderrText()).toContain(`${name} was renamed in 5.0.0 to ${name.replace("COWORK_", "COWORK_HARNESS_")}. `);
+        expect(existsSync(f.envDump)).toBe(false);
+        const empty = spawnCli(f, ["run", f.scenario], { [name]: "" });
+        expect((await exited(empty, 60_000)).code, empty.stderrText()).toBe(0);
+      } finally {
+        f.cleanup();
+      }
+    },
+  );
 });

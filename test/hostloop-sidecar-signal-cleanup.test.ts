@@ -13,7 +13,7 @@ import * as sidecarMod from "../src/egress/sidecar.js";
 // the process group reaches it, it forwards the signal to a keep-alive PID 1 that ignores it, and it stays.
 //
 // Each case runs a small script against the REAL source (via tsx) in a child node process, the way
-// termination-handler.test.ts does, with COWORK_CONTAINER_RUNTIME pointed at a fake runtime that records its
+// termination-handler.test.ts does, with COWORK_HARNESS_CONTAINER_RUNTIME pointed at a fake runtime that records its
 // argv (the way egress-proxy-image-env.test.ts does). The fake models the attachment: `network rm` of the
 // internal network fails while the sidecar container has not been removed. With FAKE_RM_FAILS_ONCE=1 the
 // first `rm -f` of the sidecar container fails. An attached `run` (the sidecar client) sleeps, so only an
@@ -75,7 +75,7 @@ async function runWithSidecars(body: string, env: Record<string, string> = {}): 
       import { startEgressSidecar, removeContainerThenRelease } from ${SIDECAR};
       import { startHostLoopSidecar, reapSidecarOnThrow } from ${HOSTLOOP};
       import { existsSync, appendFileSync } from "node:fs";
-      const runner = process.env.COWORK_CONTAINER_RUNTIME;
+      const runner = process.env.COWORK_HARNESS_CONTAINER_RUNTIME;
       const PIDFILE = ${JSON.stringify(pidFile)};
       const note = (s) => appendFileSync(${JSON.stringify(outFile)}, s + "\\n");
       const eg = startEgressSidecar([], ${JSON.stringify(join(dir, "out"))}, "t1");
@@ -96,7 +96,7 @@ async function runWithSidecars(body: string, env: Record<string, string> = {}): 
     const procEnv: Record<string, string> = {};
     for (const [k, v] of Object.entries(process.env)) if (v !== undefined) procEnv[k] = v;
     Object.assign(procEnv, env, {
-      COWORK_CONTAINER_RUNTIME: runtime,
+      COWORK_HARNESS_CONTAINER_RUNTIME: runtime,
       FAKE_RUNTIME_LOG: log,
       FAKE_RUNTIME_CLIENT_PID: pidFile,
       FAKE_STATE: join(dir, "state"),

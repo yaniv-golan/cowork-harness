@@ -71,13 +71,13 @@ describe("resolveContainerRuntime", () => {
     expect(resolveContainerRuntime({})).toBe("docker");
   });
 
-  it("honours COWORK_CONTAINER_RUNTIME", () => {
-    expect(resolveContainerRuntime({ COWORK_CONTAINER_RUNTIME: "podman" })).toBe("podman");
+  it("honours COWORK_HARNESS_CONTAINER_RUNTIME", () => {
+    expect(resolveContainerRuntime({ COWORK_HARNESS_CONTAINER_RUNTIME: "podman" })).toBe("podman");
   });
 
   it("treats an empty or whitespace override as unset", () => {
-    expect(resolveContainerRuntime({ COWORK_CONTAINER_RUNTIME: "" })).toBe("docker");
-    expect(resolveContainerRuntime({ COWORK_CONTAINER_RUNTIME: "  " })).toBe("docker");
+    expect(resolveContainerRuntime({ COWORK_HARNESS_CONTAINER_RUNTIME: "" })).toBe("docker");
+    expect(resolveContainerRuntime({ COWORK_HARNESS_CONTAINER_RUNTIME: "  " })).toBe("docker");
   });
 });
 
@@ -94,7 +94,7 @@ function srcFiles(dir: string): string[] {
 describe("single-source guard", () => {
   const RESOLVER = join("src", "runtime", "agent-image.ts");
 
-  it("reads COWORK_AGENT_IMAGE, COWORK_CONTAINER_RUNTIME and COWORK_PROXY_IMAGE only in the resolver", () => {
+  it("reads COWORK_AGENT_IMAGE, COWORK_HARNESS_CONTAINER_RUNTIME and COWORK_PROXY_IMAGE only in the resolver", () => {
     // Structural, because there is no behavioural test that would catch a re-introduced literal: a copy
     // with the old `??` semantics passes every existing test while silently reviving the empty-string bug.
     const offenders = srcFiles("src")

@@ -27,7 +27,7 @@ const { COWORK_HARNESS_OUTPUT_FORMAT: _inherited, ...inheritedEnv } = process.en
 const baseEnv: NodeJS.ProcessEnv = {
   ...inheritedEnv,
   COWORK_HARNESS_RUNS_DIR: runs,
-  COWORK_LIMACTL: fakeLimactl({ status: "Running", provisioning: "ready" }),
+  COWORK_HARNESS_LIMACTL: fakeLimactl({ status: "Running", provisioning: "ready" }),
   CLAUDE_CODE_OAUTH_TOKEN: "",
   ANTHROPIC_API_KEY: "",
   ANTHROPIC_AUTH_TOKEN: "",

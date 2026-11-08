@@ -553,7 +553,7 @@ function spawnHostLoopTracked(
   // produce two `-v` flags at the same destination, a Docker "duplicate mount point" hard failure).
   const sidecarArgs = dockerRunArgv({
     network,
-    lockdown: (process.env.COWORK_LOCKDOWN ?? "on") !== "off",
+    lockdown: (process.env.COWORK_HARNESS_LOCKDOWN ?? "on") !== "off",
     sessionRoot,
     sessionHost,
     agentHost: agentVmHost,

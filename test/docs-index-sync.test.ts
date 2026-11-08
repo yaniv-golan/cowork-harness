@@ -47,7 +47,7 @@ describe("COWORK_* env vars ↔ docs", () => {
     expect([...names]).toContain("COWORK_HARNESS_STATUS_CORRUPT_TIMEOUT_MS");
     // canary for the aliased-env-object class — reachable only via the `env.X` pattern
     expect([...names]).toContain("COWORK_HARNESS_NO_HYPERLINKS");
-    expect([...names]).toContain("COWORK_VM_PROXY_PORT");
+    expect([...names]).toContain("COWORK_HARNESS_VM_PROXY_PORT");
   });
 
   it("every COWORK_* env var read in src/ is documented in README.md or docs/*.md", () => {

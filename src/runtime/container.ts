@@ -192,7 +192,7 @@ export function spawnContainer(
   });
   const dockerArgs = dockerRunArgv({
     network,
-    lockdown: (process.env.COWORK_LOCKDOWN ?? "on") !== "off",
+    lockdown: (process.env.COWORK_HARNESS_LOCKDOWN ?? "on") !== "off",
     name: containerName,
     sessionRoot,
     agentCwd,

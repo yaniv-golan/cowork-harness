@@ -64,15 +64,15 @@ function instantClock() {
 
 beforeEach(() => {
   spawnSync.mockReset();
-  process.env.COWORK_LIMA_INSTANCE = INSTANCE;
-  delete process.env.COWORK_VM_PROVISION_TIMEOUT_S;
+  process.env.COWORK_HARNESS_LIMA_INSTANCE = INSTANCE;
+  delete process.env.COWORK_HARNESS_VM_PROVISION_TIMEOUT_S;
   instantClock();
   vi.spyOn(process.stderr, "write").mockReturnValue(true);
 });
 afterAll(() => rmSync(FAKE_HOME, { recursive: true, force: true }));
 afterEach(() => {
-  delete process.env.COWORK_LIMA_INSTANCE;
-  delete process.env.COWORK_VM_PROVISION_TIMEOUT_S;
+  delete process.env.COWORK_HARNESS_LIMA_INSTANCE;
+  delete process.env.COWORK_HARNESS_VM_PROVISION_TIMEOUT_S;
   vi.restoreAllMocks();
 });
 
@@ -90,8 +90,8 @@ describe("vmInit — a reused (Running) VM must be provisioned before it is retu
     expect(readinessCalls(calls)).toHaveLength(4);
   });
 
-  it("gives up with a named error when provisioning never finishes within COWORK_VM_PROVISION_TIMEOUT_S", () => {
-    process.env.COWORK_VM_PROVISION_TIMEOUT_S = "12";
+  it("gives up with a named error when provisioning never finishes within COWORK_HARNESS_VM_PROVISION_TIMEOUT_S", () => {
+    process.env.COWORK_HARNESS_VM_PROVISION_TIMEOUT_S = "12";
     const calls = script({ status: () => "Running", readiness: () => state("pending") });
     expect(() => lima.vmInit(BASELINE)).toThrow(/never finished provisioning.*cowork-harness vm delete/s);
     // 12s at a 5s poll interval: probes at t=0, 5, 10 and a final one at the deadline — bounded, not a spin.
@@ -100,7 +100,7 @@ describe("vmInit — a reused (Running) VM must be provisioned before it is retu
   });
 
   it("an unreachable guest (limactl shell failing) counts as still provisioning, not as ready", () => {
-    process.env.COWORK_VM_PROVISION_TIMEOUT_S = "1";
+    process.env.COWORK_HARNESS_VM_PROVISION_TIMEOUT_S = "1";
     script({ status: () => "Running", readiness: () => ({ status: 255, stdout: "", stderr: "ssh: connect refused" }) });
     expect(() => lima.vmInit(BASELINE)).toThrow(/never finished provisioning/);
   });
@@ -162,7 +162,7 @@ describe("vmInit — the restart and fresh-start error paths name the remedy", (
   });
 });
 
-// A deleted or pruned VM's name can come back (COWORK_LIMA_INSTANCE, or the same config hash), and the
+// A deleted or pruned VM's name can come back (COWORK_HARNESS_LIMA_INSTANCE, or the same config hash), and the
 // capability probe's per-instance cache would then describe a VM that no longer exists.
 describe("vmDelete / vmPrune forget the instance's cached capability probe", () => {
   let runs: string;
@@ -230,7 +230,7 @@ describe("vmInit — a fresh start is probed once, not polled", () => {
       } catch (e) {
         msg = (e as Error).message;
       }
-      expect(msg).toMatch(/re-run; the next run waits for provisioning to finish \(COWORK_VM_PROVISION_TIMEOUT_S\)/);
+      expect(msg).toMatch(/re-run; the next run waits for provisioning to finish \(COWORK_HARNESS_VM_PROVISION_TIMEOUT_S\)/);
       expect(msg).not.toMatch(/Delete it/);
     });
 

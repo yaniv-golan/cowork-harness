@@ -50,7 +50,7 @@ export function resolveProxyImage(env: NodeJS.ProcessEnv = process.env): string 
 }
 
 export function resolveContainerRuntime(env: NodeJS.ProcessEnv = process.env): string {
-  return override(env.COWORK_CONTAINER_RUNTIME, CONTAINER_RUNTIME_DEFAULT);
+  return override(env.COWORK_HARNESS_CONTAINER_RUNTIME, CONTAINER_RUNTIME_DEFAULT);
 }
 
 interface AgentImageManifest {

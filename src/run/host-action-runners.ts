@@ -117,7 +117,7 @@ export async function runActionInTier(p: {
       const env = hostActionEnv(tier, baseline, plan, { sessionId, proxyHost: sidecar.proxyUrl, outputsHost: paths.outputsHost });
       const args = dockerRunArgv({
         network: sidecar.network,
-        lockdown: (process.env.COWORK_LOCKDOWN ?? "on") !== "off",
+        lockdown: (process.env.COWORK_HARNESS_LOCKDOWN ?? "on") !== "off",
         name,
         sessionRoot: m.sessionRoot,
         agentCwd: `${m.mntRoot}/outputs`,
@@ -149,7 +149,7 @@ export async function runActionInTier(p: {
   try {
     await proxy.ready;
     const gatewayIp = vmGatewayIp();
-    if ((process.env.COWORK_LOCKDOWN ?? "on") !== "off") applyGuestFirewall(instance, proxy.actualPort!, gatewayIp);
+    if ((process.env.COWORK_HARNESS_LOCKDOWN ?? "on") !== "off") applyGuestFirewall(instance, proxy.actualPort!, gatewayIp);
     const env = hostActionEnv(tier, baseline, plan, {
       sessionId,
       proxyHost: `http://${gatewayIp}:${proxy.actualPort}`,
