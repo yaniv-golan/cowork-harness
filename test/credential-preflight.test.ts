@@ -11,6 +11,7 @@
 // the operator's own files can supply a credential the test did not choose.
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { credentialPreflight } from "../src/run/execute.js";
+import { CASSETTE_VERSION } from "../src/run/cassette.js";
 import { spawnHostLoop } from "../src/runtime/hostloop.js";
 import { spawnContainer } from "../src/runtime/container.js";
 import { spawnMicroVm } from "../src/runtime/microvm.js";
@@ -222,6 +223,34 @@ describe.skipIf(!can)("credential pre-flight", () => {
     const dry = cli(["record", "sc/", "--dry-run"], d);
     expect(dry.all).not.toContain("no model credentials");
     expect(dry.all).not.toContain(REFUSAL);
+  });
+
+  it("record --rerecord-stale: ANTHROPIC_AUTH_TOKEN alone is refused (exit 2) before the first re-record", () => {
+    const d = work({});
+    const cassette = {
+      cassetteVersion: CASSETTE_VERSION,
+      scenario: {
+        name: "st",
+        baseline: "latest",
+        session: "(inline)",
+        fidelity: "container",
+        prompt: "hi",
+        answers: [],
+        expect_denied: [],
+        assert: [],
+      },
+      events: [],
+      fingerprint: { baseline: "0.0.0-ancient", hashFormat: "jcs1" },
+    };
+    writeFileSync(join(d, "sc", "st.cassette.json"), JSON.stringify(cassette));
+    writeFileSync(
+      join(d, "sc", "st.yaml"),
+      "name: st\nfidelity: container\nsession: ../session.yaml\nprompt: hi\nassert:\n  - result: success\n",
+    );
+    const r = cli(["record", "--rerecord-stale", "sc"], d, { ANTHROPIC_AUTH_TOKEN: "stub-not-a-real-credential" });
+    expect(r.code, r.all).toBe(2);
+    expect(r.all).toContain(`record: scenario "st": ${refusalAt("container")} — ${AUTH_TOKEN_ONLY}`);
+    expect(r.all).not.toMatch(SPAWN_GUARD);
   });
 
   it("probe-dispatch (hostloop by default): ANTHROPIC_AUTH_TOKEN alone is refused (exit 2) before staging", () => {

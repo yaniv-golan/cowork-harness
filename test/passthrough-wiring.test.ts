@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { executeScenario, launchSourcesPreflight, loadMultiLegScenario, loadScenarioPure, parseScenarioFile } from "../src/run/execute.js";
 import { loadBaseline } from "../src/baseline.js";
 import { passthroughRefusalSet } from "../src/runtime/passthrough.js";
+import { BACKGROUND_TASKS_ENV_KEY } from "../src/runtime/argv.js";
 import { POSIX, makeStubFixture, type StubFixture } from "./helpers/stub-agent.js";
 
 let dir: string;
@@ -47,6 +48,8 @@ describe("the derived refusal set covers the Desktop-version-gated key", () => {
   it("a baseline below the gate still refuses the key the gate sets", () => {
     const old = loadBaseline("desktop-1.11847.5");
     expect(passthroughRefusalSet(old).has("CLAUDE_CODE_DESKTOP_APP_VERSION")).toBe(true);
+    // That baseline pins no background-tasks value, so the builder emits none: the set still refuses the key it owns.
+    expect(passthroughRefusalSet(old).has(BACKGROUND_TASKS_ENV_KEY)).toBe(true);
   });
 });
 
