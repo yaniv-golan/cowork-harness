@@ -20,11 +20,13 @@ export interface GraderFailure {
 export function graderCredentialFailure(result: RunResult | undefined, thrown: unknown): GraderFailure | undefined {
   if (thrown instanceof ApiExitError && failsEveryLaterCall(thrown.status, thrown.retryable))
     return { source: "decider", ...(thrown.status !== undefined ? { status: thrown.status } : {}) };
-  for (const a of result?.assertions ?? []) {
-    const e = a.judgeError;
+  // Never throws: a result too malformed to read (its row builder fails on it) simply shows no grader failure.
+  const assertions = Array.isArray(result?.assertions) ? result.assertions : [];
+  for (const a of assertions) {
+    const e = a?.judgeError;
     if (e && failsEveryLaterCall(e.status, e.retryable))
       return { source: "judge", ...(e.status !== undefined ? { status: e.status } : {}) };
-    for (const o of a.pairwise ?? [])
+    for (const o of Array.isArray(a?.pairwise) ? a.pairwise : [])
       if (o.status === "invalid" && failsEveryLaterCall(o.callStatus, o.callRetryable))
         return { source: "judge", ...(o.callStatus !== undefined ? { status: o.callStatus } : {}) };
   }

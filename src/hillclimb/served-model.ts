@@ -7,7 +7,7 @@
 // still reads as "honored". It stays an additional trigger in the row classifier.
 
 import { isLiveModelId } from "../types.js";
-import { modelIdMatches } from "../run/model-provenance.js";
+import { modelIdMatches, normalizeModelId } from "../run/model-provenance.js";
 import { currentTurnEventLines } from "../run/turn-events.js";
 
 /** Distinct live models on the current turn's main-loop assistant events (no `parent_tool_use_id`), in
@@ -88,4 +88,48 @@ export function sentEffort(transcript: readonly string[]): SentEffort {
     else if (!out.values.includes(e)) out.values.push(e);
   }
   return out;
+}
+
+/** One requested model whose scored rows were served more than one model id. */
+export interface ServedModelSplit {
+  requested: string;
+  served: string[];
+  /** The cases whose rows carry the split, sorted. */
+  cases: string[];
+}
+
+/** Over a variant's `results.jsonl`: each requested model (`meta.model_requested`) whose scored rows record more than
+ *  one served `model` among those that match it. A pin matches its dated snapshots, so an undated pin can be served
+ *  two of them (a snapshot rolled between passes, or during one): the variant's scores then come from two models.
+ *  Rows that record no request, or whose served model is not the pin's (a substitution, already an error row), are
+ *  not counted. Lines that do not parse are skipped (schema-check reports them). */
+export function servedModelSplits(results: string | null | undefined): ServedModelSplit[] {
+  const by = new Map<string, { served: Set<string>; cases: Set<string> }>();
+  for (const line of (results ?? "").split("\n")) {
+    if (!line.trim()) continue;
+    let r: { prompt_id?: unknown; model?: unknown; meta?: { model_requested?: unknown } };
+    try {
+      r = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const req = r.meta?.model_requested;
+    if (typeof req !== "string" || typeof r.model !== "string" || !modelIdMatches(req, r.model)) continue;
+    const k = normalizeModelId(req);
+    const e = by.get(k) ?? { served: new Set<string>(), cases: new Set<string>() };
+    e.served.add(normalizeModelId(r.model));
+    e.cases.add(String(r.prompt_id));
+    by.set(k, e);
+  }
+  return [...by.entries()]
+    .filter(([, e]) => e.served.size > 1)
+    .map(([requested, e]) => ({ requested, served: [...e.served].sort(), cases: [...e.cases].sort() }));
+}
+
+/** The one sentence each surface (the pre-spend refusal, the post-pass failure, `hillclimb check`) prints for a split. */
+export function servedModelSplitText(variant: string, s: ServedModelSplit): string {
+  return (
+    `variant ${variant}'s scored rows for model ${s.requested} were served ${s.served.join(" and ")} ` +
+    `(cases ${s.cases.join(", ")}): its scores come from more than one model. Start a fresh flow dir, or pin the dated id`
+  );
 }

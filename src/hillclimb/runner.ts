@@ -31,7 +31,8 @@ import { headroom, pairwiseHints } from "./check.js";
 import { loadFlowSnapshot } from "./schema-check.js";
 import { hillclimbRunLabel } from "../run/run-labels.js";
 import { normalizeModelId } from "../run/model-provenance.js";
-import { servedModelMismatch } from "./served-model.js";
+import { servedModelMismatch, servedModelSplits, servedModelSplitText } from "./served-model.js";
+import { graderCredentialFailure, type GraderFailure } from "../run/grader-stop.js";
 import { billingOf, costLine, costSummary, otherModelShareWarning, type Billing } from "./cost.js";
 
 import { ExitRequested, rethrowIfExit } from "../run/exit.js";
@@ -134,6 +135,10 @@ export interface RunOutcome {
   error?: { category: "usage" | "runtime"; message: string };
   /** A dry run's remaining (case, rep) slots per case id — what the pass would run. */
   remaining?: Record<string, number>;
+  /** The pass stopped scheduling because a grader (a judge, or the LLM decider) failed the way every later grade
+   *  would: a rejected credential, an unknown model or a spent quota. `atJob` is the task's index in this pass's
+   *  schedule; `case` and `rep` name its slot. Exit 1. */
+  stopped?: { reason: "grader_credential"; source: "judge" | "decider"; status?: number; atJob: number; case: string; rep: number };
 }
 
 // runner-scaffold.mjs l.46-53: strip escape sequences and control characters from anything printed — case ids and error text
@@ -444,11 +449,27 @@ async function run(
     // pool cannot be killed, so a stop flag keeps every later task from starting, and the pool is awaited —
     // in-flight jobs finish — before the lock is released. Nothing else escapes a task.
     let stopError: unknown;
+    let stopped: RunOutcome["stopped"];
     try {
-      await pMapBounded(tasks, args.concurrency, async ({ c, rep }) => {
+      await pMapBounded(tasks, args.concurrency, async ({ c, rep }, i) => {
         if (stopError !== undefined) return;
         try {
-          await oneTask(c, rep);
+          const f = await oneTask(c, rep);
+          // A grader every later grade would fail on: no later task starts (the row this one wrote is kept).
+          if (f !== undefined && stopError === undefined) {
+            stopped = {
+              reason: "grader_credential",
+              source: f.source,
+              ...(f.status !== undefined ? { status: f.status } : {}),
+              atJob: i,
+              case: c.id,
+              rep,
+            };
+            stopError = new Error(
+              `case ${c.id} rep${rep}: the ${f.source === "decider" ? "LLM decider" : "judge"} call failed${f.status !== undefined ? ` (API ${f.status})` : ""} ` +
+                `the way every later grade would; fix the grader credential or model, then run the pass again`,
+            );
+          }
         } catch (e) {
           // exit-safe: captured, and rethrown below once the in-flight jobs have finished
           stopError ??= e;
@@ -467,9 +488,18 @@ async function run(
       progress();
       const m = `stopped mid-run (rows already written are kept; re-run to resume): ${message(stopError)}`;
       say(m);
-      return { exitCode: 1, scheduled: tasks.length, ok, failed: fail, scored, error: { category: "runtime", message: m } };
+      return {
+        exitCode: 1,
+        scheduled: tasks.length,
+        ok,
+        failed: fail,
+        scored,
+        error: { category: "runtime", message: m },
+        ...(stopped !== undefined ? { stopped } : {}),
+      };
     }
-    async function oneTask(c: HillclimbCase, rep: number): Promise<void> {
+    /** Runs one attempt and writes its row; returns a grader failure every later grade would repeat, if it saw one. */
+    async function oneTask(c: HillclimbCase, rep: number): Promise<GraderFailure | undefined> {
       const tStart = now();
       let report: JobReport;
       try {
@@ -479,6 +509,7 @@ async function run(
         if (e instanceof InterruptedError || e instanceof ExitRequested) throw e;
         report = { thrown: e, events: [], children: [], attemptS: (now() - tStart) / 1000, runnerTimeout: false };
       }
+      const graderFailure = graderCredentialFailure(report.result, report.thrown);
       const ctx: AttemptContext = {
         caseId: c.id,
         ...(c.originalId !== undefined ? { originalId: c.originalId } : {}),
@@ -564,7 +595,7 @@ async function run(
           judgeAuthHinted = true;
           say(`  [${v}] ${graderCredentialHint()}`);
         }
-        return;
+        return graderFailure;
       }
       // The session's uploads: attached to the row now, copied after it (unless --no-copy-inputs).
       const uploads = deps.inputs?.(c) ?? [];
@@ -623,8 +654,16 @@ async function run(
         fail++;
         say(`  [${v}] ${c.stem} rep${rep} scored, but a post-row write failed: ${message(e)}`);
       }
+      return graderFailure;
     }
     progress();
+    // The variant's scored rows, this pass's included, must come from one model per pin: the pre-spend refusal sees only
+    // earlier passes, so a snapshot that rolled DURING this pass is caught here.
+    if (w)
+      for (const sp of servedModelSplits(w.readVariantFile("results.jsonl"))) {
+        stepFailures++;
+        say(`[${v}] ${servedModelSplitText(v, sp)}`);
+      }
     // After the pool the rows are on disk: a failure here is reported but never loses the pass's counts.
     if (deps.afterPass && w)
       try {
@@ -871,6 +910,7 @@ function requestedMix(
           `warning: variant ${variant}'s rows for ${named(ids)} ran ${what} ${value}, and this pass runs ${what} ${[...thisPass].join(", ")} for ${named(byId.keys())}: the variant's cases ran different settings — compare across them only knowingly`,
         );
   }
+  for (const sp of servedModelSplits(snap.variants[variant]?.results)) refusals.add(servedModelSplitText(variant, sp));
   return { refusals: [...refusals], warnings };
 }
 

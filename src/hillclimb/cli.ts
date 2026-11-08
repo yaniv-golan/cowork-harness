@@ -27,6 +27,8 @@ import {
   pairwiseRefFindings,
   staleAssertSigWarnings,
   stateMetricFindings,
+  servedModelSplitWarnings,
+  promotedOrphanNotes,
 } from "./check.js";
 import { prepareCases } from "./command.js";
 import { hashedPaths } from "./gate.js";
@@ -247,6 +249,8 @@ export function checkReport(
       ...sig.notes,
       ...pairwiseHints(snap, flowShown, sig.target),
       ...otherModelShareNotes(snap),
+      ...servedModelSplitWarnings(snap),
+      ...promotedOrphanNotes(snap),
       ...corpus.filter((f) => f.severity === "warning").map((f) => `${f.rule}: ${f.message}`),
     ],
     exitCode: report.errors ? 1 : 0,
@@ -413,6 +417,7 @@ export async function cmdHillclimb<F extends JobFlags>(args: string[], deps: Hil
       scored: outcome.scored ?? 0,
       failed: outcome.failed,
       exitCode: outcome.exitCode,
+      ...(outcome.stopped ? { stopped: outcome.stopped } : {}),
       // eval's dry-run shape: the estimate under plan.cost; a top-level cost would read as spend.
       ...(a.dryRun ? { dryRun: true, ...(outcome.cost ? { plan: { cost: outcome.cost } } : {}) } : {}),
     };
