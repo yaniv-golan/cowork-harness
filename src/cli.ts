@@ -230,6 +230,7 @@ import {
 import { planText, type EvalPlan } from "./eval/plan.js";
 import { makeEvalJobRunner, type ScenarioRunner } from "./eval/job-runner.js";
 import { writeEvalReport, REPORT_MD } from "./eval/report.js";
+import { headroomRows, headroomText, resolveHeadroomArm, type HeadroomRow } from "./eval/headroom.js";
 import { StoppedFileError } from "./eval/stopped.js";
 import {
   MatrixFile,
@@ -2412,10 +2413,16 @@ async function cmdEval(rawArgs: string[]) {
     if (e instanceof StoppedFileError) return fail("eval", "runtime", e.message, undefined, json, 1, undefined, payload);
     throw e;
   };
-  const emit = (evalDir: string, report: ReturnType<typeof writeEvalReport>, text: string) => {
+  const emit = (
+    evalDir: string,
+    report: ReturnType<typeof writeEvalReport>,
+    text: string,
+    headroom?: { arm: { label: string; role: "A" | "B" }; rows: HeadroomRow[] },
+  ) => {
     const code = report.summary.exitCode;
-    if (json) out(jsonPayloadEnvelope("eval", code === 0, evalEnvelopePayload(evalDir, report)));
-    else log(text + `\nreport: ${tildeify(join(evalDir, REPORT_MD))}`);
+    if (json) out(jsonPayloadEnvelope("eval", code === 0, { ...evalEnvelopePayload(evalDir, report), ...(headroom ? { headroom } : {}) }));
+    else
+      log(text + `\nreport: ${tildeify(join(evalDir, REPORT_MD))}` + (headroom ? `\n\n${headroomText(headroom.rows, headroom.arm)}` : ""));
     exitWith(code);
   };
   if (rawArgs[0] === "report") {
@@ -2428,13 +2435,19 @@ async function cmdEval(rawArgs: string[]) {
     }
     for (const g of r.globals) applyCommandGlobal("eval", g.flag, g.value, json);
     let report: ReturnType<typeof writeEvalReport>;
+    let headroom: Parameters<typeof emit>[3];
     try {
       report = writeEvalReport(r.evalDir);
+      if (r.headroom) {
+        const role = resolveHeadroomArm(report, r.headroom.arm);
+        const arm = report.arms.find((a) => a.role === role)!;
+        headroom = { arm: { label: arm.label, role }, rows: headroomRows(report, role) };
+      }
     } catch (e) {
       rethrowIfExit(e);
       return failFor(e);
     }
-    return emit(r.evalDir, report, readFileSync(join(r.evalDir, REPORT_MD), "utf8"));
+    return emit(r.evalDir, report, readFileSync(join(r.evalDir, REPORT_MD), "utf8"), headroom);
   }
   let parsed: ReturnType<typeof parseEvalArgs>;
   try {

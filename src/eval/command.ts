@@ -1261,9 +1261,17 @@ export async function runEval(args: EvalArgs, deps: EvalDeps): Promise<EvalOutco
   }
 }
 
-/** `eval report <eval-dir>`: rebuild report.json / report.md from the dir alone ($0). */
-export function parseEvalReportArgs(argv: readonly string[]): { evalDir: string; output: "text" | "json"; globals: EvalArgs["globals"] } {
+/** `eval report <eval-dir>`: rebuild report.json / report.md from the dir alone ($0). `--headroom [--arm <label|A|B>]`
+ *  adds the rows the arm (default B) still has room to move on. */
+export function parseEvalReportArgs(argv: readonly string[]): {
+  evalDir: string;
+  output: "text" | "json";
+  globals: EvalArgs["globals"];
+  headroom?: { arm: string };
+} {
   const pos: string[] = [];
+  let headroom = false;
+  let arm: string | undefined;
   let output: "text" | "json" = envOutputFormat();
   const globals: EvalArgs["globals"] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -1277,13 +1285,22 @@ export function parseEvalReportArgs(argv: readonly string[]): { evalDir: string;
         if (v !== "text" && v !== "json") throw new UsageError(`--output-format must be "text" or "json" (got "${v}")`);
         output = v;
       } else globals.push({ flag: name, value: v });
+    } else if (name === "--headroom") {
+      if (eq > 0) throw new UsageError("--headroom takes no value");
+      headroom = true;
+    } else if (name === "--arm") {
+      const v = eq > 0 ? a.slice(eq + 1) : argv[++i];
+      if (v === undefined || v.trim() === "" || (eq < 0 && v.startsWith("-"))) throw new UsageError(`${name} requires a value`);
+      if (arm !== undefined) throw new UsageError("--arm given more than once");
+      arm = v;
     } else if (a.startsWith("-")) throw new UsageError(`unknown flag: ${a}`);
     else pos.push(a);
   }
-  if (pos.length !== 1) throw new UsageError("usage: eval report <eval-dir>");
+  if (arm !== undefined && !headroom) throw new UsageError("--arm only applies with --headroom");
+  if (pos.length !== 1) throw new UsageError("usage: eval report <eval-dir> [--headroom [--arm <label|A|B>]]");
   const evalDir = resolve(pos[0]);
   if (!existsSync(join(evalDir, MANIFEST_FILE))) throw new UsageError(`${tildeify(evalDir)} is not an eval dir (no ${MANIFEST_FILE})`);
-  return { evalDir, output, globals };
+  return { evalDir, output, globals, ...(headroom ? { headroom: { arm: arm ?? "B" } } : {}) };
 }
 
 /** The JSON envelope payload shared by `eval` and `eval report`. `ok` ⇔ exit 0. */

@@ -1536,6 +1536,30 @@ describe.skipIf(!existsSync(CLI))("eval: the CLI wrapper", () => {
     expect(readFileSync(join(out.evalDir, "report.md")).equals(md)).toBe(true);
   });
 
+  it("`--headroom` adds the listing and never changes the exit code; --arm A picks the baseline arm", async () => {
+    const { scen, a, b } = setup();
+    const out = await runEval(
+      args(scen, a, b, ["--fail-on", "possible"]),
+      deps(fakeRunner((s, r) => (s.job.arm === "after" ? failAssertion(r, 2) : r))),
+    );
+    const plain = spawnSync("node", [CLI, "eval", "report", out.evalDir, "--output-format", "json"], { encoding: "utf8", cwd: root });
+    const r = spawnSync("node", [CLI, "eval", "report", out.evalDir, "--headroom", "--output-format", "json"], {
+      encoding: "utf8",
+      cwd: root,
+    });
+    expect(r.status, r.stderr).toBe(plain.status);
+    const env = JSON.parse(r.stdout);
+    expect(env.headroom.arm).toEqual({ label: "after", role: "B" });
+    expect(Array.isArray(env.headroom.rows)).toBe(true);
+    const { headroom: _h, ...rest } = env;
+    expect(rest).toEqual(JSON.parse(plain.stdout));
+    const t = spawnSync("node", [CLI, "eval", "report", out.evalDir, "--headroom", "--arm", "A"], { encoding: "utf8", cwd: root });
+    expect(t.status).toBe(plain.status);
+    expect(t.stderr + t.stdout).toMatch(/headroom \(arm A, before\): \d+ row\(s\)/);
+    const bad = spawnSync("node", [CLI, "eval", "report", out.evalDir, "--arm", "A"], { encoding: "utf8", cwd: root });
+    expect(bad.status).toBe(2);
+  });
+
   it("a snapshot staging failure is exit 3 with a boundary envelope", () => {
     const { scen, a, b } = setup();
     const locked = join(b, "skills", "csv-metrics", "locked.md");
