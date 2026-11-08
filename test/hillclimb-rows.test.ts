@@ -144,6 +144,28 @@ describe("scored rows", () => {
     expect(row.in_tokens).toBe(2 + 17216 + 33648);
   });
 
+  it("an undated pin served its dated snapshot: a scored row, its usage found under the requested-id key", () => {
+    // The key shape of a real kept run pinned `claude-haiku-4-5` (numbers synthetic): the main loop reported the dated
+    // snapshot, modelUsage was keyed by the requested id. Before the shared matcher the row was serving_substitution.
+    const r = {
+      ...fixture("success-semantic"),
+      models: ["claude-haiku-4-5-20251001"],
+      modelPinHonored: true,
+      modelUsage: {
+        "claude-haiku-4-5": { inputTokens: 3, outputTokens: 5, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUSD: 0.07 },
+      },
+      cost: { usd: 0.07 },
+    } as unknown as RunResult;
+    const out = attemptRow({ result: r }, ctx(r, { pin: "claude-haiku-4-5" }));
+    expect(out.dest).toBe("results");
+    expect((out.row as Record<string, any>).usage).toEqual({
+      input_tokens: 3,
+      output_tokens: 5,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+    });
+  });
+
   it("never RunResult.usage (the last call only): the row's usage differs from it on the same result", () => {
     const slash = fixture("slash-success-synthetic");
     // ADDED: a last-call usage that disagrees with the session's modelUsage, as on real runs

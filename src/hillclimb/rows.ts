@@ -44,7 +44,7 @@ import { metricEntries, metricSigs } from "./metric-keys.js";
 import { pairwiseRowValues } from "./pairwise.js";
 import { pairwiseComposeKey } from "../run/pairwise-prepass.js";
 import { mainLoopModels, sentEffort, servedModelMismatch } from "./served-model.js";
-import { normalizeModelId } from "../run/model-provenance.js";
+import { modelIdMatches, normalizeModelId } from "../run/model-provenance.js";
 import { resultEventFields } from "./result-event.js";
 import { UNTRUSTED_JUDGE_PREFIX } from "./schema-check.js";
 import { computeVerdict } from "../run/verdict.js";
@@ -143,10 +143,10 @@ const singleKeyRefusal = (g: { assertion: object }): boolean =>
 /** Every modelUsage entry that IS the main model, summed: the agent keys usage by the PICKED id, so a `[1m]`
  *  context-window pick of the same model is `claude-x[1m]` there while its responses say `claude-x`. */
 function mainModelUsage(mu: Record<string, unknown> | undefined, model: string): TokenUsage | undefined {
-  const want = normalizeModelId(model);
   const sum: Partial<TokenUsage> = {};
   for (const [k, e] of Object.entries(mu ?? {})) {
-    if (normalizeModelId(k) !== want) continue;
+    // Keyed by the REQUESTED id (an undated pin), while `model` is the served one (its dated snapshot).
+    if (!modelIdMatches(k, model)) continue;
     const u = snake(e as Record<string, unknown>) ?? {};
     for (const [f, v] of Object.entries(u) as Array<[keyof TokenUsage, number]>) sum[f] = (sum[f] ?? 0) + v;
   }

@@ -9,6 +9,7 @@ import { isUsageLimit } from "../usage-limit.js";
 import type { Complete, CompleteResult } from "./decider.js";
 import type { CompleteStructured } from "./pairwise-judge.js";
 import { EFFORT_THINKING_ENV_KEYS } from "../effort-env.js";
+import { modelIdMatches } from "../run/model-provenance.js";
 
 /** Every `claude -p` the harness runs (the LLM judge, the LLM decider, the critique evaluator) runs ISOLATED from most
  *  of the operator's own setup. The model reads untrusted agent output, so it must be able to call no tool
@@ -553,12 +554,12 @@ function tail(s: string, n = 500): string {
   return t.length > n ? "…" + t.slice(-n) : t;
 }
 
-/** True when `key` is the concrete model id that a `--model` request `requested` resolves to: the exact
- *  id, or — for a floating alias like `"sonnet"` — the id carrying that alias as a dash-separated segment
+/** True when `key` is the concrete model id that a `--model` request `requested` resolves to: the id or its dated
+ *  snapshot (`modelIdMatches`), or — for a floating alias like `"sonnet"` — the id carrying that alias as a dash-separated segment
  *  (`claude-sonnet-5`). Segment membership, not substring: `"opus"` must not match a hypothetical
  *  `claude-opus-lite-…` by accident. */
 function resolvesRequested(key: string, requested: string): boolean {
-  return key === requested || key.split("-").includes(requested);
+  return modelIdMatches(requested, key) || key.split("-").includes(requested);
 }
 
 /** Strict parse of one `claude -p --output-format json` envelope: requires a string `result` AND exactly

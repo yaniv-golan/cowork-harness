@@ -48,6 +48,7 @@ import { confirmedAddsNoEvidence, familyReach, metricAaFalseConfirm, sectionFami
 import { readManifest, type EvalManifest } from "./manifest.js";
 import { readRunsLines, repEvidenceOf, RUNS_FILE, type GradedAssertion, type RunsLine } from "./runs.js";
 import { redactHostPaths } from "../run/host-path-tokens.js";
+import { normalizeModelId } from "../run/model-provenance.js";
 import { expandHome } from "../session.js";
 
 export const REPORT_JSON = "report.json";
@@ -291,8 +292,6 @@ interface ClassifiedLine {
 function sumFinite(xs: Array<number | undefined>): number {
   return xs.reduce<number>((a, b) => a + (typeof b === "number" && Number.isFinite(b) ? b : 0), 0);
 }
-
-const normalizeModel = (m: string) => m.replace(/\[\dm\]$/i, "").toLowerCase();
 
 function noteFor(r: FamilyRowOutput): string | undefined {
   if (!r.interval || r.label === "insufficient") return undefined;
@@ -881,7 +880,7 @@ export function buildEvalReport(evalDir: string): EvalReport {
         return;
       const k = JSON.stringify([line.scenario, i]);
       const e = judgeSeen.get(k) ?? { scenario: line.scenario, assertionIndex: i, models: new Set<string>() };
-      e.models.add(normalizeModel(g.judgeModel));
+      e.models.add(normalizeModelId(g.judgeModel));
       judgeSeen.set(k, e);
     });
   }

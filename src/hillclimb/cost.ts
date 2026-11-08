@@ -20,7 +20,7 @@
 // The account's identity fields (`email`, `organization`, `subscriptionType`'s value) are never copied.
 
 import { searchCorpusCostClause } from "./search-corpus.js";
-import { normalizeModelId } from "../run/model-provenance.js";
+import { modelIdMatches, normalizeModelId } from "../run/model-provenance.js";
 import type { FlowSnapshot } from "./schema-check.js";
 
 export type BillingBasis = "api_key" | "subscription" | "third_party" | "ambiguous";
@@ -346,10 +346,11 @@ export function otherModelShare(results: string | null | undefined): { share: nu
     const cost = num(r.cost_usd);
     const models = isObj(r.meta?.models) ? r.meta.models : undefined;
     if (cost === undefined || typeof r.model !== "string" || models === undefined) continue;
-    const main = normalizeModelId(r.model);
+    const main = r.model;
     n++;
     total += cost;
-    for (const [m, e] of Object.entries(models)) if (normalizeModelId(m) !== main && isObj(e)) other += num(e.cost_usd) ?? 0;
+    // `models` is keyed by the REQUESTED id; `r.model` is the served one.
+    for (const [m, e] of Object.entries(models)) if (!modelIdMatches(m, main) && isObj(e)) other += num(e.cost_usd) ?? 0;
   }
   return total > 0 ? { share: other / total, rows: n } : undefined;
 }

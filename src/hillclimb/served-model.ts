@@ -7,7 +7,7 @@
 // still reads as "honored". It stays an additional trigger in the row classifier.
 
 import { isLiveModelId } from "../types.js";
-import { normalizeModelId } from "../run/model-provenance.js";
+import { modelIdMatches } from "../run/model-provenance.js";
 import { currentTurnEventLines } from "../run/turn-events.js";
 
 /** Distinct live models on the current turn's main-loop assistant events (no `parent_tool_use_id`), in
@@ -29,26 +29,14 @@ export function mainLoopModels(lines: readonly string[]): string[] {
   return seen;
 }
 
-// the scaffold's documented alias → snapshot shapes: 'foo-latest' / 'foo-0' / 'foo' served as 'foo-20250101',
-// 'foo@20250101' or 'foo-2025-01-01'.
-const SNAPSHOT_SUFFIX = /^[-@](\d{8}|\d{4}-\d{2}-\d{2})$/;
-
-/** The first main-loop model that the pin does not account for, or undefined when every one matches the
- *  pin exactly or by a documented alias → snapshot resolution. Anything else — another snapshot of the
- *  pin, a sibling model, or the bare base id served for an alias (an unversioned echo that can hide
- *  snapshot drift) — is a substitution. No pin ⇒ no check, as the scaffold skips it without --model. */
+/** The first main-loop model that the pin does not account for, or undefined when every one matches it
+ *  (`modelIdMatches`: exactly, or by a documented alias → snapshot resolution — 'foo-latest' / 'foo-0' / 'foo'
+ *  served as 'foo-20250101', 'foo@20250101' or 'foo-2025-01-01'). Anything else — another snapshot of the pin, a
+ *  sibling model, or the bare base id served for an alias (an unversioned echo that can hide snapshot drift) — is a
+ *  substitution. No pin ⇒ no check, as the scaffold skips it without --model. */
 export function servedModelMismatch(pin: string | undefined, models: readonly string[]): string | undefined {
   if (pin === undefined) return undefined;
-  const want = normalizeModelId(pin);
-  const base = want.replace(/-latest$|-0$/, "");
-  for (const served of models) {
-    const got = normalizeModelId(served);
-    if (got === want) continue;
-    const rest = got.startsWith(base) ? got.slice(base.length) : null;
-    if (rest !== null && SNAPSHOT_SUFFIX.test(rest)) continue;
-    return served;
-  }
-  return undefined;
+  return models.find((served) => !modelIdMatches(pin, served));
 }
 
 /** The effort levels an agent request carries (`output_config.effort`). */

@@ -12,7 +12,7 @@ import type { Assertion } from "../types.js";
 import { isLiveModelId } from "../types.js";
 import { isRun, scenarioCostHistory, tierOf, type RunIndexRow } from "../run/run-index.js";
 import { turnArtifactPath } from "../run/turn-layout.js";
-import { deriveModelProvenance, normalizeModelId } from "../run/model-provenance.js";
+import { deriveModelProvenance, modelIdMatches, normalizeModelId } from "../run/model-provenance.js";
 import { classifyRep, classifyTermination, repRowValues, scenarioRows, type ClassifiableResult, type RowKey } from "./classify.js";
 import { EXACT_CONTENT_MIN, HISTORY_WINDOW, type CostHistory, type RowHistory } from "./planner.js";
 
@@ -322,7 +322,7 @@ export function loadRowHistory(rows: readonly RunIndexRow[], o: RowHistoryOption
       const other = (i: number) => {
         const pin = o.judgeModelPins?.get(i) ?? o.judgeModelPin;
         const m = (grades[i] as { judgeModel?: unknown } | undefined)?.judgeModel;
-        return pin !== undefined && typeof m === "string" && normalizeModelId(m) !== normalizeModelId(pin);
+        return pin !== undefined && typeof m === "string" && !modelIdMatches(pin, m);
       };
       if (sRows.some((row) => isSemanticRow(row) && other(row.assertionIndex))) judgeModelDiffers++;
       values = values.map((v) =>

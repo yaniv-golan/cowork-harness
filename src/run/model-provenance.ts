@@ -59,7 +59,29 @@ export function isConcreteModelId(id: string | undefined): id is string {
   if (n === "") return false;
   if ((FAMILY_ALIASES as readonly string[]).includes(n)) return false;
   if (UNRESOLVABLE_ALIASES.has(n)) return false;
+  // `-latest` / `-0` are API aliases that roll to a new snapshot: the same pin can serve two models.
+  if (ROLLING_ALIAS.test(n)) return false;
   return true;
+}
+
+/** A rolling API alias suffix (`claude-3-5-sonnet-latest`, `claude-sonnet-4-0`). */
+const ROLLING_ALIAS = /-latest$|-0$/;
+
+/** A dated snapshot suffix as the API serves it, and the two shapes the hillclimb scaffold also documents. */
+const SNAPSHOT_SUFFIX = /^[-@](\d{8}|\d{4}-\d{2}-\d{2})$/;
+
+/** Does `served` (or a usage key) name the model `pin` asked for? The ONE matcher every pin comparison uses.
+ *  Both are normalized (`[1m]`, case). They match when equal, or when `served` is the pin's dated snapshot: the pin
+ *  (with a rolling `-latest` / `-0` suffix stripped) followed by `-YYYYMMDD`, `@YYYYMMDD` or `-YYYY-MM-DD`. An
+ *  undated pin is served by its dated snapshot (`claude-haiku-4-5` → `claude-haiku-4-5-20251001`); a DIFFERENT
+ *  snapshot of a dated pin, a sibling model and another family never match. Family aliases (`opus`) are not handled
+ *  here: their callers check family membership on their own. */
+export function modelIdMatches(pin: string, served: string): boolean {
+  const want = normalizeModelId(pin);
+  const got = normalizeModelId(served);
+  if (got === want) return true;
+  const base = want.replace(ROLLING_ALIAS, "");
+  return got.startsWith(base) && SNAPSHOT_SUFFIX.test(got.slice(base.length));
 }
 
 /** The model the SDK's own `modelUsage` vouches for, when the main loop reported no live model (a prompt
@@ -76,8 +98,8 @@ function pinFromModelUsage(pinned: string, modelUsage: Record<string, unknown> |
       return { model: normalizeModelId(m), cost: typeof c === "number" && Number.isFinite(c) ? c : 0 };
     });
   if (billed.length === 0) return undefined;
-  if (billed.length === 1) return billed[0].model === pinned;
-  const mine = billed.find((b) => b.model === pinned);
+  if (billed.length === 1) return modelIdMatches(pinned, billed[0].model);
+  const mine = billed.find((b) => modelIdMatches(pinned, b.model));
   if (mine === undefined) return undefined;
   return billed.every((b) => b === mine || b.cost < mine.cost) ? true : undefined;
 }
@@ -95,7 +117,7 @@ export function deriveModelProvenance(
   // main turn honored its pin, and one that fell back *to* the pinned model is evidence FOR it. A
   // fallback with no `originalModel` at all is unattributable, so it counts (fail toward reporting).
   const fellOffPin =
-    pinned !== undefined && (fallbacks ?? []).some((f) => f.originalModel === undefined || normalizeModelId(f.originalModel) === pinned);
+    pinned !== undefined && (fallbacks ?? []).some((f) => f.originalModel === undefined || modelIdMatches(pinned, f.originalModel));
   return {
     // A pinned model is a user setting whatever its channel (session key, --model flag, matrix axis, env):
     // the distinction production draws is user-chose vs system-chose, not which UI surface carried it.
@@ -120,7 +142,7 @@ export function deriveModelProvenance(
         return (
           !fellOffPin && observed.some((m) => normalizeModelId(m).includes(`-${family}-`) || normalizeModelId(m).startsWith(`${family}-`))
         );
-      return !fellOffPin && observed.some((m) => normalizeModelId(m) === pinned);
+      return !fellOffPin && observed.some((m) => modelIdMatches(pinned, m));
     })(),
     modelFallbacks: fallbacks,
   };
