@@ -387,6 +387,30 @@ describe("runHillclimbCommand", () => {
     expect(err.join("\n")).toMatch(/estimated cost of 2 run\(s\)/);
   });
 
+  it("--dry-run prices a case with no run on its baseline from the nearest older one, and says so", async () => {
+    const indexRows = () =>
+      [
+        {
+          v: 1,
+          ts: "2026-10-01T00:00:00Z",
+          command: "run",
+          scenario: "Alpha",
+          slug: "Alpha",
+          runId: "local_old",
+          fidelity: "container",
+          baseline: "1.0.0",
+          result: "success",
+          pass: true,
+          signals: [],
+          costUsd: 2,
+        },
+      ] as never;
+    const r = await runHillclimbCommand(args("--dry-run"), deps({ indexRows }));
+    expect(r.exitCode).toBe(0);
+    expect(r.cost).toMatchObject({ jobs: 1, pricedRuns: 1, lowerBound: false, unpriced: [] });
+    expect(err.join("\n")).toMatch(/Alpha priced from baseline 1\.0\.0 \(1 run\(s\)\)/);
+  });
+
   it("--dry-run with no priced history says the estimate is a lower bound", async () => {
     const r = await runHillclimbCommand(args("--dry-run"), deps({ indexRows: () => [] }));
     expect(r.cost).toMatchObject({ jobs: 1, lowerBound: true, unpriced: ["Alpha"], thinnest: null });

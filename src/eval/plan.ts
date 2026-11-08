@@ -403,7 +403,7 @@ export function planText(plan: EvalPlan, o: { tilde?: (p: string) => string; cau
     if (c.priced) {
       const ratio = r.p50Usd && r.worstObservedUsd !== undefined ? ` (worst/p50 ${(r.worstObservedUsd / r.p50Usd).toFixed(1)}×)` : "";
       L.push(
-        `  cost: ${c.pricedFromBaseline !== undefined ? `priced from baseline ${c.pricedFromBaseline} (${r.pricedRuns} run(s)): no priced run on baseline ${s.baseline} — ` : ""}${r.pricedRuns} priced run(s)${r.thin ? " (THIN)" : ""} — per run p50 ${usd(r.p50Usd!)} · mean ${usd(r.meanUsd!)} · ` +
+        `  cost: ${c.pricedFromBaseline !== undefined ? `priced from baseline ${c.pricedFromBaseline}: no priced run on baseline ${s.baseline} — ` : ""}${r.pricedRuns} priced run(s)${r.thin ? " (THIN)" : ""} — per run p50 ${usd(r.p50Usd!)} · mean ${usd(r.meanUsd!)} · ` +
           `p95 ${usd(r.p95Usd!)}${r.p95IsMax ? " (= the max: 20 or fewer runs)" : ""} · worst ${usd(r.worstObservedUsd!)}${ratio}`,
       );
     } else

@@ -38,6 +38,7 @@ import { findMainTranscript, keptChildTranscripts, mainSystemTurn, sentSubagentA
 import {
   ablationMix,
   attemptContext,
+  requestedSummary,
   existingFlowSnapshot,
   NONE,
   recordAttempt,
@@ -46,6 +47,7 @@ import {
   writeCostSummary,
   type JobReport,
 } from "./runner.js";
+import { servedModelSplits } from "./served-model.js";
 import { BASELINE_REF } from "./pairwise.js";
 
 export interface HillclimbSeedArgs {
@@ -243,7 +245,23 @@ export async function seedBaseline(
         else errors++;
       }
     }
+    // A pass refuses a variant whose rows for one pin were served two model ids; a seeded baseline is held to the same
+    // rule, and seed takes no --allow-model-split: start such a flow with a live pass.
+    const splits = servedModelSplits(writer.readVariantFile("results.jsonl"));
+    if (splits.length) {
+      cleanup();
+      release();
+      return refuse(
+        splits
+          .map(
+            (sp) =>
+              `the eval arm's reps for model ${sp.requested} were served ${sp.served.join(" and ")} (cases ${sp.cases.join(", ")}): a baseline's scores must come from one model — start this flow with a live baseline pass`,
+          )
+          .join("; "),
+      );
+    }
     for (const l of writeCostSummary(writer, V)) say(l);
+    writer.setSummaryKeys(requestedSummary(writer.readVariantFile("results.jsonl")));
     say(
       `[${V}] seeded ${seeded} row(s)${errors ? ` and ${errors} errors row(s)` : ""} from eval ${plan.manifest.evalId} arm ${plan.manifest.arms[plan.armIndex].label}; snapshot ${tildeify(pluginDir)}`,
     );
@@ -253,7 +271,7 @@ export async function seedBaseline(
     return { ...base, exitCode: 0, seeded, errors, snapshot: pluginDir };
   } catch (e) {
     cleanup();
-    const m = `seeding failed after its first write, and what it wrote was removed: ${message(e)}`;
+    const m = `seeding failed after its first write, and what it wrote was removed (input copies under the flow's inputs/ are kept): ${message(e)}`;
     say(m);
     return { ...base, exitCode: 1, error: { category: "runtime", message: m } };
   } finally {

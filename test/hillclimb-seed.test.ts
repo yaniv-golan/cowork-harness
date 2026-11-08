@@ -4,7 +4,8 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import type { RunResult } from "../src/types.js";
+import type { RunResult, Scenario } from "../src/types.js";
+import type { SessionConfig } from "../src/session.js";
 import { loadBaseline } from "../src/baseline.js";
 import { buildFingerprint } from "../src/run/cassette.js";
 import { runOutDir } from "../src/run/execute.js";
@@ -45,8 +46,41 @@ function writePlugin(dir: string, body: string): void {
   writeFileSync(join(dir, "skills", "csv-metrics", "SKILL.md"), `---\nname: csv-metrics\ndescription: d\n---\n${body}\n`);
 }
 
+/** One kept run dir, as executeScenario lays it out: result.json, events.jsonl and the agent's session transcript.
+ *  `served` is the model the agent was served (the pin unless a test says otherwise). */
+function fakeRun(scenario: Scenario, session: SessionConfig, runId: string, served = MODEL): RunResult {
+  const baseline = loadBaseline(scenario.baseline);
+  const outDir = runOutDir(scenario.name, runId);
+  const r = {
+    ...fixture("public-scenario-pinned"),
+    scenario: scenario.name,
+    modelPinHonored: true,
+    fidelity: "container",
+    outDir,
+    cost: { usd: 0.5 },
+    durationMs: 7000,
+    // The skill the run invoked: what the skill_invoked column reads.
+    skillActivity: [{ skillId: "csv-metrics:csv-metrics" }],
+    fingerprint: buildFingerprint(scenario.session, baseline.appVersion, undefined, scenario.skills, baseline, session),
+  } as RunResult;
+  mkdirSync(join(outDir, "turns", "1"), { recursive: true });
+  writeFileSync(turnArtifactPath(outDir, 1, "result.json"), JSON.stringify(r));
+  // The agent's own session transcript, where a container run keeps it: its main-loop call went out at the pinned effort.
+  const projects = join(outDir, "work", "session", "mnt", ".claude", "projects", "-sessions-x");
+  mkdirSync(projects, { recursive: true });
+  writeFileSync(
+    join(projects, `${SESSION_ID}.jsonl`),
+    JSON.stringify({ type: "assistant", isSidechain: false, effort: "medium", message: { model: served } }) + "\n",
+  );
+  writeFileSync(
+    join(outDir, "events.jsonl"),
+    [frames[0], JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { model: served } }), frames[1]].join("\n"),
+  );
+  return r;
+}
+
 /** The eval's scenario dir (also the flow's target), and an eval of arms before/after kept on disk. */
-async function evalOf(opts: { reps?: number } = {}) {
+async function evalOf(opts: { reps?: number; skill?: string; served?: (rep: number) => string } = {}) {
   const scen = join(root, "scenarios");
   mkdirSync(scen, { recursive: true });
   writePlugin(join(root, "declared", "csv-metrics"), "declared");
@@ -57,34 +91,8 @@ async function evalOf(opts: { reps?: number } = {}) {
     join(scen, "csv-metrics.yaml"),
     `baseline: latest\nsession: ../session.yaml\nfidelity: container\nprompt: analyze\n${CSV_ASSERTS}`,
   );
-  const runJob = async (spec: EvalJobSpec): Promise<RunResult> => {
-    const baseline = loadBaseline(spec.scenario.baseline);
-    const outDir = runOutDir(spec.scenario.name, spec.job.runId);
-    const r = {
-      ...fixture("public-scenario-pinned"),
-      scenario: spec.scenario.name,
-      modelPinHonored: true,
-      fidelity: "container",
-      outDir,
-      cost: { usd: 0.5 },
-      durationMs: 7000,
-      fingerprint: buildFingerprint(spec.scenario.session, baseline.appVersion, undefined, spec.scenario.skills, baseline, spec.session),
-    } as RunResult;
-    mkdirSync(join(outDir, "turns", "1"), { recursive: true });
-    writeFileSync(turnArtifactPath(outDir, 1, "result.json"), JSON.stringify(r));
-    // The agent's own session transcript, where a container run keeps it: its main-loop call went out at the pinned effort.
-    const projects = join(outDir, "work", "session", "mnt", ".claude", "projects", "-sessions-x");
-    mkdirSync(projects, { recursive: true });
-    writeFileSync(
-      join(projects, `${SESSION_ID}.jsonl`),
-      JSON.stringify({ type: "assistant", isSidechain: false, effort: "medium", message: { model: MODEL } }) + "\n",
-    );
-    writeFileSync(
-      join(outDir, "events.jsonl"),
-      [frames[0], JSON.stringify({ type: "assistant", parent_tool_use_id: null, message: { model: MODEL } }), frames[1]].join("\n"),
-    );
-    return r;
-  };
+  const runJob = async (spec: EvalJobSpec): Promise<RunResult> =>
+    fakeRun(spec.scenario, spec.session, spec.job.runId, opts.served?.(spec.job.rep));
   const evalDir = join(root, "eval");
   const a = parseEvalArgs([
     scen,
@@ -97,6 +105,7 @@ async function evalOf(opts: { reps?: number } = {}) {
     "--quiet",
     "--reps",
     String(opts.reps ?? 4),
+    ...(opts.skill ? ["--skill", opts.skill] : []),
   ]);
   await runEval(a, {
     runJob,
@@ -115,6 +124,25 @@ const seed = (evalDir: string, arm = "after", flow = "flow") =>
     { target: "scenarios", flow, fromEval: evalDir, arm },
     { cwd: root, env: {}, secrets: [], stderr: (l) => err.push(l), snapshotRoot: snaps },
   );
+/** A live `hillclimb run` over the same fake runner: the oracle a seeded row is compared with. */
+const liveDeps = (): RunCommandDeps => ({
+  cwd: root,
+  env: {},
+  snapshotRoot: snaps,
+  secrets: [],
+  stderr: (l) => err.push(l),
+  flags: {},
+  isolationCheck: () => undefined,
+  judgeCheck: async () => ({ lines: [] }),
+  tokenCheck: () => ({ id: "token", title: "Auth token", status: "ok", detail: "found", required: true }),
+  runScenario: async (a) => fakeRun(a.scenario, a.extra.session!, a.extra.runId!),
+  indexRows: () => [],
+});
+const runArgs = (...a: string[]) => {
+  const p = parseHillclimbRunArgs(["scenarios", ...a]);
+  if (p.help) throw new Error("help");
+  return p;
+};
 const rows = (f: string) =>
   existsSync(join(root, "flow", "baseline", f))
     ? readFileSync(join(root, "flow", "baseline", f), "utf8")
@@ -215,6 +243,75 @@ describe("hillclimb seed: accepted", () => {
   });
 });
 
+describe("hillclimb seed: the rows a live pass would write", () => {
+  it("a seeded row carries the same keys as a live row (bar where it came from), the skill column included", async () => {
+    const { evalDir } = await evalOf({ skill: "csv-metrics" });
+    const r = await seed(evalDir);
+    expect(r.exitCode, err.join("\n")).toBe(0);
+    const seeded = rows("results.jsonl");
+    expect(seeded).toHaveLength(4);
+    for (const x of seeded) {
+      expect(x.skill_invoked).toBe(1);
+      expect(x.meta.skill_tracked).toBe("csv-metrics:csv-metrics");
+    }
+    const live = await runHillclimbCommand(
+      runArgs("--flow", "flow2", "--reps", "1", "--concurrency", "1", "--skill", "csv-metrics", "--approve-harness", "--no-judge-check"),
+      liveDeps(),
+    );
+    expect(live.exitCode, err.join("\n")).toBe(0);
+    const liveRow = readFileSync(join(root, "flow2", "baseline", "results.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l) as Record<string, any>)[0];
+    expect(liveRow.skill_invoked).toBe(1);
+    const keys = (o: Record<string, unknown>, drop: string[] = []) =>
+      Object.keys(o)
+        .filter((k) => !drop.includes(k))
+        .sort();
+    expect(keys(seeded[0])).toEqual(keys(liveRow));
+    expect(keys(seeded[0].meta, ["seeded_from"])).toEqual(keys(liveRow.meta));
+    expect(liveRow.meta.seeded_from).toBeUndefined();
+  });
+
+  it("a rep whose run dir kept no result is an errors row (the next pass re-runs it)", async () => {
+    const { evalDir } = await evalOf();
+    const line = JSON.parse(
+      readFileSync(join(evalDir, "runs.jsonl"), "utf8")
+        .trim()
+        .split("\n")
+        .find((l) => l.includes('"arm":"after"'))!,
+    );
+    rmSync(join(line.runDir.replace(/^~/, homedir()), "turns"), { recursive: true, force: true });
+    const r = await seed(evalDir);
+    expect(r.exitCode, err.join("\n")).toBe(0);
+    expect(r).toMatchObject({ seeded: 3, errors: 1 });
+    expect(rows("errors.jsonl")[0].meta.seeded_from).toMatchObject({ eval_rep: line.rep });
+  });
+
+  it("summary.json carries the requested model and effort, as a pass writes it", async () => {
+    const { evalDir } = await evalOf();
+    await seed(evalDir);
+    expect(JSON.parse(readFileSync(join(root, "flow", "baseline", "summary.json"), "utf8"))).toMatchObject({
+      model_requested: MODEL,
+      effort: "medium",
+    });
+  });
+});
+
+describe("hillclimb seed: a failed write", () => {
+  it("exits 1 and removes what it wrote: no rows, no snapshot", async () => {
+    const { evalDir } = await evalOf();
+    // A directory where the first rep's trace goes: that write fails, after the snapshot is installed.
+    mkdirSync(join(root, "flow", "baseline", "traces", "csv-metrics_rep0.json"), { recursive: true });
+    const r = await seed(evalDir);
+    expect(r.exitCode, err.join("\n")).toBe(1);
+    expect(r.error?.message).toMatch(/what it wrote was removed/);
+    expect(rows("results.jsonl")).toEqual([]);
+    expect(rows("errors.jsonl")).toEqual([]);
+    expect(snapshotDirs()).toEqual([]);
+  });
+});
+
 describe("hillclimb seed: refused before any write (exit 2)", () => {
   const refused = async (evalDir: string, re: RegExp, arm = "after") => {
     const r = await seed(evalDir, arm);
@@ -293,6 +390,47 @@ describe("hillclimb seed: refused before any write (exit 2)", () => {
     await refused(evalDir, /pairwise flows start from a live baseline pass/);
     writeFileSync(file, orig.replace("fidelity: container", "fidelity: protocol"));
     await refused(evalDir, /protocol tier/);
+  });
+
+  it("an eval that names no such scenario, or recorded another assert_sig, baseline or judge pins", async () => {
+    const { evalDir } = await evalOf();
+    const p = join(evalDir, "manifest.json");
+    const orig = readFileSync(p, "utf8");
+    const tamper = (f: (m: any) => void) => {
+      const m = JSON.parse(orig);
+      f(m);
+      writeFileSync(p, JSON.stringify(m));
+    };
+    tamper((m) => (m.scenarios[0].name = "other"));
+    await refused(evalDir, /has no scenario named "csv-metrics"/);
+    tamper((m) => (m.scenarios[0].assertions = []));
+    await refused(evalDir, /assert_sig differs/);
+    tamper((m) => (m.scenarios[0].baseline = "0.0.1"));
+    await refused(evalDir, /the baseline differs/);
+    tamper((m) => m.pins.judge.resolved.push({ scenario: "csv-metrics", assertionIndex: 9, model: "claude-haiku-4-5-20251001" }));
+    await refused(evalDir, /the judge pins differ/);
+  });
+
+  it("an eval that ran with plugins.from_host", async () => {
+    const { evalDir } = await evalOf();
+    const p = join(evalDir, "runs.jsonl");
+    const lines = readFileSync(p, "utf8").trim().split("\n");
+    const i = lines.findIndex((l) => l.includes('"arm":"after"'));
+    lines[i] = JSON.stringify({ ...JSON.parse(lines[i]), hostInputs: { setHash: "a".repeat(64) } });
+    writeFileSync(p, lines.join("\n") + "\n");
+    await refused(evalDir, /plugins\.from_host/);
+  });
+
+  it("a baseline lock another live process holds", async () => {
+    const { evalDir } = await evalOf();
+    mkdirSync(join(root, "flow", "baseline"), { recursive: true });
+    writeFileSync(join(root, "flow", "baseline", ".lock"), JSON.stringify({ pid: process.pid }));
+    await refused(evalDir, /holds .*\.lock/);
+  });
+
+  it("an arm whose reps were served two model ids for one pin (cleaned up: nothing left)", async () => {
+    const { evalDir } = await evalOf({ served: (rep) => (rep === 2 ? `${MODEL}-20261101` : MODEL) });
+    await refused(evalDir, /were served .* and .*: a baseline's scores must come from one model/);
   });
 
   it("an existing baseline row, an existing baseline snapshot, an unknown or ambiguous arm", async () => {

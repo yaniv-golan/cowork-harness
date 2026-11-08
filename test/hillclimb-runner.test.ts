@@ -1106,8 +1106,13 @@ describe("--gate-cmd: the gate runs once, before any rep", () => {
       });
     const summary = JSON.parse(readFileSync(vfile("baseline", "summary.json"), "utf8"));
     expect(summary.cost_rows_unrecorded).toBe(0);
+    // No rep ran: the gate rows are not cost rows at all.
+    expect(summary.cost_rows ?? 0).toBe(0);
     const report = checkFlowDir(flowDir(), { profile: "harness" });
-    expect(report.findings.filter((f) => /failure_class|gate_failed/.test(JSON.stringify(f)))).toEqual([]);
+    // `check` has no error, warning or note on the gate rows (the flow-wide findings — no results.jsonl yet, no
+    // declared metrics — are not about them).
+    expect(report.findings.filter((f) => /errors\.jsonl/.test(f.file ?? ""))).toEqual([]);
+    expect(report.findings.some((f) => f.file === "baseline/results.jsonl")).toBe(true);
   });
 
   it("the gate's tail is scrubbed with the run's secrets; a timeout records gate_timed_out", async () => {
