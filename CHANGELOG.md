@@ -8,6 +8,20 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Baseline for Claude Desktop 4.23118.0 (agent 2.1.317, unchanged).** `desktop-4.23118.0` is the new newest baseline.
+  It has not had a live pass. The spawn environment, the egress allowlist, the sub-agent append fingerprints and every
+  pinned gate are the same as `desktop-4.16336.0`. The one change that reaches a session is in the system prompt bundled
+  with Desktop: its task-list section now names the `TaskCreate` and `TaskUpdate` tools. The harness records that
+  prompt's new fingerprint and does not change the paraphrase it serves. That bundled copy is what Desktop falls back
+  to, and a signed-in session can receive its prompt from Anthropic's servers instead, which no sync sees. The
+  committed cassettes were re-stamped to the new baseline.
+- **`sync` reads the shapes Desktop 4.23118.0 moved.** Six refusals were `sync`'s own extractors meeting refactored code:
+  the Artifact predicates and the verdict check are read from the shared chunk they moved to; the auto-memory resolver
+  is read through its new wrapper, where a scheduled task on a deployment that cannot sync memory remotely gets a
+  marker instead of a directory; the spawn call may hold back its first turn while a plugin's MCP reconnect is pending;
+  and the VM agent staging step may turn a failed staging into a not-ready result. Each form is pinned, so a real
+  change still refuses.
+
 - **`agent_env.passthrough`** lists environment variable names to give the `hostloop` agent beside the ones
   Desktop copies, for example `SSH_AUTH_SOCK`, `NODE_EXTRA_CA_CERTS`, `HTTPS_PROXY` or `LANG` for a plugin MCP server or
   hook that needs one. It is accepted at `protocol`, where the agent inherits your environment anyway, and refused at

@@ -1,6 +1,6 @@
 # Gotchas
 
-Tracks `cowork-harness 4.15.0` (baseline `desktop-4.16336.0`). The full "✓ passed ≠ correct" landmine catalog.
+Tracks `cowork-harness 4.15.0` (baseline `desktop-4.23118.0`). The full "✓ passed ≠ correct" landmine catalog.
 
 ## Gotchas — the "✓ passed ≠ correct" landmines
 
@@ -323,7 +323,7 @@ authorable). Reach for this list when debugging a run's behavior, that one while
     you ran.
 
 28. **A `hostloop` file tool is refused with a message that is not the path hook's.** *Why:* on
-    `desktop-4.16336.0` and later, with a native agent 2.1.315 or newer, the agent's own outside-folder fence
+    `desktop-4.23118.0` and later, with a native agent 2.1.315 or newer, the agent's own outside-folder fence
     refuses reads and writes outside outputs and the connected folders, in addition to the harness's path hook; only
     uploads, the spooled tool results, skills and staged plugins are exempt from its read block. *Fix:* point the
     tool at one of those roots by its host path (see `references/fidelity-and-answers.md`, "hostloop paths"); a

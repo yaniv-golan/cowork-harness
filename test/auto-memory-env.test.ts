@@ -119,7 +119,7 @@ describe("autoMemoryEnv", () => {
       if (readGateBool(b, AUTO_MEMORY_GATE) === false) off++;
       else noRow++;
     }
-    expect({ off, noRow }).toEqual({ off: 42, noRow: 9 });
+    expect({ off, noRow }).toEqual({ off: 43, noRow: 9 });
   });
 });
 
