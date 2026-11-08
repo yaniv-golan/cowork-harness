@@ -61,6 +61,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **The cassette privacy scan no longer reports the scenario's own plugin's MCP servers as `host-inventory`.** This
+  applies to every cassette, not only `plugins.from_host` ones: a server named `plugin:<name>:<server>` is part of the
+  fixture when `<name>` is a plugin the recording declares (or a `from_host` input). Any other plugin's server is still
+  a finding.
 - **Cassette format 19.** A recording whose `assert:` uses `allow_max_turns` stamps 19; every other recording stamps
   what it did before. A cassette also freezes `turnCap` and `timeout`. An older harness refuses a v19 cassette.
 - **`hillclimb` passes its `--timeout-s` ceiling to the run as its budget** (`timeout.source: runner`) instead of

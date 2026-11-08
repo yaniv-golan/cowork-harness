@@ -451,7 +451,8 @@ export interface Cassette {
   // What `plugins.from_host` took from the recording host (RunResult.hostInputs): keys, versions and hashes only, never
   // a file body. Replay never reads the host; `verify-cassettes --host-inputs` compares it with this machine on request.
   // An optional property with no stamp bump: an older reader ignores an unknown top-level key, and replay's verdict
-  // does not depend on it.
+  // does not depend on it. HostInputsShape is strict, so ADDING a field inside it later is a stamp bump: a reader
+  // without the field would refuse every cassette that carries it.
   hostInputs?: HostInputs;
   // v17: what a device_bridge run modeled (RunResult.deviceBridge). FROZEN so replay reports what the recording
   // modeled, not what this build would. Present only with `device_bridge: true`, which stamps v18 by itself (v17 before the delete card).
@@ -7245,16 +7246,13 @@ export function hostInputsDrift(
       ? { drift: [] }
       : { drift: [], note: "host-inputs: not recorded (the cassette froze no hostInputs), so there is nothing to compare" };
   const want: FromHost = fromHost ?? { plugins: frozen.plugins.map((p) => p.key), skills: frozen.skills.map((s) => s.name) };
-  const scratch = mkdtempSync(join(tmpdir(), "cwh-host-inputs-"));
-  let now: HostInputs;
+  let now: Pick<HostInputs, "plugins" | "skills" | "setHash">;
   try {
     // What the recording's scenario replaced is left out of both sides, so it never reads as "added".
-    now = currentHostInputs(want, configDir, scratch, frozen.shadowed ?? []);
+    now = currentHostInputs(want, configDir, frozen.shadowed ?? []);
   } catch (caught) {
     rethrowIfExit(caught);
     return { drift: [`host-inputs: this host cannot deliver the recorded set: ${(caught as Error).message}`] };
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
   }
   if (now.setHash === frozen.setHash) return { drift: [] };
   const diff = (kind: string, a: Map<string, string>, b: Map<string, string>): string[] => [
@@ -8373,6 +8371,16 @@ export async function cmdVerifyCassettes(args: string[]) {
       undefined,
       asJson,
     );
+  // --strict reports host-inputs drift as staleness, which --skip-staleness turns off: together they would check less
+  // than --strict promises.
+  if (strictHostInputs && skipStaleness)
+    return fail(
+      "verify-cassettes",
+      "usage",
+      "verify-cassettes: --strict reports host-inputs drift as staleness, which --skip-staleness turns off; drop one",
+      undefined,
+      asJson,
+    );
   // Allow model: each entry is whole-token anchored + class-scoped. A bare `--allow <regex>` is a single
   // PATTERN applied to every class (back-compat); `--allow-domain`/`--allow-email`/`--allow-path`/
   // `--allow-machine-inventory` scope a pattern to one class so a domain allow can't bleed into the
@@ -8626,7 +8634,12 @@ export async function cmdVerifyCassettes(args: string[]) {
         privacyScanned: doPrivacy && "scannable" in scanOnly,
       };
     }
-    const findings = doPrivacy ? scanCassette(rc.cassette, allow) : [];
+    let findings = doPrivacy ? scanCassette(rc.cassette, allow) : [];
+    // Under --host-inputs the operator is checking a from_host recording on the machine it names, so the names
+    // carried ONLY by `hostInputs` (your installed set, by design) are a note here, not a privacy failure. Every other
+    // finding still gates, and a plain verify-cassettes (CI) still fails on these.
+    const hostInputsOnly = doHostInputs ? findings.filter((x) => x.cls === HOST_INVENTORY_CLS && x.where.startsWith("hostInputs ")) : [];
+    if (hostInputsOnly.length) findings = findings.filter((x) => !hostInputsOnly.includes(x));
     // Direct computeStaleness call (not the checkStaleness string adapter) so the NON-failing `notes`
     // channel reaches the envelope — a note (e.g. pre-effectiveFidelity explicit-tier) must be surfaced,
     // never dropped, and must never red the gate.
@@ -8639,6 +8652,10 @@ export async function cmdVerifyCassettes(args: string[]) {
     const staleness = stale.findings.filter((s) => !s.class.startsWith("unverifiable-")).map((s) => s.message);
     const unverifiable = stale.findings.filter((s) => s.class.startsWith("unverifiable-")).map((s) => s.message);
     const notes = [...stale.notes];
+    if (hostInputsOnly.length)
+      notes.push(
+        `host-inputs: ${hostInputsOnly.length} name(s) of your installed set in hostInputs — a note under --host-inputs; a plain verify-cassettes reports each as a host-inventory finding`,
+      );
     // Session-shape fingerprint drift (Finding 23): gated by the SAME --skip-staleness toggle (it's a
     // staleness concept — session SHAPE, not skill content) but computed and hard-failed HERE ONLY, never
     // through computeStaleness/checkStaleness — so it can never affect the default `replay` verdict. A

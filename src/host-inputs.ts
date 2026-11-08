@@ -101,8 +101,10 @@ export function hostConfigDir(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /** A plugin key is `<name>@<marketplace>`, with neither half empty and no second `@`. */
+/** `<name>@<marketplace>`, one `@`, no whitespace or `/`. A RegExp (not a predicate) so the session schema carries it. */
+export const QUALIFIED_PLUGIN_KEY = /^[^@\s/]+@[^@\s/]+$/;
 export function isQualifiedPluginKey(key: string): boolean {
-  return /^[^@\s/]+@[^@\s/]+$/.test(key);
+  return QUALIFIED_PLUGIN_KEY.test(key);
 }
 
 const refuse = (msg: string): never => {
@@ -138,9 +140,15 @@ function refuseEscapingSymlinks(root: string, what: string): void {
     }
     for (const n of names) {
       const abs = join(dir, n);
-      const st = lstatSync(abs);
+      let st: ReturnType<typeof lstatSync>;
+      let t = "";
+      try {
+        st = lstatSync(abs);
+        if (st.isSymbolicLink()) t = readlinkSync(abs);
+      } catch (e) {
+        return refuse(`cannot read ${what} (${abs}): ${(e as Error).message}`);
+      }
       if (st.isSymbolicLink()) {
-        const t = readlinkSync(abs);
         if (isAbsolute(t) || !inside(root, resolve(dirname(abs), t)))
           refuse(
             `${what} holds a symlink that points outside it (${relative(root, abs)} -> ${t}); the harness will not copy a pointer into your host`,
@@ -328,7 +336,40 @@ export function readHostSnapshot(
   const p = join(hostSnapshotDir(runRoot), SNAPSHOT_RECORD);
   if (!existsSync(p)) return undefined;
   const rec = JSON.parse(readFileSync(p, "utf8")) as SnapshotRecord;
+  // An empty mount path would mount the plugin at the session root on every later leg.
+  for (const pl of rec.plugins) if (!pl.mountPath) refuse(`the run's snapshot record has no mount path for plugin "${pl.key}" (${p})`);
   return { hostInputs: rec.hostInputs, plugins: rec.plugins };
+}
+
+/**
+ * A later leg of a `workdir: persistent` run reuses the tree an earlier leg staged, and the agent can write to it. Each
+ * host plugin there (under `root`, at its mount path) and each host skill (under `skillsRoot`, when the tier keeps the
+ * earlier leg's config dir) is re-hashed and refused if it no longer matches what was recorded: the run's record
+ * names those bytes, so a leg that read edited ones must not run under it.
+ */
+export function verifyStagedHostInputs(
+  plan: { mounts: ReadonlyArray<{ hostInputKey?: string; mountPath: string }>; hostInputs?: HostInputs },
+  root: string,
+  skillsRoot?: string,
+): void {
+  const h = plan.hostInputs;
+  if (!h) return;
+  for (const m of plan.mounts) {
+    if (!m.hostInputKey) continue;
+    const want = h.plugins.find((p) => p.key === m.hostInputKey)?.sha256;
+    if (want === undefined) continue;
+    if (hashOrRefuse(join(root, m.mountPath), `plugin "${m.hostInputKey}"`) !== want)
+      refuse(
+        `plugin "${m.hostInputKey}" was changed by an earlier leg of this run (${m.mountPath}); a later leg would read bytes the run's hostInputs do not record`,
+      );
+  }
+  if (skillsRoot === undefined) return;
+  for (const s of h.skills) {
+    if (hashOrRefuse(join(skillsRoot, s.name), `skill "${s.name}"`) !== s.sha256)
+      refuse(
+        `skill "${s.name}" was changed by an earlier leg of this run; a later leg would read bytes the run's hostInputs do not record`,
+      );
+  }
 }
 
 function hashOrRefuse(dir: string, what: string): string {
@@ -415,19 +456,28 @@ export function stageHostInputs(
 /** The set hash a run would record for this selection, hashed from the host sources as their copies would be
  *  (the copy filter's names left out), without copying. For a gate that must notice a host change before it runs. */
 export function hostSelectionSetHash(selection: HostSelection, shadowed: readonly string[]): string {
+  return hostSelectionHashes(selection, shadowed).setHash;
+}
+
+/** Per-input hashes of a selection, read from the host in place (no copy): the same values a snapshot records. */
+export function hostSelectionHashes(
+  selection: HostSelection,
+  shadowed: readonly string[],
+): Pick<HostInputs, "plugins" | "skills" | "setHash"> {
   const sha = (dir: string, what: string): string => {
     const { sha256, errors } = hashHostTree(dir, HOST_MARKER_FILES);
     if (errors.length) refuse(`cannot hash ${what}: ${errors.join("; ")}`);
     return sha256;
   };
-  return hostInputsSetHash({
+  const rows = {
     plugins: selection.plugins
       .filter((p) => !shadowed.includes(p.key))
       .map((p) => ({ key: p.key, version: p.version, sha256: sha(p.installPath, `plugin "${p.key}"`) })),
     skills: selection.skills
       .filter((s) => !shadowed.includes(`skill:${s.name}`))
       .map((s) => ({ name: s.name, sha256: sha(s.src, `skill "${s.name}"`) })),
-  });
+  };
+  return { ...rows, setHash: hostInputsSetHash(rows) };
 }
 
 /** The one line a run prints about its host inputs: counts, the set hash, and every skip and shadow by name. */
@@ -439,8 +489,14 @@ export function hostInputsSummary(h: HostInputs): string {
 }
 
 /** Hash the host's CURRENT copy of each recorded input, for `verify-cassettes --host-inputs` (a local check: it reads
- *  this machine). Uses the same filter and walk as the run: each input is copied to `scratch` and hashed there. */
-export function currentHostInputs(fromHost: FromHost, configDir: string, scratch: string, shadowed: readonly string[] = []): HostInputs {
-  const sel = selectHostInputs(fromHost, configDir, () => {});
-  return stageHostInputs(sel, [...shadowed], scratch).hostInputs;
+ *  this machine). Hashed in place, with the walk that equals the run's copy hash (a test pins that equality). */
+export function currentHostInputs(
+  fromHost: FromHost,
+  configDir: string,
+  shadowed: readonly string[] = [],
+): Pick<HostInputs, "plugins" | "skills" | "setHash"> {
+  return hostSelectionHashes(
+    selectHostInputs(fromHost, configDir, () => {}),
+    shadowed,
+  );
 }

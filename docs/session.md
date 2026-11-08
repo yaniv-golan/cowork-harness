@@ -98,8 +98,8 @@ plugins:
                                  #   (≥1.14271.0; older baselines use mnt/.local-plugins/cache)
     - ./skills/my-skill
   remote_plugins: []             # UI-installed / org-remote plugin dirs → mnt/.remote-plugins/plugin_<id> (migrated-Cowork shape)
-  # from_host: true              # your installed plugins and skills as a recorded input (see "Your installed set")
                                  #   — use this to mirror a plugin installed through Cowork's UI
+  # from_host: true              # your installed plugins and skills as a recorded input (see "Your installed set")
 skills:
   local: []                      # extra host skill dirs → CLAUDE_CONFIG_DIR/skills
   # Overrides for the skill-discovery SDK-MCP gates (container/hostloop only — see fidelity-gaps.md
@@ -341,25 +341,38 @@ tier stages. The copy leaves out Claude Code's `.in_use` / `.orphaned_at` marker
 mounts at `mnt/.local-plugins/marketplaces/<marketplace>/<name>` as a local plugin (`--plugin-dir`); a skill goes
 into the run's config dir. A later leg of the same run uses the same copy, re-hashed first; a copy that changed
 refuses. A scenario plugin (`local_plugins`, `remote_plugins`, an `enabled` name) or `skills.local` skill with the
-same name replaces the host's, which is not delivered and is listed in `hostInputs.shadowed`.
+same name replaces the host's, which is not delivered and is listed in `hostInputs.shadowed`. A plugin's name here is
+its key's name or its manifest name (`.claude-plugin/plugin.json`): either one matching replaces it. On a
+`workdir: persistent` run, a later leg reuses the tree the earlier legs used, and the agent could have written into a
+host plugin or skill there; each is re-hashed before the leg starts, and one that changed refuses.
+
+**Disk.** A run dir holds about twice your installed set: the snapshot under `host-inputs/`, and the copy each tier
+stages from it. `true` takes everything enabled, so name what you need on a large install, and clear old run dirs with
+`cowork-harness prune`.
 
 **What it records.** `RunResult.hostInputs`: each plugin's key, version, `gitCommitSha` (information only) and a
 sha256 over its staged copy (every file's bytes and executable bit, every directory, every in-tree symlink); each
 skill's name and sha256; and `setHash` over the delivered set. A change to any delivered file moves `setHash`.
 `hillclimb` adds `setHash` to its gate, so a host change re-gates the loop, and its rows carry it as
 `meta.host_inputs`. `eval`'s runs lines carry it as `hostInputs`. A cassette freezes `hostInputs`; replay never
-reads the host. `verify-cassettes --host-inputs` compares it with this machine (a note; `--strict` fails).
+reads the host. `verify-cassettes --host-inputs` compares it with this machine: a difference is a note, and
+`--strict` makes it a failure (exit 1) and escalates nothing else; `--strict` refuses alongside `--skip-staleness`.
 
 **What rides along.** A plugin brings its hooks and its `.mcp.json` MCP servers. Hooks turn on
 `--include-hook-events`, which changes the frame stream. A plugin MCP server that needs a host toolchain, or an
-env var from your shell, may not start at `container` or `microvm`. At `hostloop`, `CLAUDE_PLUGIN_ROOT` is set
+env var from your shell, may not start at `container` or `microvm`. At `protocol` and `hostloop` the agent runs on
+your machine, so those MCP servers start there, with your shell's environment (less the variables the harness
+strips). At `protocol` a plugin's hooks run as your own processes too: a run whose installed set has a plugin with
+hooks is refused until the scenario sets `allow_host_hooks: true`. At `hostloop`, `CLAUDE_PLUGIN_ROOT` is set
 only when exactly one plugin is mounted, so with `from_host` it is unset for your own plugin too. **Not
 included:** MCP servers from `~/.claude.json`, `settings.json` hooks, project- and local-scope plugins, and
 `<config>/skills` entries whose name starts with `.`.
 
 **Privacy.** A cassette with `hostInputs` publishes the names of your installed plugins and skills.
-`verify-cassettes` reports each as a `host-inventory` finding at every tier, and `record` runs its
-host-inventory pre-flight at every tier. Keep `from_host` recordings out of committed fixtures. A kept run dir holds
+`verify-cassettes` reports each as a `host-inventory` finding at every tier (a skipped or replaced name too), and
+`record` runs its host-inventory pre-flight at every tier. Under `verify-cassettes --host-inputs`, the local check
+on the machine the names come from, the names that appear only in `hostInputs` are a note instead; any other
+finding still fails, and a plain `verify-cassettes` (as CI runs it) still fails on them. Keep `from_host` recordings out of committed fixtures. A kept run dir holds
 copies of your installed plugins and skills: don't publish it.
 
 ### Egress

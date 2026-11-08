@@ -155,7 +155,7 @@ describe.skipIf(!existsSync(CLI))("verify-cassettes --host-inputs / --strict", (
     const cwd = mkdtempSync(join(tmpdir(), "fh-vc-"));
     writeFileSync(join(cwd, "session.yaml"), "plugins:\n  from_host: true\n");
     writeFileSync(join(cwd, "c.cassette.json"), JSON.stringify(c));
-    const r = spawnSync("node", [CLI, "verify-cassettes", "c.cassette.json", "--output-format", "json", "--skip-privacy", ...args], {
+    const r = spawnSync("node", [CLI, "verify-cassettes", "c.cassette.json", "--output-format", "json", ...args], {
       encoding: "utf8",
       cwd,
       env: { ...process.env, CLAUDE_CONFIG_DIR: cfg },
@@ -173,10 +173,42 @@ describe.skipIf(!existsSync(CLI))("verify-cassettes --host-inputs / --strict", (
     return { cfg, c: cassette({ hostInputs: frozen, session: "session.yaml" }) };
   };
 
-  it("--strict without --host-inputs is a usage error", () => {
+  it("--strict without --host-inputs, or with --skip-staleness, is a usage error", () => {
     const r = run(["--strict"], cassette(), fakeHostConfig([]));
     expect(r.code, r.all).toBe(2);
     expect(r.all).toContain("--strict applies to --host-inputs only");
+    const s = run(["--host-inputs", "--strict", "--skip-staleness"], cassette(), fakeHostConfig([]));
+    expect(s.code, s.all).toBe(2);
+    expect(s.all).toContain("--skip-staleness turns off");
+  });
+
+  it("the hostInputs names fail a plain verify-cassettes, and are a note under --host-inputs, where every other finding still gates", () => {
+    const cfg = fakeHostConfig([{ key: "a@m" }]);
+    const frozen = stageHostInputs(
+      selectHostInputs(true, cfg, () => {}),
+      [],
+      mkdtempSync(join(tmpdir(), "fh-rec-")),
+    ).hostInputs;
+    const c = cassette({ hostInputs: frozen, session: "session.yaml" });
+    const plain = run([], c, cfg);
+    expect(plain.code, plain.all).toBe(1);
+    expect(plain.env.results[0].findings.map((f: { sample: string }) => f.sample)).toEqual(["a@m"]);
+    const local = run(["--host-inputs"], c, cfg);
+    expect(local.code, local.all).toBe(0);
+    expect(local.env.results[0].findings).toEqual([]);
+    expect(local.env.results[0].notes.join("\n")).toContain("1 name(s) of your installed set in hostInputs");
+    // a host name that reached the transcript is not hostInputs-only: it still fails under --host-inputs
+    const leaked = cassette({
+      hostInputs: frozen,
+      session: "session.yaml",
+      events: [
+        init({ mcp_servers: [{ name: "plugin:other:srv" }], tools: [] }),
+        JSON.stringify({ type: "result", subtype: "success", result: "ok" }),
+      ],
+    });
+    const still = run(["--host-inputs"], leaked, cfg);
+    expect(still.code, still.all).toBe(1);
+    expect(still.env.results[0].findings.map((f: { sample: string }) => f.sample)).toEqual(["plugin:other:srv"]);
   });
 
   it("drift is a note by default (exit 0) and a failure under --strict (exit 1)", () => {

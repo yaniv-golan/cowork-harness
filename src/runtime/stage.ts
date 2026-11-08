@@ -6,6 +6,7 @@ import { resolveDeclaredSource } from "../staging/resolve.js";
 import { containedRealPath } from "../boundary-paths.js";
 import { gitModeEnabled, gitCpFilter } from "../run/skill-files.js";
 import { BoundaryError } from "../errors.js";
+import { verifyStagedHostInputs } from "../host-inputs.js";
 import { stageWorkspaceFixture } from "../fixture/workspace.js";
 import type { SessionRoots } from "../fixture/session-tokens.js";
 
@@ -61,6 +62,7 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string, fixtureRoots: 
     // A later leg of a `workdir: persistent` multi-leg run: the SAME tree the earlier legs used, so nothing is
     // re-copied (a re-copy would revert what they wrote to a folder or outputs) and the agent config dir stays as they
     // left it, as on a persistent workspace host. Only MCP follows the current plan, as on a fresh run.
+    verifyStagedHostInputs(plan, mntHost, join(mntHost, ".claude", "skills"));
     mcpStaged = !!plan.mcpConfig && existsSync(plan.mcpConfig);
     if (mcpStaged) cpSync(plan.mcpConfig!, mcpDest, { dereference: false });
   } else if (!plan.resume) {
@@ -85,7 +87,14 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string, fixtureRoots: 
       // counts ⇒ delivered == counted). Fall back to a fresh gitCpFilter for non-plugin mounts.
       if (existsSync(mt.hostPath)) {
         const f = mt.stageFilter ?? (gitModeEnabled() ? gitCpFilter(mt.hostPath) : null);
-        cpSync(mt.hostPath, dest, { recursive: true, dereference: false, ...(f ? { filter: f } : {}) });
+        // A host input keeps its symlinks as written (a relative in-tree link stays relative), exactly as the hashed
+        // snapshot holds them; without this Node rewrites each link to an absolute pointer into the snapshot.
+        cpSync(mt.hostPath, dest, {
+          recursive: true,
+          dereference: false,
+          ...(mt.hostInputKey ? { verbatimSymlinks: true } : {}),
+          ...(f ? { filter: f } : {}),
+        });
       } else {
         // buildLaunchPlan already validated every mount source present (or filtered it out under
         // COWORK_HARNESS_SOFT_MISSING), so a source absent HERE means it vanished between plan-build

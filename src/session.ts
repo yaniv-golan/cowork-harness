@@ -22,7 +22,7 @@ import {
   hostStageFilter,
   hostInputsSummary,
   readHostSnapshot,
-  isQualifiedPluginKey,
+  QUALIFIED_PLUGIN_KEY,
   selectHostInputs,
   stageHostInputs,
   type HostInputs,
@@ -169,7 +169,7 @@ export const SessionConfig = z.strictObject({
           z.strictObject({
             plugins: z
               .array(
-                z.string().min(1).refine(isQualifiedPluginKey, {
+                z.string().min(1).regex(QUALIFIED_PLUGIN_KEY, {
                   message: "a from_host plugin is <name>@<marketplace>; a bare name is ambiguous, since two marketplaces can each have one",
                 }),
               )
@@ -1317,7 +1317,10 @@ export function resolveLaunchSources(
         ...mountedBareNames,
       ]);
       const shadowed = [
-        ...selection.plugins.filter((p) => scenarioPlugins.has(p.name)).map((p) => p.key),
+        // By its key's name or by its manifest name: either is the name the agent loads it under.
+        ...selection.plugins
+          .filter((p) => scenarioPlugins.has(p.name) || scenarioPlugins.has(pluginNameOf(p.installPath)))
+          .map((p) => p.key),
         ...selection.skills.filter((s) => skillDests.has(s.name)).map((s) => `skill:${s.name}`),
       ];
       for (const p of selection.plugins) {
@@ -1581,7 +1584,10 @@ export function buildLaunchPlan(
     const staged = stageHostInputs(sources.fromHost.selection, sources.fromHost.shadowed, runRoot, mountPaths);
     hostInputs = staged.hostInputs;
     presentMounts = presentMounts.map((m) => (m.hostInputKey ? { ...m, hostPath: staged.pluginDirs.get(m.hostInputKey)! } : m));
-    for (const [name, dir] of staged.skillDirs) cpSync(dir, join(configDir, "skills", name), { recursive: true, verbatimSymlinks: true });
+    // A `workdir: persistent` later leg keeps the config dir its earlier legs used; the staging step re-hashes the skills
+    // there instead (verifyStagedHostInputs), so a re-copy must not paper over an edit.
+    if (opts.legStage?.workdir !== "persistent")
+      for (const [name, dir] of staged.skillDirs) cpSync(dir, join(configDir, "skills", name), { recursive: true, verbatimSymlinks: true });
     if (firstLeg) warnToStderr(`::notice:: ${hostInputsSummary(hostInputs)}\n`);
   }
 
