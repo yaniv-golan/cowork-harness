@@ -71,6 +71,13 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **Breaking: eight environment variables moved into the `COWORK_HARNESS_` namespace:** `COWORK_LOCKDOWN`,
+  `COWORK_LIMA_INSTANCE`, `COWORK_LIMACTL`, `COWORK_VM_PROVISION_TIMEOUT_S`, `COWORK_VM_PROXY_PORT`, `COWORK_VM_GATEWAY`,
+  `COWORK_CONTAINER_RUNTIME` and `COWORK_SKIP_CAPABILITY_PROBE` are now `COWORK_HARNESS_LOCKDOWN` and so on. Setting
+  an old name to a non-empty value refuses every command at startup (exit 2), naming the new one. The bare names that
+  stay are the agent and proxy overrides (`COWORK_AGENT_BINARY`, `COWORK_AGENT_IMAGE`, `COWORK_HOST_AGENT_BINARY`,
+  `COWORK_PROXY_IMAGE`), now all covered by the compatibility contract, and `COWORK_ARTIFACTS_ROOT`, which Desktop
+  sets.
 - **Breaking: the `hostloop` agent no longer inherits your shell.** Like Desktop, it gets `PATH`, `HOME`, `LOGNAME`,
   `SHELL`, `USER`, `TERM` and `CLAUDE_CODE_TMPDIR` from it, plus the names a session lists in `agent_env.passthrough`.
   A plugin MCP server or hook that relied on another variable at `hostloop` needs it listed there. The API key and the OAuth

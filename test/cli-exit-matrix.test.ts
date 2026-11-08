@@ -190,7 +190,11 @@ describe.skipIf(!built)("exit matrix: each subcommand exits by itself with its d
         chmodSync(join(d, "rt"), 0o755);
         writeFileSync(join(d, "agent"), "not an agent");
         const t0 = Date.now();
-        const env: NodeJS.ProcessEnv = { ...process.env, COWORK_CONTAINER_RUNTIME: join(d, "rt"), COWORK_AGENT_BINARY: join(d, "agent") };
+        const env: NodeJS.ProcessEnv = {
+          ...process.env,
+          COWORK_HARNESS_CONTAINER_RUNTIME: join(d, "rt"),
+          COWORK_AGENT_BINARY: join(d, "agent"),
+        };
         delete env.COWORK_HARNESS_FORBID_SPAWN;
         delete env.CLAUDE_CODE_OAUTH_TOKEN;
         const r = spawnSync(process.execPath, [CLI, "chat", "skill", "--raw", "--model", "claude-sonnet-5"], {

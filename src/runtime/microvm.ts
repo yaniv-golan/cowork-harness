@@ -138,9 +138,9 @@ export function spawnMicroVm(
   // Guest default-deny egress (allow only the host proxy gateway + DNS). Use the port the caller
   // allocated for THIS run's host proxy (so host bind and guest firewall/proxy agree); fall back to the
   // env/8899 default only when spawned without an explicit port.
-  const proxyPort = opts.proxyPort ?? parseEnvPortMicroVm("COWORK_VM_PROXY_PORT", 8899);
+  const proxyPort = opts.proxyPort ?? parseEnvPortMicroVm("COWORK_HARNESS_VM_PROXY_PORT", 8899);
   const gatewayIp = vmGatewayIp(); // one resolved value feeds both the firewall rule and proxy URL.
-  const lockdown = (process.env.COWORK_LOCKDOWN ?? "on") !== "off";
+  const lockdown = (process.env.COWORK_HARNESS_LOCKDOWN ?? "on") !== "off";
   // Ordering is the guarantee: `vmInit` above returns only a PROVISIONED guest. Sealing one that is still
   // provisioning cuts apt off from the network, so the agent never reaches PATH and the VM is stuck.
   if (lockdown) {
@@ -149,11 +149,11 @@ export function spawnMicroVm(
     } catch (err) {
       // A swallowed firewall failure left L2 running with NO iptables while advertising
       // default-deny isolation — a silent false-green (violates the repo's core principle). With
-      // lockdown on (the default) this MUST fail loud; COWORK_LOCKDOWN=off is the explicit opt-out.
+      // lockdown on (the default) this MUST fail loud; COWORK_HARNESS_LOCKDOWN=off is the explicit opt-out.
       if (firewallFailureAction(lockdown) === "throw") {
         throw new Error(
           `[microvm] guest firewall failed to apply — L2 egress isolation is NOT in effect; the VM is left running. ` +
-            `Set COWORK_LOCKDOWN=off to run WITHOUT isolation deliberately. (${String(err)})`,
+            `Set COWORK_HARNESS_LOCKDOWN=off to run WITHOUT isolation deliberately. (${String(err)})`,
         );
       }
     }
@@ -296,7 +296,7 @@ export function microvmAgent(
 /**
  * Pure policy for what to do when applyGuestFirewall() throws. When lockdown is on
  * (the default), a firewall failure must fail loud ("throw") — L2 advertises default-deny
- * egress, so running with no iptables is a silent false-green. COWORK_LOCKDOWN=off is the
+ * egress, so running with no iptables is a silent false-green. COWORK_HARNESS_LOCKDOWN=off is the
  * explicit opt-out, deliberately running without isolation ("skip"). Extracted so the
  * decision is unit-testable token-free (the live iptables path needs Lima).
  */

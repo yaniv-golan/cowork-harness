@@ -745,7 +745,7 @@ path **needs** (e.g. `office_convert`, `ocr`, `pdf_tables`, `ml_extract`, `cv`, 
 **hard-fails** if the running tier:
 
 - **omits** a declared family (the lean `core` image lacks it), or
-- **cannot verify** it — `protocol` or `COWORK_SKIP_CAPABILITY_PROBE=1`, where no live probe runs. (Not
+- **cannot verify** it — `protocol` or `COWORK_HARNESS_SKIP_CAPABILITY_PROBE=1`, where no live probe runs. (Not
   `replay`: it re-drives and resets the outcome, so the check neither fires nor suppresses there — as the
   paragraph below says.)
 
@@ -2150,7 +2150,7 @@ fidelity.
 - **macOS on arm64 (Apple silicon).** The generated Lima config pins `vmType: vz`, `arch: aarch64`, and an
   arm64 Ubuntu 24.04 cloud image — there is no x86 path.
 - **Lima installed.** The harness invokes `limactl` at `/opt/homebrew/bin/limactl` (Homebrew default);
-  `brew install lima`. Override the binary path with `COWORK_LIMACTL` if it lives elsewhere.
+  `brew install lima`. Override the binary path with `COWORK_HARNESS_LIMACTL` if it lives elsewhere.
 
 **Lifecycle.** Boot (or reuse) the VM once, then run scenarios at the tier:
 
@@ -2165,7 +2165,7 @@ cowork-harness vm prune           # remove orphaned cowork-vm-* VMs from past co
 The instance name is `cowork-vm-<config-hash>` — derived from a hash of the full Lima config (mounts,
 image, staged agent version). A config or agent-version change yields a **new** name, so a stale VM is
 never silently reused; the old one is orphaned until `vm prune` (or `limactl delete`). Pin a fixed name
-with `COWORK_LIMA_INSTANCE`.
+with `COWORK_HARNESS_LIMA_INSTANCE`.
 
 Every `vm` subcommand takes an optional **baseline** (`vm delete desktop-<version>`; default `latest`) and
 acts on the VM derived from it. The argument is never the `cowork-vm-<hash>` name `vm status` prints: a
@@ -2176,11 +2176,11 @@ local install paths. Remove an orphaned VM with `vm prune`.
 
 **Troubleshooting:**
 - **`limactl … failed` / binary not found** — Lima isn't installed or isn't at the expected path. Install
-  it (`brew install lima`) or set `COWORK_LIMACTL` to the real `limactl`.
+  it (`brew install lima`) or set `COWORK_HARNESS_LIMACTL` to the real `limactl`.
 - **A run errors with "microvm <instance> never finished provisioning (…)"** — the VM is Running but
   its provisioning (the apt/toolchain install and the agent symlink) did not complete. Before a run uses
   a Running VM, the harness checks that Lima's boot scripts finished and the agent is on PATH: a VM still
-  provisioning is waited for (up to `COWORK_VM_PROVISION_TIMEOUT_S`, default 900 s), and one whose egress
+  provisioning is waited for (up to `COWORK_HARNESS_VM_PROVISION_TIMEOUT_S`, default 900 s), and one whose egress
   firewall was applied before provisioning finished (whether provisioning is still stuck or has since given
   up) is restarted once to recover. If provisioning ended without the agent, or the restart failed or did
   not help, delete it and retry: `cowork-harness vm delete`.
@@ -2189,9 +2189,9 @@ local install paths. Remove an orphaned VM with `vm prune`.
 - **A run errors with "not mounted — VM not provisioned for this harness config"** — the VM predates a
   config change (its mounts don't match). Recreate it: `cowork-harness vm delete && cowork-harness vm init`.
 - **Egress allowed/denied looks wrong** — the guest firewall and the proxy URL must point at the same
-  gateway. The default Apple-VZ user-network gateway is `192.168.5.2`; override with `COWORK_VM_GATEWAY`
+  gateway. The default Apple-VZ user-network gateway is `192.168.5.2`; override with `COWORK_HARNESS_VM_GATEWAY`
   (a canonical IPv4 literal — an invalid value is rejected, as it feeds the guest iptables rule),
-  and the proxy port with `COWORK_VM_PROXY_PORT` (unset, the host binds an OS-assigned free port;
+  and the proxy port with `COWORK_HARNESS_VM_PROXY_PORT` (unset, the host binds an OS-assigned free port;
   `8899` is only the guest-config fallback when a VM is spawned without an explicit port — not the
   effective default of a normal run). The harness threads one resolved
   gateway value into both the iptables allow rule and the agent's `HTTP(S)_PROXY`, so set the env var

@@ -25,23 +25,23 @@ import type { PlatformBaseline } from "../src/types.js";
  */
 
 describe("Lima gateway IP is overridable and threaded into the firewall rule", () => {
-  const saved = process.env.COWORK_VM_GATEWAY;
+  const saved = process.env.COWORK_HARNESS_VM_GATEWAY;
   afterEach(() => {
-    if (saved === undefined) delete process.env.COWORK_VM_GATEWAY;
-    else process.env.COWORK_VM_GATEWAY = saved;
+    if (saved === undefined) delete process.env.COWORK_HARNESS_VM_GATEWAY;
+    else process.env.COWORK_HARNESS_VM_GATEWAY = saved;
   });
 
   it("defaults to the Apple VZ user-network gateway 192.168.5.2", () => {
-    delete process.env.COWORK_VM_GATEWAY;
+    delete process.env.COWORK_HARNESS_VM_GATEWAY;
     expect(vmGatewayIp()).toBe("192.168.5.2");
   });
 
-  it("honors the COWORK_VM_GATEWAY override", () => {
-    process.env.COWORK_VM_GATEWAY = "10.0.2.2";
+  it("honors the COWORK_HARNESS_VM_GATEWAY override", () => {
+    process.env.COWORK_HARNESS_VM_GATEWAY = "10.0.2.2";
     expect(vmGatewayIp()).toBe("10.0.2.2");
   });
 
-  it("#95: rejects a COWORK_VM_GATEWAY that isn't a canonical IPv4 literal (no shell injection into root provisioning)", () => {
+  it("#95: rejects a COWORK_HARNESS_VM_GATEWAY that isn't a canonical IPv4 literal (no shell injection into root provisioning)", () => {
     // The value is interpolated into a root-run `iptables -A OUTPUT -d ${gatewayIp}` via `sh -c`; anything
     // but a clean IPv4 literal must be refused loud rather than reaching that shell.
     for (const bad of [
@@ -54,20 +54,20 @@ describe("Lima gateway IP is overridable and threaded into the firewall rule", (
       "not-an-ip",
       "", // empty
     ]) {
-      process.env.COWORK_VM_GATEWAY = bad;
+      process.env.COWORK_HARNESS_VM_GATEWAY = bad;
       expect(() => vmGatewayIp(), `should reject ${JSON.stringify(bad)}`).toThrow(/canonical IPv4/);
     }
   });
 
   it("#95: still accepts ordinary IPv4 overrides unchanged", () => {
     for (const ok of ["192.168.5.2", "10.0.2.2", "127.0.0.1", "255.255.255.255", "0.0.0.0"]) {
-      process.env.COWORK_VM_GATEWAY = ok;
+      process.env.COWORK_HARNESS_VM_GATEWAY = ok;
       expect(vmGatewayIp()).toBe(ok);
     }
   });
 
   it("emits the resolved gateway IP into the iptables allow rule", () => {
-    process.env.COWORK_VM_GATEWAY = "10.0.2.2";
+    process.env.COWORK_HARNESS_VM_GATEWAY = "10.0.2.2";
     const script = guestFirewallScript(8899, vmGatewayIp());
     // The allow rule must point at the SAME gateway the proxy URL uses (drift kill).
     expect(script).toContain("-d 10.0.2.2 -p tcp --dport 8899 -j ACCEPT");
@@ -75,7 +75,7 @@ describe("Lima gateway IP is overridable and threaded into the firewall rule", (
   });
 
   it("default gateway still produces the 192.168.5.2 rule", () => {
-    delete process.env.COWORK_VM_GATEWAY;
+    delete process.env.COWORK_HARNESS_VM_GATEWAY;
     const script = guestFirewallScript(8899, vmGatewayIp());
     expect(script).toContain("-d 192.168.5.2 -p tcp --dport 8899 -j ACCEPT");
   });
@@ -86,7 +86,7 @@ describe("firewall failure fails loud under lockdown, opt-out skips", () => {
     expect(firewallFailureAction(true)).toBe("throw");
   });
 
-  it("skips when lockdown is off (the explicit COWORK_LOCKDOWN=off opt-out)", () => {
+  it("skips when lockdown is off (the explicit COWORK_HARNESS_LOCKDOWN=off opt-out)", () => {
     expect(firewallFailureAction(false)).toBe("skip");
   });
 });
@@ -132,15 +132,15 @@ describe("work root is mounted at /sessions (no /cowork-work + symlink)", () => 
 });
 
 describe("Lima instance name is derived from the config hash", () => {
-  const saved = process.env.COWORK_LIMA_INSTANCE;
+  const saved = process.env.COWORK_HARNESS_LIMA_INSTANCE;
   afterEach(() => {
-    if (saved === undefined) delete process.env.COWORK_LIMA_INSTANCE;
-    else process.env.COWORK_LIMA_INSTANCE = saved;
+    if (saved === undefined) delete process.env.COWORK_HARNESS_LIMA_INSTANCE;
+    else process.env.COWORK_HARNESS_LIMA_INSTANCE = saved;
   });
   const mk = (stagedPath: string): PlatformBaseline => ({ agentBinary: { stagedPath } }) as unknown as PlatformBaseline;
 
   it("is cowork-vm-<hash8>, stable for one config and DIFFERENT when the config changes", () => {
-    delete process.env.COWORK_LIMA_INSTANCE;
+    delete process.env.COWORK_HARNESS_LIMA_INSTANCE;
     const a = instanceName(mk("/Users/me/.cowork/agent/2.1.170/claude"));
     const a2 = instanceName(mk("/Users/me/.cowork/agent/2.1.170/claude"));
     const b = instanceName(mk("/Users/me/.cowork/agent/2.1.171/claude")); // agent version bump → new config
@@ -149,8 +149,8 @@ describe("Lima instance name is derived from the config hash", () => {
     expect(b).not.toBe(a); // a config change yields a NEW instance → stale VM can't be silently reused
   });
 
-  it("honors the COWORK_LIMA_INSTANCE override (pinned name)", () => {
-    process.env.COWORK_LIMA_INSTANCE = "my-vm";
+  it("honors the COWORK_HARNESS_LIMA_INSTANCE override (pinned name)", () => {
+    process.env.COWORK_HARNESS_LIMA_INSTANCE = "my-vm";
     expect(instanceName(mk("/Users/me/.cowork/agent/claude"))).toBe("my-vm");
   });
 });

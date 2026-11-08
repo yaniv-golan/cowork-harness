@@ -88,7 +88,7 @@ function writeCache(c: Record<string, string[]>): void {
 }
 
 /** Drop the cached microvm capability probe of each named instance. Called when a VM is deleted or pruned:
- *  the name can come back (a pinned COWORK_LIMA_INSTANCE, or the same config hash) on a VM that was never
+ *  the name can come back (a pinned COWORK_HARNESS_LIMA_INSTANCE, or the same config hash) on a VM that was never
  *  probed, and the cache is otherwise kept for the instance's lifetime. */
 export function forgetMicrovmCapabilities(instances: string[]): void {
   const cache = readCache();

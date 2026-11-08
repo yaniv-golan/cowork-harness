@@ -50,7 +50,7 @@ own — it resolves to `hostloop` or `container` at run time. Both are covered i
 
 - *Filesystem*: a container only sees its own image plus explicit bind mounts. It physically cannot read `~/` or `/Users` — the same sealed view as the VM. The harness mounts **only** what the session setup declares.
 - *Egress*: each run is placed on a **per-run** Docker network marked `internal: true` (no route off-box; see the lifecycle note below) and only the egress proxy is dual-homed onto an external network. So the agent can reach **only** allowlisted hosts, and **only** through the proxy. Direct/raw egress is impossible — not merely discouraged. (`docker/compose.yml` is a standalone reference for this shape; the live harness creates the networks per-run in `src/egress/sidecar.ts` — it does not invoke compose.)
-- *Privileges*: `--cap-drop ALL`, `--security-opt no-new-privileges`, read-only rootfs + tmpfs. A skill can't escalate or persist outside the mounts. (Toggle with `COWORK_LOCKDOWN=off` for debugging; leave it on for parity.)
+- *Privileges*: `--cap-drop ALL`, `--security-opt no-new-privileges`, read-only rootfs + tmpfs. A skill can't escalate or persist outside the mounts. (Toggle with `COWORK_HARNESS_LOCKDOWN=off` for debugging; leave it on for parity.)
 
 > **Egress-network lifecycle (operational).** On `container`/`hostloop`, each run creates a **per-run** pair
 > of Docker networks (`cowork-int-<id>` / `cowork-out-<id>`) plus an egress-proxy container, and **reaps all

@@ -24,7 +24,7 @@ const defaultDeps: VmBaselineArgDeps = { load: loadBaseline, list: listBaselineN
  *
  * A VM name is deliberately NOT accepted as the argument. The mapping is not a function: one VM serves
  * several baselines (their guest config hashes equal), the hash depends on this machine's staged
- * install paths, and `COWORK_LIMA_INSTANCE` overrides it.
+ * install paths, and `COWORK_HARNESS_LIMA_INSTANCE` overrides it.
  */
 export function resolveVmBaselineArg(sub: string, name: string, deps: VmBaselineArgDeps = defaultDeps): VmBaselineArg {
   try {

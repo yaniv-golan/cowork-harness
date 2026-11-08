@@ -15,7 +15,7 @@ import { DEFAULT_USER_VISIBLE_ROOTS, recordedControlOut } from "./helpers/minima
 
 const CLI = resolve("dist/cli.js");
 // `vm status` reaches Lima; these tests talk to a scripted limactl, never to a VM on this machine.
-const FAKE_LIMA = { COWORK_LIMACTL: fakeLimactl({ status: "Running", provisioning: "pending" }) };
+const FAKE_LIMA = { COWORK_HARNESS_LIMACTL: fakeLimactl({ status: "Running", provisioning: "pending" }) };
 const can = existsSync(CLI);
 
 function run(args: string[], env?: NodeJS.ProcessEnv) {
@@ -776,7 +776,7 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
 
   it.skipIf(process.platform !== "darwin")("`vm status` on a stopped VM reports provisioning: null and never probes it", () => {
     const r = run(["vm", "status", "--output-format", "json"], {
-      COWORK_LIMACTL: fakeLimactl({ status: "Stopped", provisioning: "ready" }),
+      COWORK_HARNESS_LIMACTL: fakeLimactl({ status: "Stopped", provisioning: "ready" }),
     });
     expect(r.code).toBe(0);
     expect(r.json?.status).toBe("Stopped");

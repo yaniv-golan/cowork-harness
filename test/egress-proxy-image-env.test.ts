@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 // loads `.env` inside main(), so a value read at module-load time is fixed before `.env` is applied: the
 // sidecar would ignore a `.env` COWORK_PROXY_IMAGE that `doctor` honours. Each case runs in a child node
 // process against the REAL source (via tsx) in that same order — static import first, `.env` second —
-// with COWORK_CONTAINER_RUNTIME pointed at a fake runtime that records its argv and reports the proxy as
+// with COWORK_HARNESS_CONTAINER_RUNTIME pointed at a fake runtime that records its argv and reports the proxy as
 // running. No Docker, no network. With FAKE_RUNTIME_NO_IMAGE=1 the fake reports the image as absent, so the
 // sidecar takes its `build -t` branch too.
 
@@ -59,7 +59,7 @@ function sidecarImage(opts: { env: Record<string, string | undefined>; dotenv?: 
     const env: Record<string, string> = {};
     for (const [k, v] of Object.entries(process.env)) if (v !== undefined && k !== "COWORK_PROXY_IMAGE") env[k] = v;
     for (const [k, v] of Object.entries(opts.env)) if (v !== undefined) env[k] = v;
-    env.COWORK_CONTAINER_RUNTIME = runtime;
+    env.COWORK_HARNESS_CONTAINER_RUNTIME = runtime;
     env.FAKE_RUNTIME_LOG = log;
     if (opts.noImage) env.FAKE_RUNTIME_NO_IMAGE = "1";
     const r = spawnSync(process.execPath, ["--import", "tsx", script], { encoding: "utf8", timeout: 20_000, env });

@@ -228,7 +228,7 @@ async function probe(cmd: string, args: string[], timeoutMs: number): Promise<st
 
 /** limactl path — mirrors lima.ts's resolution so the sampler needn't import run/ code. */
 function limaBin(): string {
-  return process.env.COWORK_LIMACTL ?? "/opt/homebrew/bin/limactl";
+  return process.env.COWORK_HARNESS_LIMACTL ?? "/opt/homebrew/bin/limactl";
 }
 
 /** "123.4MiB" | "2GiB" | "512KiB" | "900B" -> bytes; undefined on an unrecognized unit. */

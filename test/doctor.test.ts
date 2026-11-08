@@ -108,7 +108,7 @@ describe("doctor — runDoctorChecks", () => {
   it("microvm blocks when limactl is missing (and a Docker outage does NOT affect it)", () => {
     const noLima = runDoctorChecks("microvm", probe({ limaAvailable: () => false }));
     expect(get(noLima, "lima").status).toBe("fail");
-    expect(get(noLima, "lima").remedy).toMatch(/Lima|limactl|COWORK_LIMACTL/);
+    expect(get(noLima, "lima").remedy).toMatch(/Lima|limactl|COWORK_HARNESS_LIMACTL/);
     expect(blocking(noLima)).toContain("lima");
     // Docker being down is irrelevant to the microvm verdict (it never probes the runtime).
     expect(blocking(runDoctorChecks("microvm", probe({ runtimeAvailable: () => false, runtimeDaemonUp: () => false })))).toEqual([]);

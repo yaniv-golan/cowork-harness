@@ -129,8 +129,8 @@ describe("probeMicrovmOmitted — silent vmStatus gate", () => {
     });
   }
 
-  it("runs the capability probe through the configured limactl (COWORK_LIMACTL), like every other Lima call", () => {
-    process.env.COWORK_LIMACTL = "/fake/bin/limactl";
+  it("runs the capability probe through the configured limactl (COWORK_HARNESS_LIMACTL), like every other Lima call", () => {
+    process.env.COWORK_HARNESS_LIMACTL = "/fake/bin/limactl";
     try {
       spawnSync.mockImplementation(
         router(
@@ -143,7 +143,7 @@ describe("probeMicrovmOmitted — silent vmStatus gate", () => {
       expect(cmds.length).toBeGreaterThan(0);
       expect(new Set(cmds)).toEqual(new Set(["/fake/bin/limactl"]));
     } finally {
-      delete process.env.COWORK_LIMACTL;
+      delete process.env.COWORK_HARNESS_LIMACTL;
     }
   });
 

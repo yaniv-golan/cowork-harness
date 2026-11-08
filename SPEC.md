@@ -1312,8 +1312,8 @@ Covered-surface changes follow semver as of `1.0.0` — see [RELEASING.md](./REL
   added. A schema that rejects frames the code sends is worse than one that grows.) The golden vector
   pack is coupled: every schema definition must be exercised by a vector, so a new frame ships with
   evidence or not at all.
-- **Environment variables** — the documented `COWORK_HARNESS_*` knobs plus `COWORK_AGENT_BINARY` and
-  `COWORK_AGENT_IMAGE`. Renaming a documented var or changing its meaning is breaking.
+- **Environment variables** — the documented `COWORK_HARNESS_*` knobs plus `COWORK_AGENT_BINARY`,
+  `COWORK_AGENT_IMAGE`, `COWORK_HOST_AGENT_BINARY` and `COWORK_PROXY_IMAGE`. Renaming a documented var or changing its meaning is breaking.
 - **Packaged GitHub Action** — `action.yml` inputs (`command`, `path`, `version`, `strict`,
   `fail-on-skill-drift`, `extra-args`, `summary`, `anthropic-api-key`, `model`) and outputs (`ok`,
   `envelope-path`, `summary-md`).

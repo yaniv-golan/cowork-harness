@@ -99,7 +99,7 @@ So **Linux live == `container` only**: `microvm` is Apple-VZ (macOS), and `hostl
      ```
      (A run on the core image that uses an omitted capability is flagged with a `missing_capability`
      verdict signal — see [`requires_capabilities`](./scenario.md#declaring-required-capabilities-requires_capabilities)
-     in docs/scenario.md, or the `COWORK_SKIP_CAPABILITY_PROBE` var under
+     in docs/scenario.md, or the `COWORK_HARNESS_SKIP_CAPABILITY_PROBE` var under
      [Reproducibility knobs](#reproducibility-knobs) below.) Both `-f docker/Dockerfile.agent .` paths are **repo-relative** — run from a source checkout, not a global `npm install -g`. On a global install, run `cowork-harness doctor --tier container` instead — it prints the exact `docker build` command with the correct package-local Dockerfile path.
    - **`microvm` (Lima / Apple-VZ, no Docker):**
      ```bash
@@ -1142,18 +1142,19 @@ Most runs need **none** of these — the defaults are correct. They're grouped b
 
 ### Container, agent image and agent binary
 
-- `COWORK_LOCKDOWN=off` — relax container hardening for debugging (default `on`). With it `on`, an L2 microVM whose guest egress firewall fails to apply **aborts loudly** rather than running un-isolated.
-- `COWORK_CONTAINER_RUNTIME=podman` — use Podman instead of Docker.
+- `COWORK_HARNESS_LOCKDOWN=off` — relax container hardening for debugging (default `on`). With it `on`, an L2 microVM whose guest egress firewall fails to apply **aborts loudly** rather than running un-isolated.
+- `COWORK_HARNESS_CONTAINER_RUNTIME=podman` — use Podman instead of Docker.
 - `COWORK_AGENT_IMAGE=<tag>` — override the agent image name (default `cowork-agent-base:2`; set to an empty or blank value, it falls back to the default rather than passing an empty ref to the container runtime). It governs the Bash sidecar at **both** `container` and `hostloop` (hostloop's agent is a native host process, but its `mcp__workspace__bash` runs in the Docker sidecar), so a full-parity image changes what a skill's shell-outs find at either tier. Provenance: the image tag + digest are stamped into a recorded **cassette's** environment; `result.json` records the fidelity tier only and never names the image — log the variable in your CI step if a plain run must carry it.
 - `COWORK_AGENT_BINARY=<path>` — override the auto-detected staged agent ELF.
 - `COWORK_HOST_AGENT_BINARY=<path>` — override the auto-detected staged **native macOS** agent binary the `hostloop` tier spawns directly (distinct from `COWORK_AGENT_BINARY`, the container ELF). Auto-detection reads both staging layouts, `claude-code/<ver>/claude.app/…` and the per-build `claude-code/<ver>/<build>/claude.app/…`.
 - `COWORK_HARNESS_VERIFY_AGENT_SHA=0` — skip the default sha256 integrity check of the resolved agent ELF against the baseline's recorded hash (on by default).
 - `COWORK_HARNESS_FORBID_SPAWN=1` — refuse to launch a model anywhere the harness would: `run`/`skill`/`record` stop after every load-time check (before any image probe, egress sidecar or spawn), `chat` before its egress sidecar or agent spawn (and `chat --raw` before its `docker run`), and the `--decider-llm` transport before `claude -p`. The fast test lane sets it so a regressed load-time refusal fails red instead of launching a real agent; it has no other use.
 - `COWORK_MANAGED_CONFIG`, `COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE` — **removed in 5.0.0.** Setting either to a non-empty value refuses every command at startup (exit 2) with what replaced it: `protocol` always gives the agent its own config dir, and a pinned `plugins.config_dir` is single-run. An empty value counts as unset.
+- `COWORK_LOCKDOWN`, `COWORK_LIMA_INSTANCE`, `COWORK_LIMACTL`, `COWORK_VM_PROVISION_TIMEOUT_S`, `COWORK_VM_PROXY_PORT`, `COWORK_VM_GATEWAY`, `COWORK_CONTAINER_RUNTIME`, `COWORK_SKIP_CAPABILITY_PROBE` — **renamed in 5.0.0** to the same name with `COWORK_HARNESS_` in place of `COWORK_` (for example `COWORK_HARNESS_LOCKDOWN`). Setting an old name to a non-empty value refuses every command at startup (exit 2), naming the new one, even when the new one is set too.
 - `COWORK_HARNESS_NO_ORPHAN_SWEEP=1` — at `protocol` and `hostloop`, turn off the orphan sweep that runs when a run ends: the search for background processes the agent started that have already detached from it (on Linux by `COWORK_HARNESS_RUN_TAG`, on macOS by owner, terminal, start time and working directory). The agent's own process group and its descendants are still stopped. See [fidelity-gaps.md](./fidelity-gaps.md#stopping-a-host-tier-run-stops-the-processes-the-agent-started).
 - `COWORK_HARNESS_RUN_TAG` — set BY the harness, not read from your environment: a per-run value in the host agent's environment at `protocol` and `hostloop`, inherited by every process the agent starts, so the Linux orphan sweep can find them. At `protocol` the model can see it with `env` in a Bash call; at `hostloop` it cannot, because the native Bash tool is disabled there and the sidecar's shell gets a proxy-only environment. Real Cowork has no such variable.
 - `COWORK_ARTIFACTS_ROOT` — **not read from your environment**: set BY the harness in the agent's environment when the session sets `agent_env.artifacts_root` (the outputs directory as the agent sees it, plus that relative path). An export of it in your shell is scrubbed at `protocol` and `hostloop` and never reaches the agent; see [session.md](./session.md#agent-env-knob-tier-uniform).
-- `COWORK_SKIP_CAPABILITY_PROBE=1` — skip the per-run capability probe (the harness otherwise probes the agent image/VM for the document/OCR/Office capabilities the real Cowork rootfs ships and **fails a run that uses one the image omits** — a likely false negative; suppress per-scenario with `allow_missing_capability: true`, or rebuild full parity).
+- `COWORK_HARNESS_SKIP_CAPABILITY_PROBE=1` — skip the per-run capability probe (the harness otherwise probes the agent image/VM for the document/OCR/Office capabilities the real Cowork rootfs ships and **fails a run that uses one the image omits** — a likely false negative; suppress per-scenario with `allow_missing_capability: true`, or rebuild full parity).
 
 ### Deciders and dialogs
 
@@ -1230,7 +1231,7 @@ The egress proxy URL and Docker network are **not** overridable: each run builds
 
 - `COWORK_PROXY_IMAGE` — overrides the egress proxy Docker image name (default `cowork-egress-proxy:5`; set to an empty or blank value, it falls back to the default). It can also be set in `.env` or a `--dotenv` file; the per-run sidecar and `doctor` both read that value.
 - `CLAUDE_FORCE_HOST_LOOP=1` — forces the host-loop path regardless of the baseline's loop decision (the `cowork` tier's auto-pick).
-- `COWORK_LIMACTL` — overrides the `limactl` binary path (default `/opt/homebrew/bin/limactl`).
+- `COWORK_HARNESS_LIMACTL` — overrides the `limactl` binary path (default `/opt/homebrew/bin/limactl`).
 
 ### Strictness escape hatches
 
@@ -1266,10 +1267,10 @@ Each is overridden by the matching explicit flag.
 
 ### L2 microVM
 
-- `COWORK_VM_GATEWAY` — overrides the Lima host-proxy gateway IP (default `192.168.5.2`; must be a canonical IPv4 literal — an invalid value is rejected, since it is interpolated into the guest firewall rule).
-- `COWORK_VM_PROXY_PORT` — pins the egress-proxy port (unset, the host binds an OS-assigned free port and threads that same value into the guest firewall + `HTTP(S)_PROXY`).
-- `COWORK_LIMA_INSTANCE` — pins a fixed Lima instance name. By default the instance is named `cowork-vm-<config-hash>` (a config change → a fresh VM), and `vm prune` removes orphaned ones.
-- `COWORK_VM_PROVISION_TIMEOUT_S` — how long a run waits (seconds, default `900`) for an already-Running VM to finish provisioning before it fails with `microvm <instance> never finished provisioning (…)`. A VM that was Running but not yet provisioned — typically a first boot that outlasted `limactl start` — is waited for rather than used as-is.
+- `COWORK_HARNESS_VM_GATEWAY` — overrides the Lima host-proxy gateway IP (default `192.168.5.2`; must be a canonical IPv4 literal — an invalid value is rejected, since it is interpolated into the guest firewall rule).
+- `COWORK_HARNESS_VM_PROXY_PORT` — pins the egress-proxy port (unset, the host binds an OS-assigned free port and threads that same value into the guest firewall + `HTTP(S)_PROXY`).
+- `COWORK_HARNESS_LIMA_INSTANCE` — pins a fixed Lima instance name. By default the instance is named `cowork-vm-<config-hash>` (a config change → a fresh VM), and `vm prune` removes orphaned ones.
+- `COWORK_HARNESS_VM_PROVISION_TIMEOUT_S` — how long a run waits (seconds, default `900`) for an already-Running VM to finish provisioning before it fails with `microvm <instance> never finished provisioning (…)`. A VM that was Running but not yet provisioned — typically a first boot that outlasted `limactl start` — is waited for rather than used as-is.
 
 ### Advanced / internal escape hatches
 

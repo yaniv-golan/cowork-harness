@@ -2052,7 +2052,7 @@ export const ScenarioObject = z.strictObject({
     ),
   // capability families this skill's core path NEEDS (e.g. office_convert, ocr, pdf_tables). When
   // set, the run HARD-FAILS if the running tier omits one (clause a) or cannot verify them — protocol /
-  // replay / COWORK_SKIP_CAPABILITY_PROBE (clause b) — closing the false-green for extraction-heavy skills.
+  // replay / COWORK_HARNESS_SKIP_CAPABILITY_PROBE (clause b) — closing the false-green for extraction-heavy skills.
   // `allow_missing_capability: true` opts out. Validated against the known family list at run time.
   requires_capabilities: z
     .array(z.string())
