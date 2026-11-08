@@ -15,12 +15,12 @@
 // (src/bounded-spawn.ts is not reused: it bounds from inside this process, which is exactly what cannot work here,
 // and this file is loaded outside the TypeScript build.)
 import { execFile } from "node:child_process";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { workerData } from "node:worker_threads";
 import { bounded } from "./sync-child-diag.mjs";
 
-const { sab, fileSab, pid, runDir, baseMs, pollMs, graceMs, failFirstListing } = workerData;
+const { sab, fileSab, pid, runDir, baseMs, pollMs, graceMs, failFirstListing, stallFinalSummaryMs } = workerData;
 const slots = new BigInt64Array(sab);
 const fileBytes = new Uint8Array(fileSab);
 // Slot layout, shared with sync-child-watchdog.ts.
@@ -63,13 +63,15 @@ let listings = 0;
 async function descendants(root) {
   // The watchdog's own test makes the first listing fail, to prove a failed listing is retried.
   if (failFirstListing && listings++ === 0) return null;
-  const r = await run("ps", ["-A", "-ww", "-o", "pid=,ppid=,pgid=,command="], 5000);
+  const r = await run("ps", ["-A", "-ww", "-o", "pid=,ppid=,pgid=,stat=,command="], 5000);
   if (!r.ok) return null;
   const rows = r.text
     .split("\n")
-    .map((l) => l.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.*)$/))
+    .map((l) => l.match(/^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/))
     .filter(Boolean)
-    .map((m) => ({ pid: +m[1], ppid: +m[2], pgid: +m[3], command: m[4] }));
+    // A zombie has already exited: a blocked main thread is just not reaping it. It is neither hung nor killable.
+    .filter((m) => !m[4].startsWith("Z"))
+    .map((m) => ({ pid: +m[1], ppid: +m[2], pgid: +m[3], command: m[5] }));
   const out = [];
   const walk = (p, depth) => {
     for (const c of rows)
@@ -133,8 +135,18 @@ let episode = null;
 let busy = false;
 const RETRY_MS = 10_000n;
 
+// A temp file and a rename, so a reader only ever sees a complete summary, even if the fork is killed mid-write: the
+// last write lands just after the kill that lets the fork finish. The temp file stays in the event directory, because
+// readers take every entry of a run directory for an event directory.
 function writeSummary(dir, summary) {
-  writeFileSync(join(dir, "summary.json"), JSON.stringify(summary, null, 2));
+  const tmp = join(dir, "summary.json.tmp");
+  const fd = openSync(tmp, "w");
+  // The watchdog's own test holds the last write open here, to prove a fork that dies at this point loses nothing.
+  if (stallFinalSummaryMs > 0 && summary.stacks === "written")
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, stallFinalSummaryMs);
+  writeSync(fd, JSON.stringify(summary, null, 2));
+  closeSync(fd);
+  renameSync(tmp, join(dir, "summary.json"));
 }
 
 /**

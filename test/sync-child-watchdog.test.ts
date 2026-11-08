@@ -21,14 +21,34 @@ interface Outcome {
   code: number | null;
   out: string;
   hangBase: string;
-  events: { dir: string; summary: { file: string; children: { command: string }[]; killed: boolean } }[];
+  events: { dir: string; summary: { file: string; children: { command: string }[]; killed: boolean; stacks: string } }[];
   runDirs: string[];
   ms: number;
+  guardFired: boolean;
 }
 
 let n = 0;
 /** Run one fixture test file under the real setup files, with a T of `tMs`, a grace of 1 s and a test timeout of `testTimeoutMs`. */
-function runFixture(body: string, opts: { tMs?: number; testTimeoutMs?: number; env?: Record<string, string> } = {}): Promise<Outcome> {
+async function runFixture(
+  body: string,
+  opts: { tMs?: number; testTimeoutMs?: number; env?: Record<string, string> } = {},
+): Promise<Outcome> {
+  const r = await spawnFixture(body, opts);
+  expect(r.guardFired, `the 150 s guard killed the fixture after ${r.ms} ms: ${r.out.slice(-2000)}`).toBe(false);
+  return r;
+}
+
+/** A summary is complete or the run is broken: the watchdog promises the first, so this never skips an unreadable one. */
+function readSummary(path: string): Outcome["events"][number]["summary"] {
+  const text = readFileSync(path, "utf8");
+  try {
+    return JSON.parse(text) as Outcome["events"][number]["summary"];
+  } catch (e) {
+    throw new Error(`${path} (${Buffer.byteLength(text)} bytes) is not JSON: ${(e as Error).message}`);
+  }
+}
+
+function spawnFixture(body: string, opts: { tMs?: number; testTimeoutMs?: number; env?: Record<string, string> }): Promise<Outcome> {
   const dir = join(work, `case-${++n}`);
   mkdirSync(dir);
   const file = join(dir, "fixture.test.ts");
@@ -72,19 +92,33 @@ function runFixture(body: string, opts: { tMs?: number; testTimeoutMs?: number; 
     child.stdout.on("data", (d) => (out += d));
     child.stderr.on("data", (d) => (out += d));
     // gdb attaches (Linux CI) can take tens of seconds per process; this only bounds a broken watchdog.
-    const guard = setTimeout(() => child.kill("SIGKILL"), 150_000);
+    let guardFired = false;
+    const guard = setTimeout(() => {
+      guardFired = true;
+      child.kill("SIGKILL");
+    }, 150_000);
     child.on("error", fail);
-    child.on("close", (code) => {
+    // A throw in this callback would leave the promise pending until the test's own timeout, so it rejects instead.
+    child.on("close", (code, signal) => {
       clearTimeout(guard);
-      const runDirs = existsSync(hangBase) ? readdirSync(hangBase) : [];
-      const events = runDirs.flatMap((r) =>
-        readdirSync(join(hangBase, r)).map((e) => ({
-          dir: join(hangBase, r, e),
-          summary: JSON.parse(readFileSync(join(hangBase, r, e, "summary.json"), "utf8")),
-        })),
-      );
-      // eslint-disable-next-line no-control-regex
-      done({ code, out: out.replace(/\x1b\[[0-9;]*m/g, ""), hangBase, events, runDirs, ms: Date.now() - t0 });
+      const ms = Date.now() - t0;
+      try {
+        const runDirs = existsSync(hangBase) ? readdirSync(hangBase) : [];
+        const events = runDirs.flatMap((r) =>
+          readdirSync(join(hangBase, r)).map((e) => ({
+            dir: join(hangBase, r, e),
+            summary: readSummary(join(hangBase, r, e, "summary.json")),
+          })),
+        );
+        // eslint-disable-next-line no-control-regex
+        done({ code, out: out.replace(/\x1b\[[0-9;]*m/g, ""), hangBase, events, runDirs, ms, guardFired });
+      } catch (e) {
+        fail(
+          new Error(
+            `reading the fixture's dump failed: ${(e as Error).message} (code ${code}, signal ${signal}, ${ms} ms, guardFired ${guardFired}); fixture output:\n${out.slice(-2000)}`,
+          ),
+        );
+      }
     });
   });
 }
@@ -131,6 +165,34 @@ describe("the sync-child watchdog", () => {
     }
     // Well before the 600 s the child would have taken.
     expect(r.ms).toBeLessThan(150_000);
+  }, 180_000);
+
+  it("a fork that dies during the last summary write leaves the previous complete summary", async () => {
+    // The last write comes right after the kill that lets the fixture finish. Held open here, it is still going when
+    // the fork exits, which a write that truncates summary.json first would leave empty.
+    const r = await runFixture(`${IMPORTS}it("hangs", () => { spawnSync("sh", ["-c", "sleep 600"]); });\n`, {
+      env: { COWORK_TEST_HANG_STALL_FINAL_SUMMARY_MS: "30000" },
+    });
+    expect(r.code, r.out).not.toBe(0);
+    expect(r.ms).toBeLessThan(30_000);
+    expect(r.events).toHaveLength(1);
+    const ev = r.events[0]!;
+    expect(ev.summary.stacks).toBe("pending"); // so the stalled write really was the one in progress
+    expect(ev.summary.children.map((c) => c.command)).toContain("sleep 600");
+    expect(r.out).toMatch(/this test blocked its process past the sync-child watchdog's limit: .*sleep 600/);
+    expect(r.out).toMatch(/blocked \d+s on .*sleep 600/);
+  }, 180_000);
+
+  it("a child that exited but is not yet reaped is not reported as the hung child", async () => {
+    // The spin stops this thread's event loop, so the exited child stays a zombie until it ends.
+    const r = await runFixture(
+      `import { spawn } from "node:child_process";\nimport { it } from "vitest";\nit("spins", () => { spawn("true"); const end = Date.now() + 8000; while (Date.now() < end); });\n`,
+    );
+    expect(r.code, r.out).not.toBe(0);
+    expect(r.out).toMatch(/no child process: this test's own thread was blocked/);
+    expect(r.events).toHaveLength(1);
+    expect(r.events[0]!.summary.killed).toBe(false);
+    expect(r.events[0]!.summary.children).toEqual([]);
   }, 180_000);
 
   it("retries when its first process listing fails, instead of leaving the hang in place", async () => {
