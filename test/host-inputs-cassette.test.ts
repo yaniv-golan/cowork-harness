@@ -173,6 +173,35 @@ describe.skipIf(!existsSync(CLI))("verify-cassettes --host-inputs / --strict", (
     return { cfg, c: cassette({ hostInputs: frozen, session: "session.yaml" }) };
   };
 
+  it("a host skill the init frame lists is reported once, by hostInputs: a plain run fails, --host-inputs passes; another skill still gates", () => {
+    const cfg = fakeHostConfig([{ key: "a@m" }], { sk: { "SKILL.md": "s" } });
+    const frozen = stageHostInputs(
+      selectHostInputs(true, cfg, () => {}),
+      [],
+      mkdtempSync(join(tmpdir(), "fh-rec-")),
+    ).hostInputs;
+    const result = JSON.stringify({ type: "result", subtype: "success", result: "ok" });
+    const c = cassette({
+      hostInputs: frozen,
+      session: "session.yaml",
+      events: [init({ skills: ["sk", "a:helper"], plugins: [{ name: "a" }], tools: [] }), result],
+    });
+    const plain = run([], c, cfg);
+    expect(plain.code, plain.all).toBe(1);
+    expect(plain.env.results[0].findings.map((f: { sample: string }) => f.sample).sort()).toEqual(["a@m", "sk"]);
+    expect(plain.env.results[0].findings.filter((f: { where: string }) => f.where.includes("skills[]"))).toEqual([]);
+    const local = run(["--host-inputs"], c, cfg);
+    expect(local.code, local.all).toBe(0);
+    const other = cassette({
+      hostInputs: frozen,
+      session: "session.yaml",
+      events: [init({ skills: ["sk", "not-an-input"], tools: [] }), result],
+    });
+    const still = run(["--host-inputs"], other, cfg);
+    expect(still.code, still.all).toBe(1);
+    expect(still.env.results[0].findings.map((f: { sample: string }) => f.sample)).toEqual(["not-an-input"]);
+  });
+
   it("--strict without --host-inputs, or with --skip-staleness, is a usage error", () => {
     const r = run(["--strict"], cassette(), fakeHostConfig([]));
     expect(r.code, r.all).toBe(2);

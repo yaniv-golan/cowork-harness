@@ -19,7 +19,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadBaseline } from "../src/baseline.js";
 import { buildLaunchPlan, loadSession, resolveLaunchSources, type SessionConfig } from "../src/session.js";
-import { hostPluginMountPath, hostSelectionSetHash, selectHostInputs, stageHostInputs, hostInputsSetHash } from "../src/host-inputs.js";
+import {
+  hostPluginMountPath,
+  hostSnapshotDir,
+  hostSelectionSetHash,
+  selectHostInputs,
+  stageHostInputs,
+  hostInputsSetHash,
+} from "../src/host-inputs.js";
 import { hashHostTree } from "../src/run/skill-hash.js";
 import { stageWorkspace } from "../src/runtime/stage.js";
 import { stageHostLoopWorkspace } from "../src/runtime/hostloop-stage.js";
@@ -306,7 +313,8 @@ describe("plugins.from_host: hashes", () => {
 
 describe("plugins.from_host: every tier stages the hashed copy as it is", () => {
   function gitPlugin() {
-    const cfg = fakeHostConfig([{ key: "a@m", files: { "tracked.md": "t" } }]);
+    const cfg = fakeHostConfig([{ key: "a@m", files: { "tracked.md": "t" } }], { sk: { "SKILL.md": "s" } });
+    symlinkSync("SKILL.md", join(cfg, "skills", "sk", "alias.md")); // and in a skill
     const root = selectHostInputs(true, cfg, quiet).plugins[0]!.installPath;
     const git = (...a: string[]) => spawnSync("git", ["-C", root, ...a], { encoding: "utf8" });
     git("init", "-q");
@@ -332,6 +340,10 @@ describe("plugins.from_host: every tier stages the hashed copy as it is", () => 
       expect(readdirSync(staged).sort(), tier).toContain("untracked.md");
       expect(readlinkSync(join(staged, "alias.md")), tier).toBe("tracked.md");
       expect(hashHostTree(staged).sha256, tier).toBe(p.hostInputs!.plugins[0]!.sha256);
+      // the skill, where this tier's agent reads it: mnt/.claude at container, the run's config dir otherwise
+      const skill = tier === "container" ? join(mnt, ".claude", "skills", "sk") : join(p.configDir, "skills", "sk");
+      expect(readlinkSync(join(skill, "alias.md")), tier).toBe("SKILL.md");
+      expect(hashHostTree(skill).sha256, tier).toBe(p.hostInputs!.skills[0]!.sha256);
     }
   });
 });
@@ -362,29 +374,46 @@ describe("plugins.from_host: a later leg stages the snapshot as it is too", () =
 });
 
 describe("plugins.from_host: a `workdir: persistent` later leg re-hashes what it reuses", () => {
-  function persistentLeg(tier: "container" | "protocol") {
+  type Tier = "container" | "hostloop" | "protocol";
+  const r = { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" };
+  const stageAt = (tier: Tier, p: ReturnType<typeof plan>["plan"], tree: string) =>
+    tier === "container"
+      ? stageWorkspace(p, tree, r)
+      : tier === "hostloop"
+        ? stageHostLoopWorkspace(p, tree, r)
+        : stageProtocolMounts(p, tree);
+  function persistentLeg(tier: Tier, between: (runRoot: string, tree: string) => void = () => {}) {
     const cfg = fakeHostConfig([{ key: "a@m" }], { sk: { "SKILL.md": "s" } });
+    // in-tree relative links in both: an untouched tree must still pass on the next leg
+    symlinkSync("README.md", join(selectHostInputs(true, cfg, quiet).plugins[0]!.installPath, "alias.md"));
+    symlinkSync("SKILL.md", join(cfg, "skills", "sk", "alias.md"));
     vi.stubEnv("CLAUDE_CONFIG_DIR", cfg);
     const runRoot = mkdtempSync(join(tmpdir(), "fh-pers-"));
     const s = session(true);
     const leg1 = plan(s, runRoot, tier).plan;
     const tree = join(runRoot, "tree");
     mkdirSync(tree, { recursive: true });
-    if (tier === "container") stageWorkspace(leg1, tree, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" });
-    else stageProtocolMounts(leg1, tree);
+    stageAt(tier, leg1, tree);
+    between(runRoot, tree);
     const sources = resolveLaunchSources(s, latest, tier, false, { quiet: true, runRoot });
     vi.spyOn(process.stderr, "write").mockReturnValue(true);
     const leg2 = buildLaunchPlan(s, latest, runRoot, tier, false, "local", sources, { runRoot, legStage: { workdir: "persistent" } });
     vi.restoreAllMocks();
-    const stage2 = () =>
-      tier === "container"
-        ? stageWorkspace(leg2, tree, { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" })
-        : stageProtocolMounts(leg2, tree);
+    const stage2 = () => stageAt(tier, leg2, tree);
     const skillsDir = tier === "container" ? join(tree, ".claude", "skills") : join(leg2.configDir, "skills");
     return { tree, stage2, skillsDir };
   }
 
-  for (const tier of ["container", "protocol"] as const) {
+  for (const tier of ["container", "hostloop", "protocol"] as const) {
+    it(`${tier}: OS metadata appearing in the staged tree or in the run's snapshot is not a change`, () => {
+      const a = persistentLeg(tier, (runRoot, tree) => {
+        writeFileSync(join(tree, ".local-plugins", "marketplaces", "m", "a", ".DS_Store"), "x");
+        writeFileSync(join(hostSnapshotDir(runRoot), "plugins", "m", "a", ".DS_Store"), "x");
+        writeFileSync(join(hostSnapshotDir(runRoot), "skills", "sk", ".DS_Store"), "x");
+      });
+      expect(() => a.stage2()).not.toThrow();
+    });
+
     it(`${tier}: an untouched tree passes; a plugin or a skill an earlier leg edited is refused`, () => {
       const a = persistentLeg(tier);
       expect(() => a.stage2()).not.toThrow();

@@ -2120,6 +2120,7 @@ export function scanCassette(cassette: ScannableCassette, allow: AllowInput[]): 
       ...collectDeclaredPlugins(cassette.events),
       ...(cassette.hostInputs?.plugins ?? []).flatMap((p) => (typeof p?.key === "string" ? [p.key.slice(0, p.key.indexOf("@"))] : [])),
     ];
+    const declaredSkills = (cassette.hostInputs?.skills ?? []).flatMap((s) => (typeof s?.name === "string" ? [s.name] : []));
     const structural = (lines: string[] | undefined, key: string) =>
       lines?.forEach((l, i) => {
         let decoded: unknown;
@@ -2129,7 +2130,7 @@ export function scanCassette(cassette: ScannableCassette, allow: AllowInput[]): 
           rethrowIfExit(caught);
           return; // a non-JSON transcript line has no name fields to read
         }
-        findings.push(...scanHostInventory(decoded, `${key}[${i}]`, allow, declaredPlugins));
+        findings.push(...scanHostInventory(decoded, `${key}[${i}]`, allow, declaredPlugins, declaredSkills));
       });
     structural(cassette.events, "events");
     structural(cassette.controlOut, "controlOut");

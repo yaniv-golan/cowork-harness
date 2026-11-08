@@ -68,7 +68,8 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string, fixtureRoots: 
   } else if (!plan.resume) {
     // managed config dir (settings.json/cowork_settings.json/skills) -> mnt/.claude
     // preserve symlinks as-is during staging; do not copy out-of-tree content
-    cpSync(plan.configDir, join(mntHost, ".claude"), { recursive: true, dereference: false });
+    // verbatimSymlinks: a host skill's in-tree relative link stays relative, as its recorded hash holds it.
+    cpSync(plan.configDir, join(mntHost, ".claude"), { recursive: true, dereference: false, verbatimSymlinks: true });
     // session content (uploads/projects/plugins) -> under mnt
     const mntHostReal = realpathSync(mntHost); // resolved once; tmpdir() is symlinked on macOS
     for (const mt of plan.mounts) {

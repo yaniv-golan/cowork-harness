@@ -9,6 +9,7 @@ import type { HostLoopBindMount } from "./argv.js";
 import { resolveDeclaredSource } from "../staging/resolve.js";
 import { crossTierFixtureWarning, stageWorkspaceFixture } from "../fixture/workspace.js";
 import type { SessionRoots } from "../fixture/session-tokens.js";
+import { verifyStagedHostInputs } from "../host-inputs.js";
 
 export type { HostLoopBindMount };
 
@@ -40,6 +41,9 @@ export function resolveHostLoopBindMounts(plan: LaunchPlan, sessionRoot: string)
 export function stageHostLoopWorkspace(plan: LaunchPlan, mntHost: string, fixtureRoots: SessionRoots): { mcpHostPath?: string } {
   for (const d of ["uploads", "outputs", ".local-plugins", ".remote-plugins"]) mkdirSync(join(mntHost, d), { recursive: true });
   mkdirSync(join(plan.configDir, "projects"), { recursive: true }); // production: Dr(join(c,"projects"))
+  // A `workdir: persistent` later leg reuses the config dir (and its host skills) the earlier legs used: re-hash what it
+  // reuses before staging, as container and protocol do.
+  if (plan.legStage?.workdir === "persistent") verifyStagedHostInputs(plan, mntHost, join(plan.configDir, "skills"));
   if (!plan.resume) {
     const mntHostReal = realpathSync(mntHost);
     for (const mt of plan.mounts) {

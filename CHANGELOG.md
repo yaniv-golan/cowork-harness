@@ -35,8 +35,11 @@ All notable changes to this project are documented here. The format is based on
   any tier, and `verify-cassettes` reports each name as a host-inventory finding.
 - **`verify-cassettes --host-inputs`** compares a `from_host` cassette's recorded `hostInputs` with this machine's
   installed set and reports a difference as a note. **`--strict`**, valid only with `--host-inputs`, makes that
-  difference a failure (exit 1); it does not escalate any other note. A cassette that recorded no `hostInputs` is
-  reported as "not recorded", a note.
+  difference a failure (exit 1); it does not escalate any other note, and together with `--skip-staleness` it is a
+  usage error (exit 2). A cassette that recorded no `hostInputs` is reported as "not recorded", a note. Under
+  `--host-inputs`, the installed names a cassette carries only as its recorded inputs are one note rather than
+  privacy findings, so the check can pass on the machine they come from; every other finding still fails, and a plain
+  `verify-cassettes` still fails on those names.
 
 ### Fixed
 

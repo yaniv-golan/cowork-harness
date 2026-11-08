@@ -373,7 +373,8 @@ export function verifyStagedHostInputs(
 }
 
 function hashOrRefuse(dir: string, what: string): string {
-  const { sha256, errors } = hashHostTree(dir);
+  // The copy filter's skip set: a marker or an OS metadata file appearing after the copy is not a change to the input.
+  const { sha256, errors } = hashHostTree(dir, HOST_MARKER_FILES);
   if (errors.length) refuse(`cannot hash the staged copy of ${what}: ${errors.join("; ")}`);
   return sha256;
 }
