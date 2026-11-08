@@ -142,6 +142,9 @@ describe("runGateCommand", () => {
       /* already gone */
     }
     expect(g).toMatchObject({ ok: false, timedOut: true, code: 0 });
+    expect(gateFailureText(g, 1)).toBe(
+      "the gate exited 0, but a background process kept its output open until --gate-timeout (1s); no rep of this variant ran",
+    );
     expect(Date.now() - t0).toBeLessThan(10_000);
   }, 20_000);
 
