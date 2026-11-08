@@ -255,12 +255,16 @@ describe("searchCorpusPreflight builds with the session's passthrough", () => {
       effectiveFidelity: "hostloop",
     });
     expect("refusal" in r && r.refusal).toMatch(/ANTHROPIC_BASE_URL points the agent elsewhere/);
+    // Without the passthrough the env refusal passes, and the pre-flight moves on. An unreadable pool is the next check,
+    // and it answers before the agent binary is resolved, so the outcome does not depend on a staged Desktop agent.
     const plain = searchCorpusPreflight({
       scenario: {} as never,
       session: { agent_env: {} } as never,
       baseline: BASE as PlatformBaseline,
       effectiveFidelity: "hostloop",
+      pool: { pool: join(mkdtempSync(join(tmpdir(), "pt-pool-")), "absent") },
     });
-    expect("refusal" in plain ? plain.refusal : "").not.toMatch(/ANTHROPIC_BASE_URL/);
+    expect("refusal" in plain && plain.refusal).toMatch(/the pool cannot be read/);
+    expect("refusal" in plain && plain.refusal).not.toMatch(/ANTHROPIC_BASE_URL/);
   });
 });
