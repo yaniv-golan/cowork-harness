@@ -705,7 +705,7 @@ holds only graded run dirs: a refusal refuses the whole batch and prints the err
 `scenarioSha256` is the SHA-256 of the scenario file's bytes. `judgeCostUsd` is the sum of the priced judge
 calls and is absent when none was priced (never `0` for unknown); `unpricedGrades > 0` makes it a floor.
 `invalidGrades` counts asserts the judge could not grade (`judgeInvalid`), which also fail; an assert whose judge
-CALL failed (an API error, a timeout) also carries `judgeError` (`{kind: "call", status?, origin?, message}`), and
+CALL failed (an API error, a timeout) also carries `judgeError` (`{kind: "call", status?, origin?, message, retryable?}`; `retryable` is false for a spent quota, a 401/403 or a 404), and
 one with a malformed grade does not. `assertions[]` carries the re-graded asserts in the `RunResult.assertions[]` shape plus
 `assertionIndex` (the assert's position in the scenario), its own `docMatchesLive` and, on an entry a judge read,
 `judgeModelRequested` (the model the re-grade asked for; `judgeModel` is the id the judge answered as); `notRegraded[]` lists

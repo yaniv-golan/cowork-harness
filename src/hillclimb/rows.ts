@@ -518,6 +518,7 @@ export function attemptRow(a: Attempt, ctx: AttemptContext): RowOut {
           failure_rule: "judge_invalid",
           judge_invalid_cause: failed ? "call" : "malformed",
           ...(failed?.status !== undefined ? { judge_error_status: failed.status } : {}),
+          ...(failed?.retryable !== undefined ? { judge_error_retryable: failed.retryable } : {}),
           ...(failed !== undefined ? { judge_error_message: failed.message } : {}),
         },
       );

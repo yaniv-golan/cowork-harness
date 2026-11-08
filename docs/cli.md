@@ -417,7 +417,7 @@ was asked for (`--judge-model`, else the assert's `judge_model`, else the defaul
   entry also carry `invalidGrades`: asserts the judge could not grade — its call failed (an API error such as a
   401, a timeout), or it answered twice without a usable grade (malformed) — and the file carries `regraded`, the
   number of asserts graded. A failed call is recorded on its assert as `judgeError` (`{kind: "call", status?,
-  origin?, message}`); a malformed grade carries none. A round in which every grade is invalid is still written, with
+  origin?, message, retryable?}`, `retryable: false` for a call that would fail the same way again); a malformed grade carries none. A round in which every grade is invalid is still written, with
   `invalidGrades` equal to `regraded`, so a judge outage can be told apart from a failing grade. The text report
   counts invalid grades separately from failures, split by cause (`judge call failed (API 401 ×2)`, `malformed ×1`),
   and prints the judge spend per run and in total.

@@ -190,7 +190,7 @@ describe("transport: an API error envelope (real 401 frame, exit 1)", () => {
     }
     const [r] = evaluate([sem], c);
     expect(calls()).toBe(1);
-    expect((r as { judgeError?: unknown }).judgeError).toMatchObject({ kind: "call", status: 429 });
+    expect((r as { judgeError?: unknown }).judgeError).toMatchObject({ kind: "call", status: 429, retryable: false });
     expect(JSON.stringify(r)).not.toContain(dir); // the fake CLI's path
   });
 
@@ -245,7 +245,12 @@ describe("semantic_matches: a judge call failure is reported as one", () => {
     // A 401 carries the credential hint; no credential variable is set here, so the judge used the claude login.
     expect(r!.message).toContain("The judge used your claude login");
     expect(r!.message).toContain("cowork-harness doctor");
-    expect((r as { judgeError?: unknown }).judgeError).toMatchObject({ kind: "call", status: 401, origin: "first_party" });
+    expect((r as { judgeError?: unknown }).judgeError).toMatchObject({
+      kind: "call",
+      status: 401,
+      origin: "first_party",
+      retryable: false,
+    });
     expect(r!.judgeAttempts).toBe(1);
   });
 

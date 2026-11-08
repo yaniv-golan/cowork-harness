@@ -503,13 +503,14 @@ describe("error rows (runner-scaffold.mjs l.549-564)", () => {
     r.assertions[3] = {
       ...r.assertions[3],
       judgeInvalid: true,
-      judgeError: { kind: "call", status: 401, origin: "first_party", message: "API 401, first_party: Invalid API key" },
+      judgeError: { kind: "call", status: 401, origin: "first_party", message: "API 401, first_party: Invalid API key", retryable: false },
     } as never;
     const row = errRow(attemptRow({ result: r }, ctx(r)));
     expect(row.failure_class).toBe("judge_invalid");
     expect(row.meta).toMatchObject({
       judge_invalid_cause: "call",
       judge_error_status: 401,
+      judge_error_retryable: false,
       judge_error_message: "API 401, first_party: Invalid API key",
     });
     expect(row.error).toContain("judge call failed on assertion(s) 3 (API 401, first_party: Invalid API key)");
@@ -525,6 +526,7 @@ describe("error rows (runner-scaffold.mjs l.549-564)", () => {
     expect(row.meta).toMatchObject({ judge_invalid_cause: "malformed" });
     expect(row.meta).not.toHaveProperty("judge_error_status");
     expect(row.meta).not.toHaveProperty("judge_error_message");
+    expect(row.meta).not.toHaveProperty("judge_error_retryable");
   });
 
   it("a rep built from a different snapshot than the variant's ⇒ error, flagged as source drift", () => {

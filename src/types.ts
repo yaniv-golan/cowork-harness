@@ -2373,6 +2373,9 @@ export interface JudgeError {
   status?: number;
   origin?: string;
   message: string;
+  /** Whether the same call could succeed if made again: false for a spent usage quota, a rejected credential (401/403)
+   *  or an unknown model (404); true for a plain rate limit or a server error. Absent on a result written before 5.0.0. */
+  retryable?: boolean;
 }
 
 export interface JudgedDocFingerprint {
