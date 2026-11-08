@@ -34,6 +34,8 @@ export const EVAL_VALUE_FLAGS = [
   "--search-corpus-min-score",
 ] as const;
 export const EVAL_REPEATED_FLAGS = ["--arm", "--holdout"] as const;
+/** `eval report`'s own flags (beside `--arm` and `--output-format`, shared with `eval`). */
+export const EVAL_REPORT_BOOLEAN_FLAGS = ["--headroom"] as const;
 
 export const EVAL_USAGE = `usage: eval <scenario.yaml | dir/> --arm [<label>=]<source> --arm [<label>=]<source> [flags]
        eval report <eval-dir> [--headroom [--arm <label|A|B>]] [--output-format text|json]

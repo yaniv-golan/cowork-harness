@@ -11,7 +11,7 @@ cowork-harness hillclimb run evals/ --flow .claude/hillclimb/flow --dry-run --ap
 cowork-harness hillclimb run evals/ --flow .claude/hillclimb/flow --variant baseline --reps 3
 cowork-harness hillclimb run evals/ --flow .claude/hillclimb/flow --variant v1 --reps 3
 cowork-harness hillclimb check --flow .claude/hillclimb/flow
-cowork-harness hillclimb seed evals/ --flow .claude/hillclimb/flow --from-eval E --arm after   # baseline from an eval arm, $0
+cowork-harness hillclimb seed evals/ --flow .claude/hillclimb/flow --from-eval E --arm after   # baseline from an eval, $0
 ```
 
 Run the baseline and every variant at the same `--reps`: two variants compare only at matching rep counts, and
@@ -188,7 +188,7 @@ sha256 per hashed entry (`_state.json` `harness_files`), so a refusal names the 
 evals/a.yaml; and 13 unchanged`, a new one marked `(new)`, a gone one `(removed)`), as does the dry run's gate
 line; an approval recorded without them still loads, and its refusal says `changed: unknown (older approval)` and
 lists every file. It is a change detector, not a security boundary: the permission allowlist on the loop's command
-is what bounds an unattended run. `--gate-cmd CMD` checks a copy of the variant before any rep
+is what bounds an unattended run. `--gate-cmd CMD` checks a variant copy before any rep
 (failing: `gate_failed` rows, exit 1); its text is in the sha.
 
 `regrade` applies the same gate: a rubric fix is a scenario edit, so `regrade` refuses (exit 2) until the new sha
