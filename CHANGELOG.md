@@ -87,7 +87,8 @@ All notable changes to this project are documented here. The format is based on
 - **`hillclimb run --max-budget-usd <x>`** caps one pass: no slot starts whose estimate would take the pass's spend,
   plus the slots in flight, past `x`. A stop exits 1 with `stopped.reason: "budget"` and `error.code:
   "budget_stopped"`, and keeps the rows already written; a cap below every open slot's estimate is refused before
-  spending. Slots with no cost estimate run one at a time, so they pass the cap by one slot's cost at most.
+  spending. Slots with no cost estimate run one at a time, so they pass the cap by one slot's cost at most; one that
+  finishes with no recorded cost stops the pass the same way, since the cap can no longer be enforced.
   Unlike `run` and `eval`, where the flag is a pre-flight refusal, this one stops mid-pass. `summary.json` is
   written on every mid-run stop, a grader-credential stop included.
 - **`hillclimb seed --from-eval <dir> --arm <label>`** starts a flow's baseline from an eval arm already run, at no

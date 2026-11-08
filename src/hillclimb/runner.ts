@@ -563,7 +563,7 @@ async function run(
             if (stopError !== undefined) return;
             r = budget.admit(c.id);
           }
-          if (r === undefined) {
+          if (r === undefined || r === "uncharged") {
             stopped = {
               reason: "budget",
               spentUsd: Math.round(budget.spent * 1e6) / 1e6,
@@ -573,8 +573,11 @@ async function run(
               rep,
             };
             stopError = new BudgetStopError(
-              `the pass ${budget.text()}, and case ${c.id} rep${rep} (estimated $${budget.estimate(c.id).toFixed(4)}) would cross it ` +
-                `with the slots still running; the cap is per pass: raise it, or re-run (each pass has its own cap)`,
+              r === "uncharged"
+                ? `a slot of case ${budget.uncharged} finished unpriced and the case has no cost history to charge it, so the cap can ` +
+                    `no longer be enforced; case ${c.id} rep${rep} was not started. The pass ${budget.text()}; re-run to continue (each pass has its own cap)`
+                : `the pass ${budget.text()}, and case ${c.id} rep${rep} (estimated $${budget.estimate(c.id).toFixed(4)}) would cross it ` +
+                    `with the slots still running; the cap is per pass: raise it, or re-run (each pass has its own cap)`,
             );
             return;
           }

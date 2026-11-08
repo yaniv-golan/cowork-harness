@@ -148,6 +148,16 @@ describe("runGateCommand", () => {
     expect(Date.now() - t0).toBeLessThan(10_000);
   }, 20_000);
 
+  it("any exit code the shell reached by itself is named, not called a timeout; a killed shell is a timeout", () => {
+    const g = { ok: false, code: 3, signal: null, timedOut: true, tail: "", wallS: 1 };
+    expect(gateFailureText(g, 7)).toBe(
+      "the gate exited 3, but a background process kept its output open until --gate-timeout (7s); no rep of this variant ran",
+    );
+    expect(gateFailureText({ ...g, code: null, signal: "SIGKILL" }, 7)).toBe(
+      "the gate command timed out after 7s; no rep of this variant ran",
+    );
+  });
+
   it("a descendant that left the process group and holds the output open cannot hang the pass past the timeout", async () => {
     const pidFile = join(scratch, "escaped.pid");
     const t0 = Date.now();

@@ -1230,6 +1230,34 @@ describe("--max-budget-usd: a per-pass cap checked before each slot", () => {
     expect(r.stopped).toMatchObject({ reason: "budget", spentUsd: 3, atJob: 1, case: "alpha", rep: 1 });
   });
 
+  it("no history and the first slot finishes unpriced: the pass stops, since nothing can be charged", async () => {
+    await approved();
+    behave = () => "throw";
+    const r = await runHillclimb(bargs("--reps", "3", "--concurrency", "1", "--max-budget-usd", "2"), deps());
+    expect(jobs).toHaveLength(1);
+    expect(r.exitCode).toBe(1);
+    expect(r.error?.code).toBe("budget_stopped");
+    expect(r.error?.message).toMatch(/case alpha finished unpriced and the case has no cost history/);
+    expect(r.stopped).toMatchObject({ reason: "budget", spentUsd: 0, capUsd: 2, atJob: 1, case: "alpha", rep: 1 });
+  });
+
+  it("no history at --concurrency 2: the slot waiting behind an unpriced one is stopped too", async () => {
+    await approved();
+    behave = () => "throw";
+    const r = await runHillclimb(bargs("--reps", "2", "--concurrency", "2", "--max-budget-usd", "2"), deps());
+    expect(jobs).toHaveLength(1);
+    expect(r.stopped).toMatchObject({ reason: "budget", case: "alpha", rep: 1 });
+  });
+
+  it("(control) an unpriced slot that was the pass's last has nothing to stop", async () => {
+    await approved();
+    behave = () => "throw";
+    const r = await runHillclimb(bargs("--reps", "1", "--case", "alpha", "--concurrency", "1", "--max-budget-usd", "2"), deps());
+    expect(jobs).toHaveLength(1);
+    expect(r.stopped).toBeUndefined();
+    expect(r.error?.code).not.toBe("budget_stopped");
+  });
+
   it("the index fallback prices a case with no rows in the variant", async () => {
     await approved();
     behave = priced(1);

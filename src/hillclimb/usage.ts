@@ -142,7 +142,8 @@ export const HILLCLIMB_RUN_USAGE = `usage: hillclimb run <scenario.yaml | dir/> 
   --max-budget-usd X      per-pass cap: no slot starts whose estimate would take this pass's spend, plus the
                           estimates of slots in flight, past X (exit 1, stopped.reason budget); a slot with no
                           recorded cost is charged its estimate, and slots with no estimate run one at a time (so
-                          they pass X by one slot's cost at most). Each pass has its own cap. Unlike run and eval,
+                          they pass X by one slot's cost at most; one that finishes unpriced stops the pass,
+                          since nothing can then be charged). Each pass has its own cap. Unlike run and eval,
                           where the flag is a pre-flight refusal, this stops mid-pass; it refuses before spending
                           only when even the cheapest open slot's estimate is over X
   --decider-cmd CMD | --decider-dir DIR   answer unscripted questions (one channel; --concurrency 1)
@@ -177,7 +178,7 @@ export const HILLCLIMB_FREEZE_REF_USAGE = `usage: hillclimb freeze-ref <scenario
 
 export const HILLCLIMB_SEED_USAGE = `usage: hillclimb seed <scenario.yaml | dir/> --from-eval <eval-dir> --arm <label|A|B> [--flow DIR] [--output-format text|json]
        Starts a flow's baseline from an eval arm already run, with no agent run: the arm's plugin snapshot becomes the
-       baseline's, and each of its reps a baseline row built from its kept run dir. Refused (exit 2, nothing written)
+       baseline's, and each of its reps a baseline row built from its kept run dir. Refused (exit 2; a late check removes what it wrote, input copies excepted)
        unless every case matches the eval's scenario by name with the same scenario and session files, assertions,
        baseline, agent and judge pins and plugin content, every rep of the arm has its run dir, and the flow's baseline
        has no rows and no snapshot. Also refused: a frozen-search-corpus eval, an eval that stopped early, a

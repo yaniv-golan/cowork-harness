@@ -175,7 +175,7 @@ the next pass re-runs it. A seeded row's `meta.wall_s` is the agent's own durati
 and an eval rep that timed out is an errors row by its termination rule rather than as `timeout`; nothing a pass,
 `check` or the cost summary reads differs.
 
-It refuses (exit 2, nothing written) unless each case matches the eval's scenario of the same name (scenario and
+It refuses (exit 2; the two checks that need the installed snapshot or the built rows run after writing them, and remove them, input copies excepted) unless each case matches the eval's scenario of the same name (scenario and
 session files, assertions, Desktop baseline, agent and judge pins), every rep of the arm kept its run dir, and the
 baseline has no rows and no snapshot yet. An eval served from a frozen search corpus, an eval that stopped early,
 a `semantic_pairwise` or protocol-tier case, a `plugins.from_host` eval and an arm whose reps for one pin were
@@ -510,7 +510,9 @@ rows, and no fixed multiplier reproduces it. So:
   estimate is the variant's p95 cost for that case (agent, judge and decider), else the runs index's worst observed
   agent run (which leaves judge spend out), else 0 (the pass says so once). A slot with no estimate waits while
   another such slot is in flight, so slots priced at $0 can take the pass past `X` by one slot's cost at most; once
-  a slot of the case is priced, the next has an estimate. A slot whose row records no cost is charged its estimate.
+  a slot of the case is priced, the next has an estimate. If such a slot finishes with no recorded cost there is
+  nothing to charge and the cap can no longer be enforced, so no further slot of the pass starts (a budget stop,
+  below); a slot that was the pass's last just ends the pass. A slot whose row records no cost is charged its estimate.
   A started slot that costs more than its estimate can also take the pass past `X`, by the difference: the cap
   bounds what starts, not what a started slot spends. The grader probe's cost counts from the start. A stop exits 1
   with the envelope's `stopped.reason: "budget"` (`spentUsd`, the spend recorded so far with any unpriced slot at

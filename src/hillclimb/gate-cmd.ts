@@ -104,9 +104,10 @@ export const runGateCommand: GateRunner = async ({ cmd, snapshot, variant, timeo
 
 /** The `error` text of a `gate_failed` row. */
 export function gateFailureText(g: GateResult, timeoutS: number): string {
-  // The shell had exited 0 before the deadline; what timed out was a descendant still holding its output.
-  if (g.timedOut && g.code === 0)
-    return `the gate exited 0, but a background process kept its output open until --gate-timeout (${timeoutS}s); no rep of this variant ran`;
+  // The shell had exited by itself before the deadline (the kill is SIGKILL, so a killed shell has no code); what timed
+  // out was a descendant still holding its output.
+  if (g.timedOut && g.code !== null)
+    return `the gate exited ${g.code}, but a background process kept its output open until --gate-timeout (${timeoutS}s); no rep of this variant ran`;
   if (g.timedOut) return `the gate command timed out after ${timeoutS}s; no rep of this variant ran`;
   if (g.signal) return `the gate command was killed by ${g.signal}; no rep of this variant ran`;
   if (g.code === null) return `the gate command could not be started; no rep of this variant ran`;

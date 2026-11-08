@@ -10,7 +10,8 @@
 //   2. else the case's worst agent-only run on any baseline in the run index (the fallback excludes judge spend);
 //   3. else 0 — then the cap is checked on what the slot actually spent, once it finishes. Such slots run one at a
 //      time: while one is in flight no other unestimated slot starts, so the pass can pass the cap by at most one
-//      slot's cost. Once a slot of the case is priced, the next one has an estimate.
+//      slot's cost. Once a slot of the case is priced, the next one has an estimate. One that finishes with no price
+//      leaves nothing to charge, so no further slot of the pass starts: the cap could no longer be enforced.
 
 import { percentile } from "../run/run-index.js";
 import { parseRows, type Row } from "./cost.js";
@@ -75,6 +76,8 @@ export class BudgetLedger {
   private readonly indexWorst: (caseId: string) => number | undefined;
   private unestimatedInFlight = 0;
   private waiters: Array<() => void> = [];
+  /** The case of an unestimated slot that finished with no agent cost: from here on the cap cannot be enforced. */
+  uncharged: string | undefined;
 
   constructor(
     readonly capUsd: number,
@@ -100,8 +103,10 @@ export class BudgetLedger {
   }
 
   /** Reserve the slot's estimate when it fits; undefined when it would cross the cap; "wait" when it has no estimate
-   *  and another unestimated slot is in flight (await `settled()`, then ask again). */
-  admit(caseId: string): Reservation | undefined | "wait" {
+   *  and another unestimated slot is in flight (await `settled()`, then ask again); "uncharged" once an unestimated slot
+   *  finished with no price (no slot starts after that). */
+  admit(caseId: string): Reservation | undefined | "wait" | "uncharged" {
+    if (this.uncharged !== undefined) return "uncharged";
     const unestimated = caseEstimate(this.spends.get(caseId), this.indexWorst(caseId)).source === "none";
     if (unestimated && this.unestimatedInFlight > 0) return "wait";
     const est = this.estimate(caseId);
@@ -121,7 +126,10 @@ export class BudgetLedger {
     this.inFlight -= reserved.usd;
     if (reserved.unestimated) this.unestimatedInFlight--;
     const s = row ? rowSpend(row.row, row.scored) : { usd: 0, agentPriced: false };
-    if (!s.agentPriced) this.unpriced++;
+    if (!s.agentPriced) {
+      this.unpriced++;
+      if (reserved.unestimated) this.uncharged ??= caseId;
+    }
     this.spent += s.agentPriced ? s.usd : Math.max(s.usd, reserved.usd);
     if (row?.scored && s.agentPriced) this.spends.set(caseId, [...(this.spends.get(caseId) ?? []), s.usd]);
     for (const w of this.waiters.splice(0)) w();

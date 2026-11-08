@@ -35,4 +35,17 @@ describe("BudgetLedger.admit", () => {
     await next;
     expect(b.admit("c")).toEqual({ usd: 2, unestimated: false });
   });
+
+  it("an unestimated slot that settles with no price ends admission for every case; an estimated one does not", () => {
+    const b = new BudgetLedger(10, { results: null, indexWorstUsd: (id) => (id === "d" ? 1 : undefined) }, () => {});
+    const d = b.admit("d") as { usd: number; unestimated: boolean };
+    b.settle("d", d, { row: { prompt_id: "d" }, scored: true });
+    expect(b.uncharged).toBeUndefined();
+    expect(b.admit("d")).toEqual({ usd: 1, unestimated: false });
+    const c = b.admit("c") as { usd: number; unestimated: boolean };
+    b.settle("c", c, undefined);
+    expect(b.uncharged).toBe("c");
+    expect(b.admit("c")).toBe("uncharged");
+    expect(b.admit("d")).toBe("uncharged");
+  });
 });
