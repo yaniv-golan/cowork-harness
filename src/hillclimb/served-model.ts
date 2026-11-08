@@ -133,6 +133,6 @@ export function servedModelSplits(results: string | null | undefined): ServedMod
 export function servedModelSplitText(variant: string, s: ServedModelSplit): string {
   return (
     `variant ${variant}'s scored rows for model ${s.requested} were served ${s.served.join(" and ")} ` +
-    `(cases ${s.cases.join(", ")}): its scores come from more than one model. Start a fresh flow dir and pin the dated id, or pass --allow-model-split (recorded on every row)`
+    `(cases ${s.cases.join(", ")}): its scores come from more than one model. Start a fresh flow dir and pin the dated id, or pass --allow-model-split (recorded on the rows it writes; \`hillclimb check\` stays an error while an earlier row lacks it)`
   );
 }

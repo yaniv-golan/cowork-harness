@@ -691,7 +691,8 @@ first run · `3` as above, or the temp dir is inside a git work tree or git cann
 attempt ok · `1` a failed attempt, a mid-run stop (a refused grader credential included: `stopped`), or a variant
 served two model ids for one pin (unless `--allow-model-split`) · `2` refused before spending. `hillclimb check`: `0` clean · `1`
 an error finding (one of the published schema's checks, a `_state.json` metric declaration, a changed frozen
-reference, or `metrics.sig_mixed`, a column whose rows carry two declaration signatures); its warnings and notes
+reference, `metrics.sig_mixed`, a column whose rows carry two declaration signatures, or `served_model.split` not
+opted into); its warnings and notes
 never change the exit code · `2` usage, a missing flow dir or a target that does not load. `hillclimb state-template`:
 `0` printed · `2` usage or refusal. `hillclimb freeze-ref`: `0` nothing refused · `1` a case refused · `2` usage.
 `hillclimb regrade`: `0` rewritten or nothing to do · `1` some rows listed (not re-graded) or a failure after the
