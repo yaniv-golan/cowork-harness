@@ -195,33 +195,92 @@ describe("the sync-child watchdog", () => {
     expect(r.events[0]!.summary.children).toEqual([]);
   }, 180_000);
 
+  // The left-behind process in the next two tests: killed here only while that pid is still the `sleep 600` it was.
+  const orphanRow = (pid: number) => {
+    const m = spawnSync("ps", ["-o", "stat=,command=", "-p", String(pid)], { encoding: "utf8" })
+      .stdout.trim()
+      .match(/^(\S+)\s+(.*)$/);
+    return m ? { stat: m[1]!, command: m[2]! } : undefined;
+  };
+  const orphanRunning = (pid: number) => {
+    const row = orphanRow(pid);
+    return row !== undefined && !row.stat.startsWith("Z") && row.command === "sleep 600";
+  };
+  const orphanPid = (pidFile: string) => (existsSync(pidFile) ? Number(readFileSync(pidFile, "utf8").trim()) : 0);
+  const killOrphan = (pidFile: string) => {
+    const pid = orphanPid(pidFile);
+    if (pid > 1 && orphanRunning(pid)) process.kill(pid, "SIGKILL");
+  };
+  interface ZombieGroupSummary {
+    killed: boolean;
+    children: { command: string }[];
+    listing: string;
+  }
+
   it("reaches what an exited detached child left behind, through its process group", async () => {
-    // The shell exits at once and stays a zombie, because the spin stops this thread's event loop. Its background sleep
-    // is re-parented out of the fork's tree and shares only the shell's process group.
+    // The shell exits at once and stays a zombie, because this thread's event loop is not running. Its background sleep
+    // is re-parented out of the fork's tree and shares only the shell's process group. The main thread waits on a FIFO
+    // that sleep holds open, so the kill is what releases it. (A non-blocking read gives 0 before any writer has
+    // opened the FIFO, EAGAIN while one holds it, and 0 again once the last has gone.) The deadline ends a failing run.
+    const fifo = join(work, "orphan.fifo");
     const pidFile = join(work, "orphan.pid");
-    const liveState = (pid: number) => spawnSync("ps", ["-o", "stat=", "-p", String(pid)], { encoding: "utf8" }).stdout.trim();
-    let orphan = 0;
+    expect(spawnSync("mkfifo", [fifo]).status).toBe(0);
     try {
       const r = await runFixture(
-        `import { spawn } from "node:child_process";\nimport { it } from "vitest";\nit("spins", () => { spawn("sh", ["-c", "sleep 600 & echo $! > '${pidFile}'; exit 0"], { detached: true, stdio: "ignore" }); const end = Date.now() + 8000; while (Date.now() < end); });\n`,
+        `import { spawn } from "node:child_process";
+import { constants, openSync, readSync } from "node:fs";
+import { it } from "vitest";
+it("waits on the orphan", () => {
+  const fd = openSync(${JSON.stringify(fifo)}, constants.O_RDONLY | constants.O_NONBLOCK);
+  spawn("sh", ["-c", "exec 3>'${fifo}'; sleep 600 3>&3 & echo $! > '${pidFile}'; exit 0"], { detached: true, stdio: "ignore" });
+  const end = Date.now() + 60_000;
+  const b = Buffer.alloc(1);
+  let held = false;
+  while (Date.now() < end) {
+    try {
+      if (readSync(fd, b) === 0 && held) return;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EAGAIN") throw e;
+      held = true;
+    }
+  }
+});
+`,
       );
-      orphan = Number(readFileSync(pidFile, "utf8").trim());
+      const orphan = orphanPid(pidFile);
       expect(orphan).toBeGreaterThan(1);
       expect(r.out).toMatch(/no child process: this test's own thread was blocked/);
-      const s = r.events[0]!.summary as unknown as { killed: boolean; children: unknown[]; listing: string };
+      const s = r.events[0]!.summary as unknown as ZombieGroupSummary;
       expect(s.killed).toBe(false); // no proof the blocker has gone, so the retry would keep running
       expect(s.children).toEqual([]);
       expect(s.listing).toMatch(/signalled the process groups/);
-      const state = liveState(orphan); // a container's PID 1 may never reap it: dead is gone, or a zombie
-      expect(state === "" || state.startsWith("Z"), `orphan ${orphan} is still running (${state})`).toBe(true);
+      expect(orphanRunning(orphan), `orphan ${orphan} is still running`).toBe(false);
     } finally {
-      if (orphan > 1) {
-        try {
-          process.kill(orphan, "SIGKILL");
-        } catch {
-          /* already gone */
-        }
-      }
+      killOrphan(pidFile);
+    }
+  }, 180_000);
+
+  it("with a live blocker too, still reaches what an exited detached child left behind", async () => {
+    const pidFile = join(work, "orphan-beside-live.pid");
+    try {
+      const r = await runFixture(
+        `import { spawn, spawnSync } from "node:child_process";
+import { it } from "vitest";
+it("hangs", () => {
+  spawn("sh", ["-c", "sleep 600 & echo $! > '${pidFile}'; exit 0"], { detached: true, stdio: "ignore" });
+  spawnSync("sleep", ["600"]);
+});
+`,
+      );
+      const orphan = orphanPid(pidFile);
+      expect(orphan).toBeGreaterThan(1);
+      const s = r.events[0]!.summary as unknown as ZombieGroupSummary;
+      expect(s.killed).toBe(true);
+      expect(s.children.map((c) => c.command)).toContain("sleep 600");
+      expect(s.listing).toMatch(/signalled the process groups/);
+      expect(orphanRunning(orphan), `orphan ${orphan} is still running`).toBe(false);
+    } finally {
+      killOrphan(pidFile);
     }
   }, 180_000);
 

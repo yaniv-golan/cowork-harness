@@ -167,10 +167,13 @@ async function dumpAndKill(ep) {
     return false;
   }
   const { kids, zombiePgids, ownPgid } = listing;
-  const killGroups = (pgids) => {
+  // `before` runs ahead of the first signal: a kill can free the main thread, and the fork may then exit at any moment.
+  const killGroups = (pgids, before) => {
+    if (ownPgid < 0) return false; // this fork's own group is unknown, so nothing can be told apart from it
+    const groups = [...new Set(pgids)].filter((g) => g > 1 && g !== ownPgid);
+    if (groups.length > 0) before?.();
     let signalled = false;
-    for (const g of new Set(pgids)) {
-      if (g <= 1 || g === ownPgid) continue;
+    for (const g of groups) {
       try {
         process.kill(-g, "SIGKILL");
         signalled = true;
@@ -194,11 +197,13 @@ async function dumpAndKill(ep) {
       "ok, but a sync call is blocked with no child under this fork: a re-parented descendant may hold its pipe (see the CI job-level dump); retried";
   writeSummary(ep.dir, ep.summary);
   if (kids.length === 0) {
-    if (killGroups(zombiePgids)) noteZombieGroups();
+    killGroups(zombiePgids, noteZombieGroups);
     return false;
   }
   for (const k of kids) writeFileSync(join(ep.dir, `stacks-${k.pid}.txt`), `${k.command}\n\n${await stacks(k.pid)}`);
-  // Kill only after the dumps, so the stacks show the children as they hung.
+  // Kill only after the dumps, so the stacks show the children as they hung. Exited children's groups go first, while
+  // the live kills below still hold the main thread.
+  killGroups(zombiePgids, noteZombieGroups);
   for (const k of [...kids].sort((a, b) => b.depth - a.depth)) {
     try {
       process.kill(k.pid, "SIGKILL");
@@ -207,7 +212,6 @@ async function dumpAndKill(ep) {
     }
   }
   killGroups(kids.map((k) => k.pgid));
-  if (killGroups(zombiePgids)) noteZombieGroups();
   return true;
 }
 
