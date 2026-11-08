@@ -599,14 +599,14 @@ jobs:
     #
     # One budget for every shard, because a test file's shard moves whenever the file set changes. It is sized backwards
     # from the kill, and test/workflow-structure.test.ts pins the arithmetic:
-    #   setup incl. gdb install <= 3 min  +  Build + test <= 12 (typecheck and build ~30 s, then `timeout` ends vitest at
+    #   setup incl. gdb install <= 3 min  +  Build + test <= 12 (typecheck and build ~40 s, then `timeout` ends vitest at
     #   10 min, 10.5 with its kill-after)  +  disarm <= 1  +  upload <= 1  =  17 min, under this 18.
-    # The dump is armed before the step, so 420 s on its clock is about 390 s into vitest; with its 120 s gdb budget it
+    # The dump is armed before the step, so 480 s on its clock is about 440 s into vitest; with its 100 s gdb budget it
     # ends before the kill at 600 s. Do not tighten the delay: gdb pauses every test process it attaches to, which can
     # fail a healthy test, so a dump must sit well above any healthy shard.
-    # Measured 2026-11-08 (`gh run view <id> --json jobs`, the "Unit tests" step of the 4-way `test` job on Node 24, the
-    # last five main runs): worst shard 348 s. No six-way figure follows from that: vitest's shard is a slice of the
-    # files in hash order, so shards are uneven. The six-way figure is measured from this job's run on its pull request.
+    # Measured 2026-11-08 (six-way Node 22 run on this job's pull request, the `Duration` vitest prints in each
+    # `timing-floor-shard-N` log): worst shard 317 s of vitest (shard 2), 1.39x under the dump. vitest's shard is a slice
+    # of the files in hash order, so shards are uneven and the figure moves with the file set.
     timeout-minutes: 18
     permissions:
       contents: read
@@ -636,7 +636,7 @@ jobs:
       - name: Arm the job-level hang dump
         run: |
           mkdir -p "$RUNNER_TEMP/hangs"
-          HANG_DUMP_GDB_BUDGET=120 nohup scripts/ci/hang-dump.sh 420 "$RUNNER_TEMP/hangs" >"$RUNNER_TEMP/hangs/hang-dump.out" 2>&1 &
+          HANG_DUMP_GDB_BUDGET=100 nohup scripts/ci/hang-dump.sh 480 "$RUNNER_TEMP/hangs" >"$RUNNER_TEMP/hangs/hang-dump.out" 2>&1 &
           echo $! >"$RUNNER_TEMP/hang-dump.pid"
       - name: Build + test — shard ${{ matrix.shard }}/6
         # A step limit under the job's 18 (see its budget), so a hang fails this step and the upload below still runs.
