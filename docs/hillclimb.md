@@ -511,7 +511,7 @@ rows, and no fixed multiplier reproduces it. So:
   agent run (which leaves judge spend out), else 0 (the pass says so once). A slot with no estimate waits while
   another such slot is in flight, so slots priced at $0 can take the pass past `X` by one slot's cost at most; once
   a slot of the case is priced, the next has an estimate. If such a slot finishes with no recorded cost there is
-  nothing to charge and the cap can no longer be enforced, so no further slot of the pass starts (a budget stop,
+  nothing to charge and the cap cannot be enforced, so no further slot of the pass starts (a budget stop,
   below); a slot that was the pass's last just ends the pass. A slot whose row records no cost is charged its estimate.
   A started slot that costs more than its estimate can also take the pass past `X`, by the difference: the cap
   bounds what starts, not what a started slot spends. The grader probe's cost counts from the start. A stop exits 1
