@@ -6003,6 +6003,10 @@ describe("checkVmAgentStagingFacts — startVM still stages the agent", () => {
     ],
     ["V9 the not-ready check is gone", (s) => s.replace(READY_BLOCK, "")],
     ["V10 the throw sits under a further condition", (s) => s.replace(READY_BLOCK, "if(!h.ready){if(h.fatal){throw h.error}}")],
+    [
+      "V14 the throw closes a nested block after another statement",
+      (s) => s.replace(READY_BLOCK, "if(!h.ready){if(h.fatal){Z.warn(1);throw h.error}}"),
+    ],
     ["V11 a return ahead of the throw", (s) => s.replace(READY_BLOCK, "if(!h.ready){return;throw h.error}")],
     ["V12 the throw is only an unbraced conditional", (s) => s.replace(READY_BLOCK, "if(!h.ready){if(h.fatal)throw h.error}")],
     ["V13 the word throw only in a log line", (s) => s.replace(READY_BLOCK, 'if(!h.ready){Z.warn("will throw")}')],
