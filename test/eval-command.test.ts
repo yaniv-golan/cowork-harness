@@ -2453,7 +2453,7 @@ describe("eval: the served model", () => {
     expect(md).not.toContain("by an earlier version");
   });
 
-  it("a rep stamped model_mismatch though its served id matches the pin (an earlier version's verdict): re-run, never re-pin", async () => {
+  it("a rep stamped model_mismatch though its served id matches the pin: before 5.0 a stale verdict, from 5.0 a fallback; never re-pin", async () => {
     const { scen, a, b } = setup();
     // The session pins claude-sonnet-5; the rep records its dated snapshot and the old stamp.
     const out = await runEval(
@@ -2461,10 +2461,24 @@ describe("eval: the served model", () => {
       deps(fakeRunner((s, r) => (s.job.arm === "after" ? { ...r, models: ["claude-sonnet-5-20251001"], modelPinHonored: false } : r))),
     );
     expect(out.report.summary.exitCode).toBe(1);
-    const md = readFileSync(join(out.evalDir, "report.md"), "utf8");
-    expect(md).toContain("pinned claude-sonnet-5 · served claude-sonnet-5-20251001 — the served id matches the pin");
-    expect(md).toContain("by an earlier version");
-    expect(md).not.toContain("pin the id the agent reports");
+    // The eval's own harness version decides the cause: pinned here, so the test does not move with package.json.
+    const stampedBy = (v: string) => {
+      const mf = join(out.evalDir, "manifest.json");
+      writeFileSync(mf, JSON.stringify({ ...JSON.parse(readFileSync(mf, "utf8")), harnessVersion: v }, null, 2));
+      writeEvalReport(out.evalDir);
+      return readFileSync(join(out.evalDir, "report.md"), "utf8");
+    };
+    const before = stampedBy("4.15.0");
+    expect(before).toContain("pinned claude-sonnet-5 · served claude-sonnet-5-20251001 — the served id matches the pin");
+    expect(before).toContain("by an earlier version");
+    expect(before).not.toContain("pin the id the agent reports");
+    expect(before).not.toContain("modelFallbacks");
+    // From 5.0 such a rep can only be a fallback off the pin during the run.
+    const after = stampedBy("5.0.0");
+    expect(after).toContain("— the served id matches the pin: the agent fell back off it during the run");
+    expect(after).toContain("read `modelFallbacks` in each rep's result.json");
+    expect(after).not.toContain("by an earlier version");
+    expect(after).not.toContain("pin the id the agent reports");
   });
 
   // Every rep of one arm judge_invalid from a cause that does not stop the eval (a 500): no judged row was graded on
@@ -2488,7 +2502,7 @@ describe("eval: the served model", () => {
       expect.objectContaining({ arm: "after", scenario: "smoke-semantic-evidence-files", rowsInsufficient: true }),
     ]);
     expect(out.report.summary.exitCode).toBe(1);
-    expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).toContain("had no valid judge grade");
+    expect(readFileSync(join(out.evalDir, "report.md"), "utf8")).toContain("had an invalid judge grade on some assertion");
   });
 
   it("(control) one rep of that arm with a valid judge grade keeps the scenario compared", async () => {

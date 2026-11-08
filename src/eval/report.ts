@@ -218,7 +218,7 @@ export interface EvalReport {
   }>;
   summary: {
     familyRows: number;
-    /** Each (arm, scenario) whose every recorded rep errored, was excluded or got no valid judge grade, with its most
+    /** Each (arm, scenario) whose every recorded rep errored, was excluded or had an invalid judge grade on some assertion, with its most
      *  frequent bucket and rule. `rowsInsufficient`: that scenario compared nothing — every rep of BOTH arms is listed,
      *  or every rep of this arm is excluded or `judge_invalid` — so its rows are `insufficient` and the eval exits 1.
      *  An arm whose every rep is the agent's own failure, against an arm with valid reps, is scored (a real drop) and
@@ -798,9 +798,9 @@ export function buildEvalReport(evalDir: string): EvalReport {
   const threshold = insufficientThreshold(m.settings.reps, m.settings.allowUnderpowered);
   const tunedNames = m.scenarios.filter((s) => !s.heldOut).map((s) => s.name);
   const heldNames = m.scenarios.filter((s) => s.heldOut).map((s) => s.name);
-  // Per (arm, scenario): every rep errored, was excluded or got no valid judge grade. A scenario compared nothing when
+  // Per (arm, scenario): every rep errored, was excluded or had an invalid judge grade on some assertion. A scenario compared nothing when
   // every rep of BOTH arms is so (0 against 0 is not "no detectable change"), or when one arm's every rep is excluded
-  // or judge_invalid (that arm never ran, or never had a judged row graded). Its rows get no reps — `insufficient`, out of the family — and the eval exits 1.
+  // or judge_invalid (that arm never ran, or every rep of it has an invalid judge grade on some assertion). Its rows get no reps — `insufficient`, out of the family — and the eval exits 1.
   // An arm whose every rep is the AGENT's failure against an arm with valid reps is a real regression (a
   // skill that crashes every time) and is scored; the header still names it.
   const allErrored = (arm: string, scenario: string) => {
@@ -813,8 +813,9 @@ export function buildEvalReport(evalDir: string): EvalReport {
     const both = per.every((x) => x !== null);
     // Exclusions in any mix (infrastructure, a skill drift, a pin not honoured, a changed judge prompt): that arm never
     // ran what the eval compares.
-    // An arm whose every rep is judge_invalid (a judge 5xx, a timeout, a malformed grade), alone or among exclusions,
-    // graded none of its judged rows: the same, though a judge_invalid rep in a mixed arm still scores.
+    // An arm whose every rep is judge_invalid (an invalid judge grade on some assertion: a judge 5xx, a timeout, a
+    // malformed grade), alone or among exclusions: the same, though a judge_invalid rep in a mixed arm still scores.
+    // Rep-level on purpose: a per-assertion test would let one assertion that is never graded in that arm pass unseen.
     const anyAllExcluded = per.some((x) => x !== null && x.every((y) => NO_JUDGE.has(y.c.bucket)));
     m.arms.forEach((a, i) => {
       const mine = per[i];
@@ -1334,8 +1335,10 @@ function renderMetrics(s: ReportSection, rep: EvalReport): string[] {
 /** What to check first, from the most frequent bucket and rule of an all-errored arm. */
 export function erroredHint(
   d: { bucket: RepBucket; rule: string },
-  /** `staleStamp`: the reps' served id matches the pin under the current matcher (a verdict an earlier version stamped). */
-  o: { staleStamp?: boolean } = {},
+  /** `matchedPin`: the reps' served ids all match the pin under the current matcher. `stale`: the eval ran before 5.0,
+   *  whose matcher did not match a dated snapshot to an undated pin. `fallback`: it ran on 5.0 or later, so the only
+   *  way such a rep is `model_mismatch` is a fallback off the pin during the run. */
+  o: { matchedPin?: "stale" | "fallback" } = {},
 ): string {
   if (d.bucket === "errored_agent") return "The agent failed in every rep: read the run dirs.";
   if (d.bucket === "search_pool_mismatch")
@@ -1343,11 +1346,13 @@ export function erroredHint(
   if (d.bucket === "arm_source_drift")
     return "The arm's skill content changed while the eval ran (its reps do not match the snapshot): re-run the eval without editing the skill.";
   if (d.bucket === "model_mismatch")
-    return o.staleStamp
-      ? "These reps were classified when they ran, by an earlier version, which did not match a dated snapshot to an undated pin; the served id matches the pin now, but a rep keeps its recorded verdict: re-run the eval."
-      : "The agent was not served the pinned model (see `pinned · served` below): pin the id the agent reports (`models[0]` of a prior result.json).";
+    return o.matchedPin === "fallback"
+      ? "The served ids match the pin, so the agent fell back off it during the run: read `modelFallbacks` in each rep's result.json, then re-run the eval."
+      : o.matchedPin === "stale"
+        ? "These reps were classified when they ran, by an earlier version, which did not match a dated snapshot to an undated pin; the served id matches the pin now, but a rep keeps its recorded verdict: re-run the eval."
+        : "The agent was not served the pinned model (see `pinned · served` below): pin the id the agent reports (`models[0]` of a prior result.json).";
   if (d.bucket === "judge_invalid")
-    return "No rep got a usable judge grade (a server error, a timeout or a malformed reply): read each rep's `judgeError` in its result.json, then re-run the eval.";
+    return "Every rep has an invalid judge grade on some assertion (a server error, a timeout or a malformed reply): read each rep's `judgeError` in its result.json, then re-run the eval.";
   if (d.bucket === "judge_prompt_mismatch")
     return "The reps were graded with another judge prompt than the eval pinned: re-run the eval on one harness version.";
   if (d.bucket === "search_refused")
@@ -1379,11 +1384,13 @@ export function erroredHint(
 const REDACTION_PLACEHOLDER = "@@EVAL_REDACTION_COUNT@@";
 
 export function renderReportMarkdown(rep: EvalReport): { text: string; redacted: number } {
-  // A model_mismatch (arm, scenario) whose served ids all match the pin under the current matcher: the verdict was
-  // stamped when the reps ran, by a version that did not match a dated snapshot to an undated pin.
-  const staleStamp = (arm: string, scenario: string): boolean => {
+  // A model_mismatch (arm, scenario) whose served ids all match the pin under the current matcher. Before 5.0 the
+  // verdict was stamped by a matcher that did not match a dated snapshot to an undated pin (`stale`); from 5.0 the only
+  // cause is a fallback off the pin during the run (`fallback`). A version that does not parse reads as before 5.0.
+  const matchedPin = (arm: string, scenario: string): "stale" | "fallback" | undefined => {
     const x = rep.summary.modelMismatch.find((y) => y.arm === arm && y.scenario === scenario);
-    return x !== undefined && x.served.length > 0 && x.served.every((m) => modelIdMatches(x.pinned, m));
+    if (x === undefined || x.served.length === 0 || !x.served.every((m) => modelIdMatches(x.pinned, m))) return undefined;
+    return Number.parseInt(rep.harnessVersion.split(".")[0] ?? "", 10) >= 5 ? "fallback" : "stale";
   };
   const L: string[] = [];
   const [A, B] = rep.arms;
@@ -1513,11 +1520,11 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
   L.push("");
   for (const e of rep.summary.erroredArms)
     L.push(
-      `**⚠ Every rep of arm ${e.arm} in ${e.scenario} ${ERRORED.has(e.dominant.bucket) ? "errored" : e.dominant.bucket === "judge_invalid" ? "had no valid judge grade" : "was excluded"}** — ${e.dominant.bucket} (${e.dominant.rule}) ${e.dominant.count}/${e.reps}. ` +
+      `**⚠ Every rep of arm ${e.arm} in ${e.scenario} ${ERRORED.has(e.dominant.bucket) ? "errored" : e.dominant.bucket === "judge_invalid" ? "had an invalid judge grade on some assertion" : "was excluded"}** — ${e.dominant.bucket} (${e.dominant.rule}) ${e.dominant.count}/${e.reps}. ` +
         (e.rowsInsufficient
           ? `Nothing was compared: ${e.scenario}'s rows are insufficient (exit 1). `
           : "Each of those reps is scored as failing every row (the other arm ran). ") +
-        erroredHint(e.dominant, { staleStamp: staleStamp(e.arm, e.scenario) }),
+        erroredHint(e.dominant, { matchedPin: matchedPin(e.arm, e.scenario) }),
       "",
     );
   const pm = rep.summary.searchPoolMismatch;
@@ -1569,9 +1576,13 @@ export function renderReportMarkdown(rep: EvalReport): { text: string; redacted:
     for (const x of rep.summary.modelMismatch)
       L.push(
         `- ${x.arm} ${x.scenario} (${x.reps} rep(s)): pinned ${x.pinned} · served ${x.served.length ? x.served.join(", ") : "(no live model)"}` +
-          (staleStamp(x.arm, x.scenario)
-            ? " — the served id matches the pin: these reps were classified when they ran, by an earlier version, and keep that verdict; re-run the eval"
-            : ""),
+          {
+            stale:
+              " — the served id matches the pin: these reps were classified when they ran, by an earlier version, and keep that verdict; re-run the eval",
+            fallback:
+              " — the served id matches the pin: the agent fell back off it during the run; see `modelFallbacks` in each rep's result.json",
+            none: "",
+          }[matchedPin(x.arm, x.scenario) ?? "none"],
       );
     L.push("");
   }

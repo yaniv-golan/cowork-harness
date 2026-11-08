@@ -350,3 +350,13 @@ describe("otherModelShareWarning: other models' share of the variant's cost_usd"
     expect(otherModelShareWarning("v1", "")).toBeUndefined();
   });
 });
+
+describe("costSummary's frozen-corpus clause", () => {
+  it("counts one run once when a promotion interrupted between its two writes left it in both files", () => {
+    const sc = { sha256: "a".repeat(64), label: "pool", served: 2, miss: 1, refused: 0 };
+    const results = JSON.stringify({ prompt_id: "alpha", rep: 1, meta: { run_id: "r1", search_corpus: sc } }) + "\n";
+    const errors =
+      JSON.stringify({ prompt_id: "alpha", rep: 1, failure_class: "judge_invalid", meta: { run_id: "r1", search_corpus: sc } }) + "\n";
+    expect(costSummary(results, errors).searchFrozen).toMatch(/^search frozen: 2 served, 1 miss, 0 refused over 1 row\(s\)/);
+  });
+});

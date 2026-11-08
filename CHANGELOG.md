@@ -107,7 +107,7 @@ All notable changes to this project are documented here. The format is based on
   model's own spend as another model's. One matcher now decides every pin comparison: a dated id matches only itself,
   and an undated id also matches its dated snapshots. An eval rep's verdict is recorded when it runs, so an eval
   recorded before this version keeps its `model_mismatch` reps: re-run it. Its `report.md` says so when the served id
-  matches the pin. `hillclimb` recovers on its next pass.
+  matches the pin; on an eval run by this version, the same case points at `modelFallbacks` instead. `hillclimb` recovers on its next pass.
 - **A `semantic_pairwise` assert makes no further judge call in a run once one has failed the way every later call
   would.** A later metric-only comparison is recorded `invalid` ("judge not called: an earlier comparison's call
   failed …"), and a gating one makes the assert judge-invalid, with the same `judgeError`.
@@ -207,8 +207,9 @@ All notable changes to this project are documented here. The format is based on
   ended on a requested exit, or stopped on a grader failure) and an agent served more than one model across a
   scenario's scored reps now exit 1, on `eval` and on `eval report`. An (arm, scenario) all of whose reps were
   excluded for any reason (a skill that changed mid-eval, a pin the agent was not served, another judge prompt, as well
-  as infrastructure, a refused search or a pool mismatch) now exits 1 too, and so does one none of whose reps got a
-  valid judge grade (`judge_invalid`: a server error, a timeout or a malformed reply): it compares nothing.
+  as infrastructure, a refused search or a pool mismatch) now exits 1 too, and so does one every rep of which has an
+  invalid judge grade on some assertion (`judge_invalid`: a server error, a timeout or a malformed reply): it compares
+  nothing.
 - **Breaking: `hillclimb run` exits 1 when it stops on a grader failure or a variant is served two models for one pin**
   (see Added). A later pass of such a variant is refused (exit 2) unless `--allow-model-split`.
 
