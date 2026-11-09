@@ -381,6 +381,31 @@ describe.skipIf(!can)("input pre-checks: baselines, --repeat, hints and the budg
     expect(runDirsUnder(r.runs)).toEqual([]);
   });
 
+  it("real record <dir/>: an unreadable session file is refused with exit 1 before anything is spawned", () => {
+    const d = fixture();
+    writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../ok.yaml"));
+    writeFileSync(join(d, "sc", "b.yaml"), SCENARIO("b", "../gone.yaml"));
+    const r = cli(["record", "sc/", "--output-format", "json"], d, STUB_CREDENTIAL);
+    expect(r.all).not.toMatch(SPAWN_GUARD);
+    expect(r.code, r.all).toBe(1);
+    expect(envelope(r.stdout).error?.message).toMatch(/b\.yaml: session file not found/);
+    expect(runDirsUnder(r.runs)).toEqual([]);
+  });
+
+  it("real record <dir/>: a tier-vacuous assertion is refused with exit 1 before anything is spawned", () => {
+    const d = fixture();
+    writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../ok.yaml"));
+    writeFileSync(
+      join(d, "sc", "v.yaml"),
+      `name: v\nprompt: hi\nfidelity: hostloop\nsession: ../ok.yaml\nassert:\n  - tool_not_called: NotebookEdit\n`,
+    );
+    const r = cli(["record", "sc/", "--output-format", "json"], d, STUB_CREDENTIAL);
+    expect(r.all).not.toMatch(SPAWN_GUARD);
+    expect(r.code, r.all).toBe(1);
+    expect(envelope(r.stdout).error?.message).toMatch(/v\.yaml: .*tool_not_called/);
+    expect(runDirsUnder(r.runs)).toEqual([]);
+  });
+
   it("run <dir/>: every scenario whose baseline does not resolve is named, with its file prefix", () => {
     const d = fixture();
     writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../ok.yaml", "baseline: no-such-baseline\n"));
