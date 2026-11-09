@@ -11,7 +11,7 @@ import { randomBytes } from "node:crypto";
  * (turn 2's final message), not on argv; test/protocol-session-argv-e2e.test.ts is the argv test.
  *
  * The second suite PROVES the session's `agent_max_turns` reaches the protocol agent and stops it: the agent's own result
- * frame must say `error_max_turns` with `num_turns` equal to the cap, and `allow_max_turns` must count it as completed.
+ * frame must say `error_max_turns` after one model request and one tool call, and `allow_max_turns` must count it as completed.
  *
  * Billed (two short model turns, then one capped run). It runs ONLY on an explicit opt-in, never on token presence alone:
  *   COWORK_LIVE_PROTOCOL_RESUME=1 npm run test:live -- live-protocol-resume

@@ -190,7 +190,7 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
     skill's `npx` bootstrap mention). The `check:versions` lockstep guard enforces these match the SKILL.md
     floor and will red CI otherwise.
 11. `docs/companion-skill.md`, `docs/cli.md`, `docs/ci.md` → every `cowork-harness@^X.Y.Z` floor (a
-    major-only `cowork-harness@^4` pin is not a floor and is left alone).
+    major-only `cowork-harness@^5` pin is not a floor; a major bump edits it by hand, with `@v5` and `version: "^5"`).
 
 ## Checklist
 

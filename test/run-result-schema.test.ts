@@ -332,9 +332,6 @@ describe("schema/run-result.json", () => {
   });
 });
 
-// Pins the two hand-written PROSE descriptions of the verdict shape (SPEC.md §11, docs/cli.md's
-// --output-format json row) against the schema's `verdict.required` — a doc that drops or adds a
-// field fails loud instead of silently rotting.
 describe("a real result against schema/run-result.json", () => {
   const AGENT_USAGE_KEYS = [
     "thinkingTokens",
@@ -376,6 +373,9 @@ describe("a real result against schema/run-result.json", () => {
   });
 });
 
+// Pins the two hand-written PROSE descriptions of the verdict shape (SPEC.md §11, docs/cli.md's
+// --output-format json row) against the schema's `verdict.required` — a doc that drops or adds a
+// field fails loud instead of silently rotting.
 describe("docs ↔ schema/run-result.json verdict-shape sync", () => {
   const verdictRequired = new Set<string>((schema as { properties: { verdict: { required: string[] } } }).properties.verdict.required);
 

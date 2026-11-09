@@ -97,10 +97,10 @@ All notable changes to this project are documented here. The format is based on
   for such a scenario (`meanUsd`, `p50Usd`, `p95Usd`, `worstObservedUsd`, `pricedRuns`, `lowerBound`, `unpriced[]`):
   it is priced where it used to be unpriced, and the total is a LOWER BOUND only when a scenario has no priced run
   on any baseline.
-- **The `migrate-run-dir` command.** A run dir from before the per-turn `turns/<N>/` layout is still refused
+- **Removed: the `migrate-run-dir` command.** A run dir from before the per-turn `turns/<N>/` layout is still refused
   by name, and `trace` still reads it. Convert one with `npx cowork-harness@4 migrate-run-dir`: a dry run by default,
   `--write` to apply. Running `migrate-run-dir` on this version exits 2 and names that command.
-- **Baselines `desktop-1.11847.5`, `desktop-1.12603.1` and `desktop-1.13576.1`, and the layouts only they
+- **Removed: baselines `desktop-1.11847.5`, `desktop-1.12603.1` and `desktop-1.13576.1`, and the layouts only they
   used.** The oldest supported baseline is `desktop-1.14271.0`. A scenario naming one of these or any older version, or
   an absolute-path baseline file for an older Desktop, is refused (exit 2) naming that baseline. A cassette recorded
   against one still replays, with a staleness warning, and `verify-cassettes` fails it as stale (exit 1); re-record
@@ -114,14 +114,14 @@ All notable changes to this project are documented here. The format is based on
   field, re-record it. `record <dir/> --rerecord-stale` picks up every such cassette and re-records it from the
   scenario file it names; with no scenario file on disk it fails naming the `record <scenario.yaml> --out <path>`
   to run, since there is no readable embedded snapshot to fall back on.
-- **The pre-v12 skill-hash algorithm.** Digests are computed only the jcs1 way. No cassette this build reads
+- **Removed: the pre-v12 skill-hash algorithm.** Digests are computed only the jcs1 way. No cassette this build reads
   carries the older ones; a kept run dir that does is reported as not comparable (re-record), as before.
-- **`schema/cassette.v9.json`, `cassette.v10.json` and `cassette.v11.json`.** A cassette whose `$schema` names one
+- **Removed: `schema/cassette.v9.json`, `cassette.v10.json` and `cassette.v11.json`.** A cassette whose `$schema` names one
   of them is below the read floor; its `$schema` URL now returns 404.
-- **`COWORK_MANAGED_CONFIG` and `COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE`.** Each is refused at startup
+- **Removed: `COWORK_MANAGED_CONFIG` and `COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE`.** Each is refused at startup
   (exit 2) when set to a non-empty value, naming what replaced it: `protocol` is always sealed, and a pinned
   `plugins.config_dir` is single-run.
-- **The `allow_l0_host_config_contamination` modifier, the `l0_host_config_contamination` verdict signal and
+- **Removed: the `allow_l0_host_config_contamination` modifier, the `l0_host_config_contamination` verdict signal and
   the `RunResult.l0HostConfigContamination` field.** A `protocol` run can no longer read your config dir, so there is
   nothing left to signal. To test against your installed set, use `plugins.from_host`. A scenario that still uses the
   modifier is refused at load, naming it; a cassette that
@@ -155,7 +155,8 @@ All notable changes to this project are documented here. The format is based on
     across runs from before and after the upgrade;
   - a setup that sends the token through a proxy needs `ANTHROPIC_BASE_URL` listed in `agent_env.passthrough`, and a proxy
     that needs a header from `ANTHROPIC_CUSTOM_HEADERS` stops working at hostloop: that name cannot be listed while the
-    agent is given the token. Without the token nothing changes.
+    agent is given the token. Without the token the API key is still given, and both names need listing in
+    `agent_env.passthrough` (see Breaking changes).
 
 ### Added
 
@@ -329,13 +330,12 @@ All notable changes to this project are documented here. The format is based on
 - **`ANTHROPIC_AUTH_TOKEN` reaches the protocol agent under its own name only.** It was also copied into
   `CLAUDE_CODE_OAUTH_TOKEN`; the agent sent the original anyway, so what the agent sends is unchanged. A rejected
   `ANTHROPIC_AUTH_TOKEN` is not reported as an auth error at `protocol`: the agent retries it until the run's timeout,
-  so the run ends as a timeout. `hostloop`, whose agent gets the token the same way, is expected to behave alike (not
-  measured). `doctor` says so when it is your only credential.
+  so the run ends as a timeout. `doctor` says so when it is your only credential.
 - **`hillclimb check` no longer notes `judge_invalid` or `gate_failed` rows** as an unknown failure class.
 - **With `CLAUDE_CODE_OAUTH_TOKEN` set, the hostloop agent gets the token alone.** It no longer carries
   `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_CUSTOM_HEADERS` beside the token, as in Desktop and as at
   container and microvm. Only the environment is covered: a managed `settings.json` (an `env` entry or `apiKeyHelper`)
-  can still hand the agent a key. Without the token nothing changes. The message `hillclimb run` prints after a run at
+  can still hand the agent a key. The message `hillclimb run` prints after a run at
   hostloop could not authenticate says which credential the agent is given.
 - **Which credential the graders get.** With `CLAUDE_CODE_OAUTH_TOKEN` set, the graders get the token alone, which is
   the credential the agent authenticates with at the container, hostloop and microvm tiers. On protocol, with

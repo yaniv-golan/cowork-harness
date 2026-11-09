@@ -74,7 +74,7 @@ existence check; use `verify-cassettes` to check freshness and drift.
 | **Live** (`command: run`) | `run` | Docker + a provisioned agent binary + `anthropic-api-key` input | real inference against a live scenario — the action does **not** provision the agent binary or build the image for you (see [Fidelity tiers](../README.md#fidelity-tiers-pick-per-scenario--per-ci-job) and the agent-binary provenance runbook in [`docs/maintenance.md`](./maintenance.md)); this is for a self-hosted runner that already has both staged, not a stock GitHub-hosted runner |
 
 **A free corpus pre-check before any paid `critique`:** `critique` is not an action `command`, but its
-no-spend mode is a plain CLI step on any runner — `npx cowork-harness@^4 critique <folder> [--skill <name>]
+no-spend mode is a plain CLI step on any runner — `npx cowork-harness@^5 critique <folder> [--skill <name>]
 --corpus-only --output-format json | jq -e '.corpus.corpusBytes <= .corpus.corpusCeiling'` — and that
 `jq -e` IS the gate: the flag itself exits 0 on a measurement even over the ceiling. The number is a
 floor (see [docs/critique.md](./critique.md#knowing-before-you-pay)). The same payload's `skillTreeHash` (every
@@ -98,8 +98,8 @@ the only signal. For a result a script can read, ask for the JSON envelope, whic
 
 ```bash
 export COWORK_HARNESS_OUTPUT_FORMAT=json
-npx cowork-harness@^4 verify-cassettes cassettes/ | jq -e '.ok'
-npx cowork-harness@^4 replay cassettes/ | jq -e '.ok'
+npx cowork-harness@^5 verify-cassettes cassettes/ | jq -e '.ok'
+npx cowork-harness@^5 replay cassettes/ | jq -e '.ok'
 ```
 
 `jq -e` exits non-zero when `ok` is `false`. The Action also passes `--output-format json` and exposes
