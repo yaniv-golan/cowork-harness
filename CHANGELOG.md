@@ -129,7 +129,7 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
-- **A relative symlink inside a scenario plugin stays relative when staged.** On `container`, `microvm`, `hostloop` and
+- **A relative symlink inside a connected folder, project or scenario plugin stays relative when staged.** On `container`, `microvm`, `hostloop` and
   `protocol` it was rewritten to an absolute host path, which dangles in the sandbox.
 - **`record --rerecord-stale` no longer overwrites a cassette written by a newer cowork-harness.** Such a cassette
   can read as stale (its baseline moved), and the re-record then replaced it with this build's recording. It is now
@@ -164,8 +164,9 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
-- **Breaking: an input a run would refuse is now refused before any spend, on every form.** A baseline file that exists
-  but does not load stays exit 1. To keep recording the rest of a directory past a bad item, fix or move that item.
+- **Breaking: an input a run would refuse is now refused before any spend, on every form.** On `record`, a baseline
+  file that exists but does not load is a refusal of a scenario that loaded (exit 1 on every form), not an unknown
+  baseline name (exit 2); `run` exits 2 for both. To keep recording the rest of a directory past a bad item, fix or move that item.
 
   | Form | Input | Before | Now |
   |---|---|---|---|
@@ -174,8 +175,10 @@ All notable changes to this project are documented here. The format is based on
   | `record <file> --dry-run` | unreadable `session:` file, tier-vacuous assertion | exit 0, reported | exit 1 |
   | `record <dir/> --dry-run` | unknown baseline name | exit 0, reported | exit 2 |
   | `record <dir/> --dry-run` | unreadable `session:` file, missing input path, tier-vacuous assertion | exit 0, reported | exit 1, in `refusals[]` |
+| `record <dir/> --dry-run` | baseline file that does not load | exit 0, reported | exit 1, in `refusals[]` |
   | `record <dir/>` | unknown baseline name | exit 1 for that item, after earlier items were paid for | exit 2 before the first spawn |
   | `record <dir/>` | unreadable `session:` file, missing input path, tier-vacuous assertion | exit 1 for that item, after earlier items were paid for | exit 1 before the first spawn |
+| `record <dir/>` | baseline file that does not load | exit 1 for that item, after earlier items were paid for | exit 1 before the first spawn |
 
   On a directory, any unknown baseline name gives exit 2, else any broken or refused item gives exit 1, else exit 0.
 - **Breaking: eight environment variables moved into the `COWORK_HARNESS_` namespace:** `COWORK_LOCKDOWN`,

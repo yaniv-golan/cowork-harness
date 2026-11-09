@@ -334,7 +334,9 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       `host-path write`, `vm-path refused`, `shell write`, `no sub-agent write`. Only `host-path write`, with the
       probe's `file_exists` passing, is a pass. `vm-path refused` and `shell write` are failures of the probe and are
       named as such; neither blocks the release. `shell write` is a heuristic over the command text. The step shows
-      whether a sub-agent can act on the manifest, not whether the manifest's wording matches Desktop's.
+      whether a sub-agent can act on the manifest, not whether the manifest's wording matches Desktop's. Until a gate run
+      has produced it, `vm-path refused` has been exercised only on constructed frames, so read the first one against
+      the probe's own `no_vm_path_file_op` result before trusting it.
 
 - [ ] **Live gate: the companion skill sends an agent to the right reference.** Three prompts, each run through
       the skill on `container` with an LLM decider for any question it asks (billed, three short runs):

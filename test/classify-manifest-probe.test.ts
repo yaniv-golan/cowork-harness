@@ -39,6 +39,9 @@ function edit(lines: string[], i: number, change: (block: Record<string, unknown
 }
 const writeTo = (lines: string[], path: string) => edit(lines, WRITE_USE, (b) => ((b.input as Record<string, unknown>).file_path = path));
 const without = (lines: string[], drop: number[]) => lines.filter((_, i) => !drop.includes(i));
+function fromMainLoop(lines: string[], indexes: number[]): void {
+  for (const i of indexes) lines[i] = JSON.stringify({ ...JSON.parse(lines[i]!), parent_tool_use_id: null });
+}
 
 async function replayed(lines: string[]): Promise<RunResult> {
   const cassette = {
@@ -110,6 +113,26 @@ const CASES: Array<[string, () => string[], ManifestProbeOutcome]> = [
     "no sub-agent write",
   ],
   ["a shell command that failed is not a delivery", () => without(frames(), OUTPUTS_SHELL), "no sub-agent write"],
+  [
+    "a host-path Write by the main loop is not the sub-agent's",
+    () => {
+      const l = frames();
+      writeTo(l, HOST_NOTE);
+      edit(l, WRITE_RESULT, (b) => delete b.is_error);
+      fromMainLoop(l, [WRITE_USE, WRITE_RESULT]);
+      return without(l, OUTPUTS_SHELL);
+    },
+    "no sub-agent write",
+  ],
+  [
+    "a shell write by the main loop is not the sub-agent's",
+    () => {
+      const l = frames();
+      fromMainLoop(l, OUTPUTS_SHELL);
+      return l;
+    },
+    "no sub-agent write",
+  ],
 ];
 
 describe("classify-manifest-probe, over the replay re-drive of a kept run", () => {

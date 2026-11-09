@@ -406,6 +406,18 @@ describe.skipIf(!can)("input pre-checks: baselines, --repeat, hints and the budg
     expect(runDirsUnder(r.runs)).toEqual([]);
   });
 
+  it("real record <dir/>: a baseline file that does not load is refused with exit 1 before anything is spawned", () => {
+    const d = fixture();
+    writeFileSync(join(d, "bad-baseline.json"), "{not json");
+    writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../ok.yaml"));
+    writeFileSync(join(d, "sc", "m.yaml"), SCENARIO("m", "../ok.yaml", `baseline: ${join(d, "bad-baseline.json")}\n`));
+    const r = cli(["record", "sc/", "--output-format", "json"], d, STUB_CREDENTIAL);
+    expect(r.all).not.toMatch(SPAWN_GUARD);
+    expect(r.code, r.all).toBe(1);
+    expect(envelope(r.stdout).error?.message).toMatch(/m\.yaml: .*does not load/);
+    expect(runDirsUnder(r.runs)).toEqual([]);
+  });
+
   it("run <dir/>: every scenario whose baseline does not resolve is named, with its file prefix", () => {
     const d = fixture();
     writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../ok.yaml", "baseline: no-such-baseline\n"));

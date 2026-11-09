@@ -5532,7 +5532,8 @@ export async function cmdRecord(args: string[]) {
         log(agentLine);
         log(`  ${batchCostEstimateLine(parsedNames, estimate)}`);
       }
-      // The budget gate runs under --dry-run too, and refuses identically. A dry run whose whole job is
+      // The budget gate runs under --dry-run too, and refuses identically, except when a baseline name is unknown: that
+      // exit 2 outranks this exit-1 refusal, as it does every other refusal in a directory. A dry run whose whole job is
       // "tell me what this would do before I spend" must not report clean and then be refused for real —
       // that is a false preview, and it is free to check (history lookup, no spend).
       if (maxBudgetUsd !== undefined && !unknownBaselineName) {
