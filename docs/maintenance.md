@@ -63,6 +63,8 @@ one in Claude Desktop and let it fire once. An ordinary task with *Only on this 
 account still offers it. Without a local session, `provenance.desktopInitSurface` and
 `provenance.observedSpawnEnv` are recorded unobserved and `npm run preflight` refuses the release.
 
+**Before committing a `sync`, run the sentinels over real bytes:** `COWORK_ASAR_BACKUP_DIR=<dir of saved asars> npx vitest run test/baseline.test.ts`. Without that variable the saved-asar suites skip and show only as a skipped count.
+
 ```bash
 cowork-harness sync --diff      # show what moved vs the committed baseline
 ```

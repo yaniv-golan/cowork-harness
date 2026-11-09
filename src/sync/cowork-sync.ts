@@ -20,7 +20,7 @@ import {
 import { safeCloudBlock } from "./remote-devices.js";
 import { readDesktopInitSurface, desktopInstalledAtMs } from "./desktop-init-surface.js";
 import { classifySpawnEnvKey, windowAllowlistedNames, postWriteOnlyNames } from "./spawn-env-registry.js";
-import { scanSpawnEnvPostWrites } from "./spawn-env-post-writes.js";
+import { matchClose, scanSpawnEnvPostWrites, splitTop } from "./spawn-env-post-writes.js";
 import { readObservedSpawnEnv, bundleHasSpawnEnvProducer } from "./observed-spawn-env.js";
 import { readAgentSearchGates } from "./agent-search-gates.js";
 import { readCaptureOrg } from "./capture-org.js";
@@ -754,7 +754,7 @@ export function checkSubagentOverrideGate(gates: Record<string, GateState> | nul
   return [
     "gate subagentPromptServerOverride:124685897 reads ON — the sub-agent append MAY be server-overridden " +
       "and this sync CANNOT TELL from its own inputs. Gate-ON only enables the lookup: the asar reads the " +
-      "section entry and, when it is missing or empty, logs `using hardcoded fallback` and returns the " +
+      "section entry and, when it is missing or empty, logs `using the fallback` and returns the " +
       "built-in text anyway. The entry is delivered PER SESSION by the server — it is in neither the asar, " +
       "the fcache nor config.json — so gate state alone cannot separate 'override active' from 'gate on, " +
       "no payload, fallback still correct'. " +
@@ -2230,6 +2230,24 @@ export function checkArtifactsMcpGuardFacts(files: Map<string, string>): string[
   );
 }
 
+/** Desktop 4.23118.0 split `resolveAutoMemoryDir` into a wrapper over `resolveAutoMemory`, whose scheduled arm can return
+ *  a module-level symbol meaning "this task reads account memory through tools" (third-party only: first-party
+ *  deployments answer `canSyncCoworkMemoryRemotely()` true). The wrapper turns the symbol into null, so the directory
+ *  answer is the same as the older single body: the ordinary-task arm on gate 123929380, else null. Every piece is
+ *  pinned: a wrapper that lets the symbol through, or an arm that no longer yields null, must not match. */
+function splitAutoMemoryArmHolds(chunk: string, wrapperBody: string, id: string, display: string): boolean {
+  const wrap = wrapperBody.match(/^let ([\w$]+)=this\.resolveAutoMemory\(([\w$]+),([\w$]+)\);return \1===([\w$]+)\?null:\1$/);
+  if (!wrap || wrap[2] !== id || wrap[3] !== display) return false;
+  const header = /(?<![\w$.])resolveAutoMemory\([\w$]+,[\w$]+\)\{/.exec(chunk);
+  const body = header ? braceBodyOf(chunk, header[0]) : null;
+  if (body === null) return false;
+  const sym = wrap[4]!;
+  if (!new RegExp(`(?<![\\w$.])${reEsc(sym)}=Symbol\\(`).test(chunk)) return false;
+  return new RegExp(
+    `return ([\\w$]+)\\?\\.sessionType==="agent"\\?[\\w$.]+\\(this\\.currentAccountId,this\\.currentOrgId\\):!\\1\\|\\|![\\w$.]+\\("123929380"\\)\\?null:\\1\\.sessionType\\?\\1\\.sessionType==="scheduled"&&![\\w$.]+\\(\\)\\.canSyncCoworkMemoryRemotely\\(\\)\\?${reEsc(sym)}:null:[\\w$.]+\\(this\\.currentAccountId,this\\.currentOrgId\\)$`,
+  ).test(body);
+}
+
 export function checkAutoMemoryFacts(files: Map<string, string>): string[] {
   const chunks = [...files.values()];
   const count = (re: RegExp) => chunks.reduce((n, c) => n + (c.match(re)?.length ?? 0), 0);
@@ -2258,7 +2276,8 @@ export function checkAutoMemoryFacts(files: Map<string, string>): string[] {
     else if (
       !/return ([\w$]+)\?\.sessionType==="agent"\?[\w$.]+\(this\.currentAccountId,this\.currentOrgId\):\1&&!\1\?\.sessionType&&[\w$.]+\("123929380"\)\?[\w$.]+\(this\.currentAccountId,this\.currentOrgId\):null$/.test(
         body,
-      )
+      ) &&
+      !splitAutoMemoryArmHolds(sites[0], body, header![1]!, header![2]!)
     )
       why.push(
         `resolveAutoMemoryDir no longer ends with the ordinary-task arm gated on exactly "123929380" with a null else ` +
@@ -5795,6 +5814,75 @@ function enclosingFunctionName(chunk: string, at: number): string | null {
   return null;
 }
 
+/** The rejection handler of Desktop 4.23118.0's staging element, as text between the `.catch(` parens: true only for
+ *  `(<id>=>{…;return{ready:!1,…}})` or `(<id>=>({ready:!1,…}))`. The returned literal must be the one way out, lead with
+ *  `ready:!1`, and hold only plain `key:value` pairs: a spread, computed key, getter or method could override it.
+ *  Fail closed on purpose, so a refusal of these is the pin working, and costs one sync cycle: the text is scanned without
+ *  regard to strings, so a log line holding `ready:`, the word `return`, or a dotted `<ns>.prepareForVM(` refuses, and a
+ *  `return` must open the body or follow `;`, so a `}return` after a block refuses. Other arrow spellings (a bare `e=>`,
+ *  `(e)=>`) refuse until a build uses them. */
+function stagingHandlerReportsNotReady(handler: string): boolean {
+  if (!handler.startsWith("(") || matchClose(handler, 0) !== handler.length - 1) return false;
+  const inner = handler.slice(1, -1);
+  const arrow = inner.match(/^[\w$]+=>/);
+  if (!arrow) return false;
+  const body = inner.slice(arrow[0].length);
+  if (/[\w$]\.prepareForVM\(/.test(body)) return false;
+  if ((body.match(/ready:/g) ?? []).length !== 1) return false;
+  let open: number; // the returned literal's `{`
+  let closeWanted: number; // where that literal must end for it to be the handler's whole answer
+  if (body.startsWith("(")) {
+    if (matchClose(body, 0) !== body.length - 1 || body[1] !== "{") return false;
+    open = 1;
+    closeWanted = body.length - 2;
+  } else {
+    if (!body.startsWith("{") || matchClose(body, 0) !== body.length - 1) return false;
+    const returns = [...body.matchAll(/(?<![\w$.])return(?![\w$])/g)];
+    if (returns.length !== 1) return false;
+    const at = returns[0]!.index!;
+    if ((body[at - 1] !== "{" || at !== 1) && body[at - 1] !== ";") return false;
+    open = at + "return".length;
+    if (body[open] !== "{") return false;
+    closeWanted = body.length - 2;
+  }
+  if (matchClose(body, open) !== closeWanted) return false;
+  const members = splitTop(body.slice(open + 1, closeWanted)).map((m) => m.trim());
+  return members[0] === "ready:!1" && members.every((m) => /^[\w$]+:/.test(m));
+}
+
+/** From 4.23118.0 the staging handler turns a rejection into a not-ready result, so the block after the Promise.all is
+ *  all that stops the VM starting without a staged agent. True only when `tail` (from the array's `]`) opens with
+ *  `]);if(!<result>.ready){` and that block ends in a top-level `throw` with no `return` ahead of it. */
+function notReadyResultThrows(tail: string, result: string): boolean {
+  const head = new RegExp(`^\\]\\);if\\(!${reEsc(result)}\\.ready\\)\\{`).exec(tail);
+  if (!head) return false;
+  const open = head[0].length - 1;
+  const close = matchClose(tail, open);
+  if (close < 0) return false;
+  const block = tail.slice(open + 1, close);
+  const at = [...block.matchAll(/(?<![\w$.])throw(?![\w$])/g)].at(-1)?.index;
+  if (at === undefined || (at !== 0 && block[at - 1] !== ";")) return false;
+  if (/(?<![\w$.])return(?![\w$])/.test(block.slice(0, at))) return false;
+  // A `}` the rest cannot balance means the `throw` sat inside a nested block.
+  const rest = block.slice(at);
+  return matchClose(`{${rest}}`, 0) === rest.length + 1;
+}
+
+/** True when exactly one element of the `Promise.all([...])` is `<ns>.prepareForVM(<one id>)`, bare or with a `.catch`
+ *  that reports a not-ready result: a handler that reported ready would hide a failed staging. */
+function stagesAgentBinary(elements: string): boolean {
+  const hits = splitTop(elements).filter((e) => /^[\w$]+(?:\.[\w$]+)?\.prepareForVM\(/.test(e.trim()));
+  if (hits.length !== 1) return false;
+  const el = hits[0]!.trim();
+  const call = el.match(/^[\w$]+(?:\.[\w$]+)?\.prepareForVM\([\w$]+\)/);
+  if (!call) return false;
+  const rest = el.slice(call[0].length);
+  if (rest === "") return true;
+  // The `.catch(…)` must be the whole remainder: anything chained after it could replace the result.
+  if (!rest.startsWith(".catch(") || matchClose(rest, ".catch".length) !== rest.length - 1) return false;
+  return stagingHandlerReportsNotReady(rest.slice(".catch(".length, -1));
+}
+
 /**
  * The staged agent binary the harness runs is put on disk by Desktop's VM start: `startVM` runs the VM
  * bundle download and `prepareForVM` (the SDK/agent staging) together, as one step:
@@ -5821,12 +5909,20 @@ export function checkVmAgentStagingFacts(files: Map<string, string>): string[] {
     return flags;
   }
   const { chunk, at } = sites[0];
-  const all = chunk.slice(at + STEP.length).match(/^;let\[[\w$]+,[\w$]+\]=await Promise\.all\(\[([^\]]*)\]\)/);
-  if (!all) miss("the step no longer awaits a Promise.all([...]) right after it starts");
+  const after = chunk.slice(at + STEP.length);
+  const head = after.match(/^;let\[[\w$]+,([\w$]+)\]=await Promise\.all\(\[/);
+  // Quote- and bracket-aware: from 4.23118.0 an element's rejection handler logs "[VM:start] …", whose `]` ended a
+  // `[^\]]*` capture early.
+  const closeAt = head ? matchClose(after, head[0].length - 1) : -1;
+  if (!head || closeAt < 0 || after[closeAt + 1] !== ")") miss("the step no longer awaits a Promise.all([...]) right after it starts");
   // Exact arity: the real call passes one identifier (`EG.prepareForVM(t)`, both 2.9939.4 and 2.16120.0).
   // An added argument (e.g. an options object) could switch the staging off while the call stays present.
-  else if (!/(?:^|,)[\w$]+(?:\.[\w$]+)?\.prepareForVM\([\w$]+\)(?:,|$)/.test(all[1]))
+  // The element is that call alone, or (4.23118.0) that call with a `.catch(…)` turning a rejection into a not-ready
+  // result, which the code after the Promise.all throws just as before.
+  else if (!stagesAgentBinary(after.slice(head[0].length, closeAt)))
     miss("the download_and_sdk_prepare Promise.all no longer runs prepareForVM(<one argument>) — the agent binary may no longer be staged");
+  else if (!notReadyResultThrows(after.slice(closeAt), head[1]!))
+    miss("the not-ready result of the download_and_sdk_prepare step no longer throws — a failed staging may start the VM with no agent");
   const holder = enclosingFunctionName(chunk, at);
   const startChunk = [...files.values()].find((c) => /(?<![\w$])startVM:\(\)=>[\w$]+/.test(c));
   const start = startChunk ? startChunk.match(/(?<![\w$])startVM:\(\)=>([\w$]+)/)![1] : null;
@@ -5973,8 +6069,8 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
 
     // The HIPAA restriction reader, resolved in two hops (see S6e below for why both are needed). Returns the
     // defect, or null when `ref` is `function <r>(){return <f>()==="restricted"}` and <f> reads coworkHipaaRestricted.
-    const restrictionReaderDefect = (ref: string, what: string): string | null => {
-      const hipaa = resolveNamespaceRef(ref, toolsSite, files);
+    const restrictionReaderDefect = (ref: string, what: string, site: string = toolsSite): string | null => {
+      const hipaa = resolveNamespaceRef(ref, site, files);
       if (!hipaa) return `the ${what} (${ref}) could not be resolved to its definition — classify it before admitting the spread`;
       const h1 = hipaa.chunk.match(new RegExp(`function ${reEsc(hipaa.local)}\\(\\)\\{return ([\\w$]+)\\(\\)==="restricted"\\}`));
       if (!h1) return `the ${what} no longer resolves to a \`<f>()==="restricted"\` reader — Artifact may no longer be HIPAA-restricted`;
@@ -6050,7 +6146,9 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
         );
         const split = conjunct
           ? null
-          : def[1].match(/^([\w$]+)\?[\w$]+\?\.builtTools===void 0\?([\w$]+)\(([^)]*\}),!1\):\1\.frameArtifactsTurnPinned\?\?!1:!1$/);
+          : def[1].match(
+              /^([\w$]+)\?[\w$]+\?\.builtTools===void 0\?([\w$]+(?:\.[\w$]+)?)\(([^)]*\}),!1\):\1\.frameArtifactsTurnPinned\?\?!1:!1$/,
+            );
         if (split) splitForm = true;
         const whole = conjunct ?? split;
         if (!whole)
@@ -6065,13 +6163,18 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
           );
         else {
           // Attended-turn wrapper: function F(e,t){return P(e,t)&&e._isUnattended!==!0}
-          const wrap = toolsSite.match(
+          // Desktop 4.23118.0 moved the wrapper and its predicate into a shared chunk (`V.v(…)`): read both in the
+          // chunk the call resolves to. An undotted callee resolves to this same chunk.
+          const wrapRef = resolveNamespaceRef(whole[2]!, toolsSite, files);
+          const predSite = wrapRef?.chunk ?? toolsSite;
+          const wrapName = wrapRef?.local ?? whole[2]!;
+          const wrap = predSite.match(
             splitForm
               ? new RegExp(
-                  `function ${reEsc(whole[2])}\\(([\\w$]+),([\\w$]+),([\\w$]+)\\)\\{return ([\\w$]+)\\(\\1,\\2,\\3\\)&&\\1\\._isUnattended!==!0\\}`,
+                  `function ${reEsc(wrapName)}\\(([\\w$]+),([\\w$]+),([\\w$]+)\\)\\{return ([\\w$]+)\\(\\1,\\2,\\3\\)&&\\1\\._isUnattended!==!0\\}`,
                 )
               : new RegExp(
-                  `function ${reEsc(whole[2])}\\(([\\w$]+),([\\w$]+)\\)\\{return ([\\w$]+)\\(\\1,\\2\\)&&\\1\\._isUnattended!==!0\\}`,
+                  `function ${reEsc(wrapName)}\\(([\\w$]+),([\\w$]+)\\)\\{return ([\\w$]+)\\(\\1,\\2\\)&&\\1\\._isUnattended!==!0\\}`,
                 ),
           );
           // Desktop 2.16120.0: the sessionType term may instead be `(<s>.sessionType===void 0||<s>.sessionType==="scheduled")`
@@ -6083,7 +6186,7 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
           const blkParam = splitForm ? ",(?<blk>[\\w$]+)" : "";
           const blkTail = splitForm ? "!\\k<blk>" : "![\\w$]+(?:\\.[\\w$]+)?\\(\\)";
           const pred = wrap
-            ? toolsSite.match(
+            ? predSite.match(
                 new RegExp(
                   `function ${reEsc(wrap[splitForm ? 4 : 3]!)}\\(([\\w$]+),([\\w$]+)${blkParam}\\)\\{return \\1\\.frameArtifactsEnabled===!0&&(?:\\1\\.sessionType===void 0&&\\1\\.scheduledTaskId===void 0|(?<sched>\\(\\1\\.sessionType===void 0\\|\\|\\1\\.sessionType==="scheduled"\\))(?:&&\\1\\.scheduledTaskId===void 0)?)&&!\\2\\.isBridgeSession&&!\\2\\.isDispatchChild&&(?:!\\2\\.isHostLoop&&)?${blkTail}\\}`,
                 ),
@@ -6161,7 +6264,7 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
       const defs = [
         ...win.matchAll(
           new RegExp(
-            `(?:\\b(?:const|let|var)\\s+|[,;({])([\\w$]+)=${reEsc(artifactCond)}&&!([\\w$]+)&&!([\\w$]+)\\(([\\w$]+)\\?\\.orgId,([\\w$]+)\\?\\.frameArtifactsBitUnderVerdict===!0\\)(?=[,;])`,
+            `(?:\\b(?:const|let|var)\\s+|[,;({])([\\w$]+)=${reEsc(artifactCond)}&&!([\\w$]+)&&!([\\w$]+(?:\\.[\\w$]+)?)\\(([\\w$]+)\\?\\.orgId,([\\w$]+)\\?\\.frameArtifactsBitUnderVerdict===!0\\)(?=[,;])`,
             "g",
           ),
         ),
@@ -6176,20 +6279,24 @@ export function checkSpawnContractFacts(bundle: string, files?: Map<string, stri
           `the env keys' first restriction conjunct (${defs[0]![2]}) is not the launch function's frameArtifactsHipaaBlocked parameter (${blockedParam ?? "absent"})`,
         );
       else {
-        const [, cond, , verdict] = defs[0]!;
-        const body = braceBodyOf(toolsSite, `function ${verdict}(`);
+        const [, cond, , verdictRef] = defs[0]!;
+        // Desktop 4.23118.0 moved the verdict check beside the predicate, in a shared chunk: read it where it resolves.
+        const verdictAt = resolveNamespaceRef(verdictRef!, toolsSite, files);
+        const verdictSite = verdictAt?.chunk ?? toolsSite;
+        const verdict = verdictAt?.local ?? verdictRef!;
+        const body = braceBodyOf(verdictSite, `function ${verdict}(`);
         const shape = body?.match(
           /^let ([\w$]+)=([\w$]+)\.isBlocked\(\);return \1\|\|!([\w$]+(?:\.[\w$]+)?)\(\)\?\1:!([\w$]+)\|\|([\w$]+)==null\|\|\5!==[\w$]+(?:\.[\w$]+)?\(\)$/,
         );
-        const params = new RegExp(`function ${reEsc(verdict!)}\\(([\\w$]+),([\\w$]+)\\)\\{`).exec(toolsSite);
+        const params = new RegExp(`function ${reEsc(verdict)}\\(([\\w$]+),([\\w$]+)\\)\\{`).exec(verdictSite);
         if (!shape || !params || shape[5] !== params[1] || shape[4] !== params[2])
           splitMiss(
             `the verdict check ${verdict}() is no longer exactly \`blocked || !restricted() ? blocked : !bit || org==null || org!==currentOrg()\` — the env keys may now be withheld or granted on a different rule`,
           );
-        else if (!new RegExp(`(?<![\\w$.])${reEsc(shape[2]!)}=[\\w$]+(?:\\.[\\w$]+)?\\("cobalt_plinth"\\)`).test(toolsSite))
+        else if (!new RegExp(`(?<![\\w$.])${reEsc(shape[2]!)}=[\\w$]+(?:\\.[\\w$]+)?\\("cobalt_plinth"\\)`).test(verdictSite))
           splitMiss(`the verdict check's block source ${shape[2]} is no longer the "cobalt_plinth" org-policy watcher`);
         else {
-          const defect = restrictionReaderDefect(shape[3]!, "verdict check's restriction reader");
+          const defect = restrictionReaderDefect(shape[3]!, "verdict check's restriction reader", verdictSite);
           if (defect) splitMiss(defect);
           else envCond = cond;
         }

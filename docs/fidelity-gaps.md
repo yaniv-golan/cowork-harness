@@ -654,7 +654,7 @@ To test the refusal path, script a deny for the tool.
 
 ### @-mentioned files in a scheduled task — not modeled
 
-**Real Cowork behaviour (read in asar 4.29.0 and 4.4212.0):** a scheduled task's agent is started with
+**Real Cowork behaviour (read in asar 4.29.0 and 4.4212.0; both key names observed in a real scheduled task's spawn env on Desktop 4.16336.0 and 4.23118.0):** a scheduled task's agent is started with
 `CLAUDE_CODE_DISABLE_FILE_MENTIONS=1` beside `CLAUDE_CODE_HOST_SCHEDULED_RUN=1`. With it set, a file named with `@`
 in the prompt reaches the model as a path to read, not as the file's contents inlined into the turn. Ordinary task
 sessions do not set it.
@@ -763,10 +763,11 @@ The `skill` command supports `--session-id` + `--resume` for checkpoint-resume s
 
 **Real Cowork behaviour:** Desktop appends a large cowork system prompt (identity, behavior policy, computer-use/file rules) on top of the agent's built-in base prompt.
 
-**Harness behaviour:** The append is a per-baseline **paraphrased reconstruction** (`baselines/prompts/desktop-<ver>/system-prompt-append.md`) — behaviorally equivalent, not byte-identical (verbatim shipping of Anthropic's prompt text is deliberately avoided). Two intentional divergences, each logged in the asset header:
+**Harness behaviour:** The append is a per-baseline **paraphrased reconstruction** (`baselines/prompts/desktop-<ver>/system-prompt-append.md`) — not byte-identical (verbatim shipping of Anthropic's prompt text is deliberately avoided), and written to carry the behaviour of the asset's own Desktop release. Two intentional divergences, each logged in the asset header, and one known lag:
 
 - **Generic refusal/safety policy is elided** — the agent's base prompt already carries safety; only cowork-behavior-driving sections are reconstructed. (Formatting/tone guidance *is* included as of the 1.18286.0 asset — the base prompt does not carry it.)
 - **The Desktop artifact renderer's library/CDN catalog is trimmed** from the artifacts section — the harness has no artifact UI; the file-behavior rules (single-file HTML/React, .md-vs-.docx choice) are kept.
+- **The task-tracking section lags the copy bundled with Desktop 4.23118.0 and later.** Desktop's copy now steers the model to named tools (`TaskCreate`, `TaskUpdate`) and calls the sub-agent tool `Agent`; the harness's copy still describes both generically, on every baseline. So a model here gets no such steer, and a scenario asserting which of those tools ran may grade differently. That effect has not been measured. The bundled copy is Desktop's fallback: a signed-in session's prompt comes from Anthropic's servers and cannot be read from a release, so this states what the bundle says, not what a given session received.
 
 **Residual behavior note:** `<sharing_files>` now instructs `computer://` links exactly as production does — this is no longer a divergence. The harness resolves those links in the **display layer**, at **hostloop** fidelity only (the tier where the "host" side of a mount is production's own real host path); delivery is verified with the `computer_links_resolve` assertion. Container/microvm display keeps VM-shaped `/sessions/…` links — the honest form for those tiers, since translating to the harness's own staging paths would be less faithful than showing the VM path production's model also emits. Assert links via `computer_links_resolve`, not literal link text.
 

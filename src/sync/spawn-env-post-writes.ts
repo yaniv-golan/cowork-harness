@@ -27,7 +27,7 @@ const NO_BYPASS = "do NOT bypass with --allow-empty";
 type Classify = (name: string) => { class: SpawnEnvClass; reason: string } | null;
 
 /** Index of the bracket closing the one at `i` (string- and template-aware), or -1. */
-function matchClose(s: string, i: number): number {
+export function matchClose(s: string, i: number): number {
   const pairs: Record<string, string> = { "{": "}", "(": ")", "[": "]" };
   const stack = [pairs[s[i]]];
   for (let j = i + 1; j < s.length; j++) {
@@ -53,7 +53,7 @@ function matchClose(s: string, i: number): number {
 }
 
 /** Split the INSIDE of a bracket pair at top-level `sep` characters. */
-function splitTop(s: string, sep = ","): string[] {
+export function splitTop(s: string, sep = ","): string[] {
   const out: string[] = [];
   let depth = 0;
   let start = 0;
@@ -342,7 +342,9 @@ export function scanSpawnEnvPostWrites(
   if (dm.length !== 1) return fail(`the caller destructure \`{sdkOptions:…}=await ${fn.name}(\` appears ${dm.length} times, expected 1`);
   const J = dm[0][1];
   const from = dm[0].index! + dm[0][0].length;
-  const spawn = ch.slice(from).search(new RegExp(`\\(\\{prompt:${ID},options:${esc(J)}\\}\\)`));
+  // The prompt is an identifier, or (Desktop 4.23118.0) `<owed>?<wrap>(<prompt>,<signal>):<prompt>`, which holds the
+  // first turn back while a plugin's MCP reconnect is pending. Any other expression is a change to re-derive.
+  const spawn = ch.slice(from).search(new RegExp(`\\(\\{prompt:(?:${ID}|${ID}\\?${ID}\\((${ID}),${ID}\\):\\1),options:${esc(J)}\\}\\)`));
   if (spawn < 0) return fail(`the spawn call \`({prompt:…,options:${J}})\` was not found after the caller destructure`);
   s.scan(tail, ch, [U], `the builder ${fn.name}`);
   s.scan(ch.slice(from, from + spawn), ch, [J], "its caller");

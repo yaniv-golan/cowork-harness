@@ -571,6 +571,7 @@ describe.skipIf(!ASAR_BACKUPS)("checkPathHookFacts oracle over saved Desktop asa
     ["4.29.0", true],
     ["4.4212.0", true],
     ["4.16336.0", true],
+    ["4.23118.0", true],
   ])("%s: clean = %s", (version, clean) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
     expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
@@ -585,7 +586,7 @@ describe.skipIf(!ASAR_BACKUPS)("checkPathHookFacts oracle over saved Desktop asa
 // The scheduled-session facts over saved asars: the frame-tool list, its read-only export and the host loop's spread
 // have had the same shape in every build that has the frame-tools predicate, before and after the chat arm (4.29.0).
 describe.skipIf(!ASAR_BACKUPS)("checkScheduledSessionFacts oracle over saved Desktop asars (COWORK_ASAR_BACKUP_DIR)", () => {
-  it.each(["3.6556.2", "4.29.0", "4.4212.0", "4.16336.0"])("%s: clean", (version) => {
+  it.each(["3.6556.2", "4.29.0", "4.4212.0", "4.16336.0", "4.23118.0"])("%s: clean", (version) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
     expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
     const files = readAsarBuildFiles(asar);
@@ -600,6 +601,7 @@ describe.skipIf(!ASAR_BACKUPS)("readHostLoopFence + checkArtifactsMcpGuardFacts 
   it.each([
     ["4.4212.0", null],
     ["4.16336.0", { minCli: "2.1.315" }],
+    ["4.23118.0", { minCli: "2.1.315" }],
   ])("%s: fence %j, no flags; the Artifacts-key guard is clean", (version, fence) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
     expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
@@ -610,6 +612,79 @@ describe.skipIf(!ASAR_BACKUPS)("readHostLoopFence + checkArtifactsMcpGuardFacts 
     expect(r.flags).toEqual([]);
     expect(r.writers.length).toBe(fence ? 4 : 0);
     expect(checkArtifactsMcpGuardFacts(files)).toEqual([]);
+  });
+});
+
+// The spawn-contract and VM-staging sentinels over saved asars: 4.16336.0 holds the older shapes (Artifact predicates in
+// the spawn chunk, a bare prepareForVM element) and 4.23118.0 the newer ones (a shared chunk behind a namespace, a
+// rejection handler). The older builds in each table refuse for reasons unrelated to those shapes (an env key, the startVM
+// export), so those rows show only that the suite reads real bytes; no saved build fails on the pinned shapes. The
+// real-byte mutations are what make the newer forms falsifiable.
+describe.skipIf(!ASAR_BACKUPS)("checkSpawnContractFacts + checkVmAgentStagingFacts oracle over saved Desktop asars", () => {
+  const read = (version: string) => {
+    const asar = join(ASAR_BACKUPS!, version, "app.asar");
+    expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
+    const files = readAsarBuildFiles(asar);
+    expect(files.size).toBeGreaterThan(50);
+    return files;
+  };
+  const spawnFlags = (files: Map<string, string>) => checkSpawnContractFacts([...files.values()].join(""), files);
+  /** Replace the single match of `re` in the single chunk holding it. */
+  const mutate = (files: Map<string, string>, re: RegExp, to: string) => {
+    const hits = [...files].filter(([, c]) => re.test(c));
+    expect(hits).toHaveLength(1);
+    const [name, chunk] = hits[0]!;
+    const next = chunk.replace(re, to);
+    expect(next).not.toBe(chunk);
+    files.set(name, next);
+  };
+
+  it.each([
+    ["2.9939.4", false],
+    ["4.16336.0", true],
+    ["4.23118.0", true],
+  ])("checkSpawnContractFacts %s: clean = %s", (version, clean) => {
+    const flags = spawnFlags(read(version));
+    if (clean) expect(flags).toEqual([]);
+    else expect(flags.length).toBeGreaterThan(0);
+  });
+  it.each([
+    ["1.40609.1", false],
+    ["4.16336.0", true],
+    ["4.23118.0", true],
+  ])("checkVmAgentStagingFacts %s: clean = %s", (version, clean) => {
+    const flags = checkVmAgentStagingFacts(read(version));
+    if (clean) expect(flags).toEqual([]);
+    else expect(flags.length).toBeGreaterThan(0);
+  });
+
+  it("4.23118.0 with the attended-turn term dropped from the shared-chunk wrapper flags S6c", () => {
+    const files = read("4.23118.0");
+    mutate(files, /(function [\w$]+\(([\w$]+),[\w$]+,[\w$]+\)\{return [\w$]+\(\2,[\w$]+,[\w$]+\))&&\2\._isUnattended!==!0\}/, "$1}");
+    expect(spawnFlags(files).join("\n")).toContain("S6c");
+  });
+  it("4.23118.0 with the shared-chunk block source re-pointed flags S6d", () => {
+    const files = read("4.23118.0");
+    mutate(
+      files,
+      /(=[\w$]+\.[\w$]+\()"cobalt_plinth"(\);function [\w$]+\([\w$]+,[\w$]+\)\{let [\w$]+=[\w$]+\.isBlocked\(\))/,
+      '$1"other_policy"$2',
+    );
+    expect(spawnFlags(files).join("\n")).toContain("S6d");
+  });
+  it("4.23118.0 with the not-ready result no longer thrown flags", () => {
+    const files = read("4.23118.0");
+    mutate(
+      files,
+      /(\]\);if\(![\w$]+\.ready\)\{let [\w$]+=[\w$]+\(Error\([\w$]+\.error\?\?"SDK preparation failed"\)[^;]*;)throw /,
+      "$1void ",
+    );
+    expect(checkVmAgentStagingFacts(files).join("\n")).toContain("no longer throws");
+  });
+  it("4.23118.0 with the staging handler reporting ready flags", () => {
+    const files = read("4.23118.0");
+    mutate(files, /(prepareForVM\([\w$]+\)\.catch\(\([^]{0,300}?return\{ready:)!1/, "$1!0");
+    expect(checkVmAgentStagingFacts(files).join("\n")).toContain("vm agent staging");
   });
 });
 
@@ -831,6 +906,46 @@ describe("checkAutoMemoryFacts (auto-memory anchor)", () => {
 });
 
 // Desktop 4.16336.0 adds a claude.ai memory-reset check as a second conjunct of the spawn's switch. Synthetic shapes.
+// Desktop 4.23118.0: resolveAutoMemoryDir became a wrapper over resolveAutoMemory, which can return a module-level symbol
+// (scheduled sessions on a deployment that cannot sync memory remotely). Synthetic shape.
+describe("checkAutoMemoryFacts (split resolver, Desktop 4.23118.0)", () => {
+  const SPAWN =
+    "let gt=s.memoryEnabled===!1?null:r.getAutoMemoryDirForSession(a),_t=g&&gt?t.Dz(gt):gt;" +
+    '...R?(()=>{return{CLAUDE_COWORK_MEMORY_PATH_OVERRIDE:R}})():{CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"},' +
+    'e.env?.CLAUDE_COWORK_MEMORY_PATH_OVERRIDE||(e.env={...e.env,CLAUDE_CODE_DISABLE_AUTO_MEMORY:"1"});';
+  const RESOLVER =
+    'n_=Symbol("account memory, by tools");class Q{getAutoMemoryDirForSession(e){return this.resolveAutoMemoryDir(e,!1)}getAutoMemoryDirForDisplay(e){return this.resolveAutoMemoryDir(e,!0)}' +
+    "resolveAutoMemoryDir(e,t){let n=this.resolveAutoMemory(e,t);return n===n_?null:n}" +
+    "resolveAutoMemory(e,n){if(!this.currentAccountId||!this.currentOrgId)return null;let r=this.sessions.get(e);" +
+    'return r?.sessionType==="agent"?t.V6(this.currentAccountId,this.currentOrgId):!r||!t.zrt("123929380")?null:r.sessionType?r.sessionType==="scheduled"&&!t.Cmt().canSyncCoworkMemoryRemotely()?n_:null:t.H6(this.currentAccountId,this.currentOrgId)}' +
+    "buildMountedProjects(e){return 1}}";
+  const files = (resolver = RESOLVER) =>
+    new Map([
+      ["index.chunk-SPAWN.js", SPAWN],
+      ["index.chunk-RESOLVER.js", resolver],
+    ]);
+  it("the split shape is clean", () => {
+    expect(checkAutoMemoryFacts(files())).toEqual([]);
+  });
+  it.each([
+    ["the wrapper lets the symbol through", (r: string) => r.replace("return n===n_?null:n}", "return n}")],
+    ["the wrapper compares a different symbol", (r: string) => r.replace("return n===n_?null:n}", "return n===m_?null:n}")],
+    [
+      "the wrapper forwards a fixed second argument",
+      (r: string) => r.replace("this.resolveAutoMemory(e,t)", "this.resolveAutoMemory(e,!0)"),
+    ],
+    ["the wrapper swaps its arguments", (r: string) => r.replace("this.resolveAutoMemory(e,t)", "this.resolveAutoMemory(t,e)")],
+    ["a different gate id", (r: string) => r.replace('"123929380"', '"123929381"')],
+    ["the ordinary arm no longer gated", (r: string) => r.replace('!r||!t.zrt("123929380")?null:', "!r?null:")],
+    ["a non-scheduled typed session gets a directory", (r: string) => r.replace("?n_:null:t.H6", "?n_:t.H6(1):t.H6")],
+    ["the symbol is no longer a Symbol", (r: string) => r.replace('n_=Symbol("account memory, by tools");', "n_=1;")],
+  ])("flags: %s", (_n, mutate) => {
+    const m = mutate(RESOLVER);
+    expect(m).not.toBe(RESOLVER);
+    expect(checkAutoMemoryFacts(files(m)).join("\n")).toMatch(/ordinary-task arm gated/);
+  });
+});
+
 describe("checkAutoMemoryFacts (reset-checked switch)", () => {
   const SITE =
     "let gt=s.memoryEnabled!==!1&&await z.t(r.getCurrentAccountId(),r.getCurrentOrgId())?r.getAutoMemoryDirForSession(a):null,_t=g&&gt?t.Dz(gt):gt;";
@@ -922,6 +1037,8 @@ describe.skipIf(!ASAR_BACKUPS)("checkAutoMemoryFacts oracle over saved Desktop a
     ["2.9939.4", true],
     ["2.16120.0", true],
     ["2.19675.0", true],
+    ["4.16336.0", true],
+    ["4.23118.0", true],
   ])("%s: anchor clean = %s", (version, clean) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
     expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
@@ -1765,6 +1882,51 @@ describe("deriveSpawnEnv / checkSpawnContractFacts (spawn contract, A5)", () => 
     HIPAA_DEF;
   const fixtureSplit = () =>
     `HEADER;${W3};${W2};${W1_1289290}${SPLIT_DEF + STIER.replace('"AskUserQuestion","ToolSearch"', '"AskUserQuestion",...zoe?["Artifact"]:[],"ToolSearch"')};${MODELCFG}TAIL`;
+  // Desktop 4.23118.0 moved the wrapper, predicate and verdict check into a shared chunk reached through a namespace.
+  describe("S6c/S6d predicates in a shared chunk (Desktop 4.23118.0)", () => {
+    const PRED =
+      'function zPo(e,t,n){return e.frameArtifactsEnabled===!0&&(e.sessionType===void 0||e.sessionType==="scheduled")&&!t.isBridgeSession&&!t.isDispatchChild&&!n}' +
+      "function zFo(e,t,n){return zPo(e,t,n)&&e._isUnattended!==!0}";
+    const VERDICT = 'var zDi=zt.XF("cobalt_plinth");function zOi(e,n){let r=zDi.isBlocked();return r||!zA.r()?r:!n||e==null||e!==zt.ZF()}';
+    const shared = () =>
+      'Object.defineProperty(exports,"v",{enumerable:!0,get:function(){return zFo}});Object.defineProperty(exports,"_",{enumerable:!0,get:function(){return zOi}});' +
+      PRED +
+      VERDICT +
+      HIPAA_DEF;
+    const main = () =>
+      'const Vv=require("./index.chunk-shared.js");' +
+      fixtureSplit().replace(PRED, "").replace(VERDICT, "").replace("zFo(i,", "Vv.v(i,").replace("zOi(h?.orgId", "Vv._(h?.orgId");
+    const run = (mutateShared?: (s: string) => string, mutateMain?: (s: string) => string) => {
+      const m = mutateMain ? mutateMain(main()) : main();
+      const sh = mutateShared ? mutateShared(shared()) : shared();
+      const files = new Map([
+        ["index.chunk-main.js", m],
+        ["index.chunk-shared.js", sh],
+      ]);
+      return checkSpawnContractFacts(`${m}\n${sh}`, files).join("\n");
+    };
+    it("the moved shape is clean", () => {
+      expect(main()).toContain("Vv._(h?.orgId");
+      expect(main()).not.toContain("function zFo");
+      expect(run()).toBe("");
+    });
+    it.each([
+      ["the attended-turn term dropped", (s: string) => s.replace("&&e._isUnattended!==!0", ""), "S6c"],
+      ["a predicate term dropped", (s: string) => s.replace("&&!t.isDispatchChild", ""), "S6c"],
+      ["the wrapper widened", (s: string) => s.replace("return zPo(e,t,n)&&", "return !0||zPo(e,t,n)&&"), "S6c"],
+      ["the verdict check widened", (s: string) => s.replace("return r||!zA.r()?r:", "return !1||r||!zA.r()?r:"), "S6d"],
+      ["the block source re-pointed", (s: string) => s.replace('"cobalt_plinth"', '"other_policy"'), "S6d"],
+      ["the restriction reader re-pointed", (s: string) => s.replace('zWL()==="restricted"', 'zWL()==="open"'), "S6d"],
+    ])("flags: %s", (_n, mutate, tag) => {
+      const m = mutate(shared());
+      expect(m).not.toBe(shared());
+      expect(run(mutate)).toContain(tag);
+    });
+    it("flags a namespace export that does not exist", () => {
+      expect(run((s) => s.replace('"v",{enumerable', '"w",{enumerable'))).toContain("S6c");
+    });
+  });
+
   describe("S6c/S6d split form (Desktop 2.37337.1)", () => {
     const facts = (b: string) => checkSpawnContractFacts(b).join("\n");
     it("the split shape is clean", () => {
@@ -3392,36 +3554,44 @@ describe("extractPromptFingerprint — the parameter form and the module-constan
 });
 
 describe.skipIf(!ASAR_BACKUPS)("extractPromptFingerprint over saved Desktop asars (COWORK_ASAR_BACKUP_DIR)", () => {
-  it.each(["3.6556.2", "4.29.0", "4.4212.0"])("%s: the rendered prompt is unchanged", (version) => {
+  const BEFORE = ["a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf", 37811, "e62bd9fa"] as const;
+  const FROM_4_23118 = ["dc803821f7a581398c81077584ccee8a6cca84e7182e7521450f97d1e75c0fa6", 38197, "e6834921"] as const;
+  it.each([
+    ["3.6556.2", BEFORE],
+    ["4.29.0", BEFORE],
+    ["4.4212.0", BEFORE],
+    ["4.16336.0", BEFORE],
+    ["4.23118.0", FROM_4_23118],
+  ] as const)("%s: the rendered prompt is the fingerprinted one", (version, [decoded, codePoints, rawPrefix]) => {
     const asar = join(ASAR_BACKUPS!, version, "app.asar");
     expect(existsSync(asar), `${asar} is missing from COWORK_ASAR_BACKUP_DIR`).toBe(true);
     const files = readAsarBuildFiles(asar);
     const r = extractPromptFingerprint([...files.values()].join(""), files);
-    expect(r?.decodedSha256).toBe("a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf");
-    expect(r?.decodedCodePoints).toBe(37811);
+    expect(r?.decodedSha256).toBe(decoded);
+    expect(r?.decodedCodePoints).toBe(codePoints);
     expect(r?.sectionTags).toBe(43);
-    expect(r?.sha256.startsWith("e62bd9fa")).toBe(true);
+    expect(r?.sha256.startsWith(rawPrefix)).toBe(true);
     expect(checkPromptReaderFacts(files)).toEqual([]);
   });
 });
 
 describe("prompt drift guard (H1-H3)", () => {
-  // D8: the RENDERED prompt has not moved since 1.20186.0 — but its RAW sha has, twice, purely from
+  // D8: the RENDERED prompt held from 1.20186.0 until Desktop 4.23118.0 changed its task-list section — but its RAW sha moved twice before that, purely from
   // codegen (1.32352.0 began escaping non-ASCII). Pinning the raw sha here made this oracle a VERSION pin
   // wearing an invariant's clothes: it went red the day Desktop updated, for no product reason. The
   // decoded hash is the invariant it was always reaching for.
-  const RENDERED_PROMPT_SHA = "a14592804dfc6728e855d3be17eeb40cef654aeb0bc6457487f5963dbedc7fdf";
+  const RENDERED_PROMPT_SHA = "dc803821f7a581398c81077584ccee8a6cca84e7182e7521450f97d1e75c0fa6";
 
   // Golden oracle (non-circular): extractPromptFingerprint over the REAL asar must match the
-  // committed 1.20186.0 fingerprint entry exactly. Skips gracefully off-macOS / without a live
+  // committed 4.23118.0 fingerprint entry exactly. Skips gracefully off-macOS / without a live
   // Desktop install (same readRealBundleOrSkip seam the spawn-contract oracles use).
-  it("golden oracle: the RENDERED prompt in the real asar is unchanged since 1.20186.0", () => {
+  it("golden oracle: the RENDERED prompt in the real asar is the one fingerprinted at 4.23118.0", () => {
     const bundle = readRealBundleOrSkip();
     if (!bundle) return;
     const fp = extractPromptFingerprint(bundle, readRealBundleFilesOrSkip() ?? undefined);
     expect(fp).not.toBeNull();
     expect(fp!.decodedSha256).toBe(RENDERED_PROMPT_SHA);
-    expect(fp!.decodedCodePoints).toBe(37811);
+    expect(fp!.decodedCodePoints).toBe(38197);
     expect(fp!.sectionTags).toBe(43);
     expect(fp!.placeholders).toHaveLength(10);
   });
@@ -5807,6 +5977,7 @@ describe("checkVmAgentStagingFacts — startVM still stages the agent", () => {
     if (!files) return;
     expect(checkVmAgentStagingFacts(files)).toEqual([]);
   });
+  const READY_BLOCK = 'if(!h.ready){let e=Error(h.error??"SDK preparation failed");throw s.stepFailed("download_and_sdk_prepare",e),e}';
   const MUT: ReadonlyArray<readonly [string, (s: string) => string]> = [
     ["V1 prepareForVM dropped from the Promise.all", (s) => s.replace("[BJ(e,t),EG.prepareForVM(t)]", "[BJ(e,t)]")],
     [
@@ -5821,9 +5992,68 @@ describe("checkVmAgentStagingFacts — startVM still stages the agent", () => {
     ["V5 the startVM export is gone", (s) => s.replace("startVM:()=>KJ,", "")],
     // The real call passes one identifier (`EG.prepareForVM(t)`); an options object could switch staging off.
     ["V6 prepareForVM called with an options object", (s) => s.replace("EG.prepareForVM(t)", "EG.prepareForVM(t,{skip:!0})")],
+    ["V7 a not-ready result is logged and the start continues", (s) => s.replace(READY_BLOCK, "if(!h.ready){Z.warn(h.error)}")],
+    [
+      "V8 the check reads the other result",
+      (s) =>
+        s.replace(
+          READY_BLOCK,
+          'if(!d.ready){let e=Error(h.error??"SDK preparation failed");throw s.stepFailed("download_and_sdk_prepare",e),e}',
+        ),
+    ],
+    ["V9 the not-ready check is gone", (s) => s.replace(READY_BLOCK, "")],
+    ["V10 the throw sits under a further condition", (s) => s.replace(READY_BLOCK, "if(!h.ready){if(h.fatal){throw h.error}}")],
+    [
+      "V14 the throw closes a nested block after another statement",
+      (s) => s.replace(READY_BLOCK, "if(!h.ready){if(h.fatal){Z.warn(1);throw h.error}}"),
+    ],
+    ["V11 a return ahead of the throw", (s) => s.replace(READY_BLOCK, "if(!h.ready){return;throw h.error}")],
+    ["V12 the throw is only an unbraced conditional", (s) => s.replace(READY_BLOCK, "if(!h.ready){if(h.fatal)throw h.error}")],
+    ["V13 the word throw only in a log line", (s) => s.replace(READY_BLOCK, 'if(!h.ready){Z.warn("will throw")}')],
   ];
   it.each(MUT)("mutation %s fails loud (%#)", (_label, mutate) => {
     expect(checkVmAgentStagingFacts(vmChunk(mutate)).join("\n")).toContain("vm agent staging");
+  });
+  // Desktop 4.23118.0: the element gained a rejection handler that reports not-ready, and whose log string holds a `]`.
+  const CATCH = `EG.prepareForVM(t).catch((e=>{Z.error("[VM:start] prepareForVM() threw: %o",e);return{ready:!1,error:"x"}}))`;
+  const withCatch = (el: string) => (s: string) => s.replace("EG.prepareForVM(t)", el);
+  it("clean: prepareForVM with a not-ready rejection handler", () => {
+    expect(checkVmAgentStagingFacts(vmChunk(withCatch(CATCH)))).toEqual([]);
+  });
+  it("clean: the handler as a bare object expression", () => {
+    expect(checkVmAgentStagingFacts(vmChunk(withCatch('EG.prepareForVM(t).catch((e=>({ready:!1,error:"x"})))')))).toEqual([]);
+  });
+  it.each([
+    ["the handler reports ready", CATCH.replace("ready:!1", "ready:!0")],
+    ["the handler reports ready on one arm", CATCH.replace('return{ready:!1,error:"x"}', "return e.soft?{ready:!1}:{ready:!0}")],
+    ["a conditional expression handler", "EG.prepareForVM(t).catch((e=>e.soft?{ready:!1}:{ready:!!e}))"],
+    ["a spread beside not-ready", "EG.prepareForVM(t).catch((e=>({ready:!1,...e.result})))"],
+    ["a spread in a block handler", 'EG.prepareForVM(t).catch((e=>{Z.error("x");return{ready:!1,...e.result}}))'],
+    ["not-ready only in a log string", 'EG.prepareForVM(t).catch((e=>{Z.error("ready:!1");return{ready:true}}))'],
+    ["a log line naming ready beside a real not-ready", 'EG.prepareForVM(t).catch((e=>{Z.error("ready:");return{ready:!1}}))'],
+    ["a comma expression after the literal", "EG.prepareForVM(t).catch((e=>({ready:!1}),{ready:1}))"],
+    ["the handler re-runs staging", "EG.prepareForVM(t).catch((e=>EG.prepareForVM(t,{force:!0}).catch(()=>({ready:!1}))))"],
+    ["a block handler re-runs staging", "EG.prepareForVM(t).catch((e=>{EG.prepareForVM(t,{force:!0});return{ready:!1}}))"],
+    ["an early return", "EG.prepareForVM(t).catch((e=>{if(e.x)return{ok:1};return{ready:!1}}))"],
+    ["the return is not the last statement", "EG.prepareForVM(t).catch((e=>{return{ready:!1};f()}))"],
+    ["the return sits under a condition", "EG.prepareForVM(t).catch((e=>{if(e.x)return{ready:!1}}))"],
+    ["ready is not the first member", "EG.prepareForVM(t).catch((e=>({error:1,ready:!1})))"],
+    ["a function reference handler", "EG.prepareForVM(t).catch(notReady)"],
+    ["an array in place of the handler", "EG.prepareForVM(t).catch([e=>({ready:!1})])"],
+    ["a function expression in place of the arrow", "EG.prepareForVM(t).catch((function(e){return{ready:!1}}))"],
+    ["an object in place of the handler", "EG.prepareForVM(t).catch((({ready:!1})))"],
+    ["the arrow is called, not passed", "EG.prepareForVM(t).catch((e=>({ready:!1}))(y))"],
+    ["a call, not an object, as the expression body", "EG.prepareForVM(t).catch((e=>(notReady(e))))"],
+    ["a call, not an object, as the returned value", "EG.prepareForVM(t).catch((e=>{return notReady(e)}))"],
+    ["a computed key overriding not-ready", 'EG.prepareForVM(t).catch((e=>{return{ready:!1,["ready"]:!0}}))'],
+    ["a getter overriding not-ready", "EG.prepareForVM(t).catch((e=>({ready:!1,get ready(){return!0}})))"],
+    ["a statement after a return with two members", "EG.prepareForVM(t).catch((e=>{return{ready:!1,a:1};f()}))"],
+    ["an options object beside the handler", CATCH.replace("prepareForVM(t)", "prepareForVM(t,{skip:!0})")],
+    ["something chained after the handler", `${CATCH}.then(e=>({ready:!0}))`],
+    ["an innocuous-looking chain after the handler", `${CATCH}.then(e=>e)`],
+    ["the call only in the handler", `Promise.resolve().catch((e=>EG.prepareForVM(t)))`],
+  ])("flags: %s", (_n, el) => {
+    expect(checkVmAgentStagingFacts(vmChunk(withCatch(el))).join("\n")).toContain("vm agent staging");
   });
 });
 

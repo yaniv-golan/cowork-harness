@@ -8,6 +8,30 @@ All notable changes to this project are documented here. The format is based on
 
 ### Added
 
+- **Baseline for Claude Desktop 4.23118.0 (agent 2.1.317, unchanged).** `desktop-4.23118.0` is the new newest baseline.
+  It has not had a live pass. It was observed from one scheduled task and no ordinary session, so what only an
+  ordinary session shows (`send_user_message`, `AskUserQuestion`, the role picker, the typed-artifact tools) is read
+  from Desktop's code, not observed; `npm run preflight` prints this. The spawn environment, the egress allowlist, the
+  sub-agent append fingerprints and every pinned gate are the same as `desktop-4.16336.0`. The one change that reaches
+  a local session is in the system prompt bundled with Desktop: its task-tracking section now steers the model to named
+  tools (`TaskCreate`, `TaskUpdate`) and calls the sub-agent tool `Agent`. The harness records that prompt's new
+  fingerprint. The paraphrase it serves is unchanged and still describes both generically (docs/fidelity-gaps.md).
+  Desktop falls back to that bundled copy; a signed-in session can receive its prompt from Anthropic's servers instead,
+  which no sync sees.
+- **Two tool descriptions on Desktop's remote-devices server moved.** `device_commit_files` changes a size unit's
+  spelling on two branches. `device_request_folder_access` keeps its texts, but account type now picks among them where
+  a gate did. The harness serves neither tool; the baseline records both.
+- **Cassettes: re-stamp or re-record.** `latest` moves to `desktop-4.23118.0`, so a cassette recorded through
+  `baseline: latest` reports `[stale] baseline moved 4.16336.0 → 4.23118.0 since record — re-record`; re-stamping
+  `fingerprint.baseline` clears that. The agent is unchanged, so this move adds no `agent-version:` note, and the served
+  prompt assets are unchanged, so `promptAssetsHash` is the same. The bundled cassettes are re-stamped.
+- **`sync` reads the shapes Desktop 4.23118.0 moved.** Six refusals were `sync`'s own extractors meeting refactored code:
+  the Artifact predicates and the verdict check are read from the shared chunk they moved to; the auto-memory resolver
+  is read through its new wrapper, where a scheduled task on a deployment that cannot sync memory remotely gets a
+  marker the wrapper reads as the same null, and only Desktop's memory-tools gate sees it; the spawn call may hold back
+  its first turn while a plugin's MCP reconnect is pending; and the VM agent staging step may turn a failed staging
+  into a not-ready result, in the one handler shape `sync` admits. Each form is pinned, so a real change still refuses.
+
 - **`agent_env.passthrough`** lists environment variable names to give the `hostloop` agent beside the ones
   Desktop copies, for example `SSH_AUTH_SOCK`, `NODE_EXTRA_CA_CERTS`, `HTTPS_PROXY` or `LANG` for a plugin MCP server or
   hook that needs one. It is accepted at `protocol`, where the agent inherits your environment anyway, and refused at
