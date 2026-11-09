@@ -2349,6 +2349,12 @@ interface ModelUsageEntry {
   contextWindow?: number;
   maxOutputTokens?: number;
   webSearchRequests?: number;
+  thinkingTokens?: number;
+  cacheCreationEphemeral5mInputTokens?: number;
+  cacheCreationEphemeral1hInputTokens?: number;
+  canonicalModel?: string;
+  provider?: string;
+  costBasis?: string;
 }
 
 /** Token counters for a harness-side model call (the LLM decider, the semantic judge), in the snake_case

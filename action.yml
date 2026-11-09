@@ -43,7 +43,7 @@ inputs:
       The two move independently, so leaving this input at `latest` means a CLI MAJOR reaches your
       workflow the moment it is promoted, even though your `uses:` ref never changed. That is how a
       workflow pinned to `@v1` began installing CLI 2.x. To hold a major, set this to its range: `^5`,
-      or `^3` to stay on the previous one.
+      or `^4` to stay on the previous one.
     required: false
     default: "latest"
   strict:

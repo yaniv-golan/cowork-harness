@@ -19,8 +19,8 @@ All notable changes to this project are documented here. The format is based on
   | `run <file or dir/> --repeat N` | unknown baseline name, missing input path, tier-vacuous assertion | exit 1, `stoppedEarly: "error"` in the rollup | exit 2 before the first run, no run dir |
   | `record <file> --dry-run` | unknown baseline name | exit 1 | exit 2 |
   | `record <file> --dry-run` | unreadable `session:` file, tier-vacuous assertion | exit 0, reported | exit 1 |
-  | `record <file> --max-budget-usd` | unknown baseline name, cost history over the cap | exit 1, `budget_exceeded` | exit 2 |
-  | `record <file>`, real or `--dry-run` | unknown baseline name, no model pinned | exit 1, no model pinned | exit 2 |
+  | `record <file> --max-budget-usd` | unknown baseline name with cost history over the cap | exit 1, `budget_exceeded` | exit 2 |
+  | `record <file>`, real or `--dry-run` | unknown baseline name with no model pinned | exit 1, no model pinned | exit 2 |
   | `record <dir/> --dry-run` | unknown baseline name | exit 0, reported | exit 2 |
   | `record <dir/> --dry-run` | unreadable `session:` file, missing input path, tier-vacuous assertion | exit 0, reported | exit 1, in `refusals[]` |
   | `record <dir/> --dry-run` | baseline file that does not load | exit 0, reported | exit 1, in `refusals[]` |
@@ -28,14 +28,14 @@ All notable changes to this project are documented here. The format is based on
   | `record <dir/>` | unreadable `session:` file, missing input path, tier-vacuous assertion | exit 1 for that item, after earlier items were paid for | exit 1 before the first spawn |
   | `record <dir/>` | baseline file that does not load | exit 1 for that item, after earlier items were paid for | exit 1 before the first spawn |
 
-  On a directory, any unknown baseline name gives exit 2, else any broken or refused item gives exit 1, else exit 0. A
+  Over the cap or with no model pinned, a known baseline still exits 1. On a directory, any unknown baseline name gives exit 2, else any broken or refused item gives exit 1, else exit 0. A
   script reading `stoppedEarly` for one of the `run --repeat` inputs above now gets the usage error envelope;
   `stoppedEarly: "error"` remains for an error mid-loop. `record --rerecord-stale` keeps its own pre-flight (model,
   credential, shared `config_dir`, budget); any other bad item is reported when its turn comes.
 - **Eight environment variables moved into the `COWORK_HARNESS_` namespace:** `COWORK_LOCKDOWN`,
   `COWORK_LIMA_INSTANCE`, `COWORK_LIMACTL`, `COWORK_VM_PROVISION_TIMEOUT_S`, `COWORK_VM_PROXY_PORT`, `COWORK_VM_GATEWAY`,
   `COWORK_CONTAINER_RUNTIME` and `COWORK_SKIP_CAPABILITY_PROBE` are now `COWORK_HARNESS_LOCKDOWN` and so on. Setting
-  an old name to a non-empty value refuses every command at startup (exit 2), naming the new one. The bare names that
+  an old name to a non-empty value refuses every command but `--version` at startup (exit 2), naming the new one. The bare names that
   stay are the agent and proxy overrides (`COWORK_AGENT_BINARY`, `COWORK_AGENT_IMAGE`, `COWORK_HOST_AGENT_BINARY`,
   `COWORK_PROXY_IMAGE`), now all covered by the compatibility contract, and `COWORK_ARTIFACTS_ROOT`, which Desktop
   sets.
@@ -72,7 +72,7 @@ All notable changes to this project are documented here. The format is based on
 - **A pinned `plugins.config_dir` is single-run.** The harness creates it (the path must not exist yet),
   marks it, and reuses it only for the same run's later legs. An existing directory the harness
   did not create for this run is refused, so a real Claude config is never written to. `run --repeat` (above 1),
-  `run --matrix`, `eval` and `hillclimb` refuse a pinned `config_dir` before the first run, and so do `run <dir/>`,
+  `run --matrix` (more than one cell), `eval` and `hillclimb` refuse a pinned `config_dir` before the first run, and so do `run <dir/>`,
   `record <dir/>` and `record --rerecord-stale` when two of their scenarios pin the same dir.
 - **`--resume` refuses a session manifest without its identity stamps** (`sessionId` and `fidelity`), where
   it used to let one through with a warning. Start a fresh session, or delete the run dir and re-run with
@@ -142,14 +142,18 @@ All notable changes to this project are documented here. The format is based on
   `error_max_turns`; add `allow_max_turns: true` if the cap is intended. A protocol `--resume` now resumes. Protocol runs
   now carry a fixed thinking budget (`--max-thinking-tokens 31999`, or `--thinking disabled`), so a `stats` or `hillclimb`
   history of protocol runs from before this version is not comparable. `eval` is unaffected: it compares arms inside
-  one version.
+  one version. `hillclimb` rows from protocol runs on `ANTHROPIC_AUTH_TOKEN` now record `meta.billing.basis` `ambiguous`
+  where they recorded `subscription`, so `billing_basis` can read `"mixed"` across the upgrade.
+- **The packaged Action follows `latest`.** `uses: yaniv-golan/cowork-harness@v4` with `version: latest`, or no
+  `version:` input, installs CLI 5.0.0 once it is promoted. To stay on 4.x, set `version: "^4"`.
 - **The graders now use the agent's credential when `CLAUDE_CODE_OAUTH_TOKEN` is set.** The judges, the LLM decider
   and the critique evaluator no longer receive `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` alongside the token. If
   you had both set, grading moves off the API key to the token's billing. `COWORK_HARNESS_GRADER_AUTH=inherit`
   restores the previous behaviour. Without the token nothing changes.
 - **With `CLAUDE_CODE_OAUTH_TOKEN` set, the hostloop agent no longer gets `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or
-  `ANTHROPIC_CUSTOM_HEADERS`.** It already authenticated with the token, so where a run is billed does not change. Two
-  things you may see:
+  `ANTHROPIC_CUSTOM_HEADERS`.** It already authenticated with the token, so where a run is billed does not change. Only the environment is covered: a managed `settings.json` (an `env` entry or
+  `apiKeyHelper`) can still hand the agent a key. The message `hillclimb run` prints after a run at hostloop could not
+  authenticate says which credential the agent is given. Two things you may see:
   - hillclimb rows from hostloop runs with both the token and the key set now record `meta.billing.basis`
     `subscription` where they recorded `ambiguous`, so a variant's `summary.json` `billing_basis` can read `"mixed"`
     across runs from before and after the upgrade;
@@ -212,8 +216,8 @@ All notable changes to this project are documented here. The format is based on
   the run starts, as is `from_host` together with `plugins.config_dir` or with `--resume`. `result.json` records what
   was taken as `hostInputs` (keys, versions and hashes, never contents); `hillclimb` rows carry its set hash as
   `meta.host_inputs`, and `eval`'s `runs.jsonl` as `hostInputs`. A cassette recorded with it freezes the same field.
-  Its names are your installed inventory, so `record` refuses to write such a cassette into a repo-visible path at
-  any tier, and `verify-cassettes` reports each name as a host-inventory finding.
+  Its names are your installed inventory, so at any tier `record` refuses to write such a cassette to a new repo-visible path
+  (re-recording an existing one only warns, and `--allow-host-inventory-fixture` overrides the refusal), and `verify-cassettes` reports each name as a host-inventory finding.
 - **`verify-cassettes --host-inputs`** compares a `from_host` cassette's recorded `hostInputs` with this machine's
   installed set and reports a difference as a note. **`--strict`**, valid only with `--host-inputs`, makes that
   difference a failure (exit 1); it does not escalate any other note, and together with `--skip-staleness` it is a
@@ -222,8 +226,8 @@ All notable changes to this project are documented here. The format is based on
   privacy findings, so the check can pass on the machine they come from; every other finding still fails, and a plain
   `verify-cassettes` still fails on those names.
 - **`eval` and `hillclimb run` stop when a grader fails the way every later grade would.** A judge or LLM decider
-  call refused for its credential (401 or 403), for an unknown model (404), or for a spent quota (a 429 the API marks
-  not retryable) would fail every remaining job the same way, so no further job starts. Jobs already running finish and
+  call refused for its credential (401 or 403), for an unknown model (404), or for a spent quota (a 429 the harness
+  reads as not retryable) would fail every remaining job the same way, so no further job starts. Jobs already running finish and
   keep their records. A server error, a timeout or an ordinary rate limit never stops a run. `eval` records why in
   `<evalDir>/stopped.json`, reports it as `stoppedEarly` (`{reason: "grader_credential", source, status?, atJob}`,
   else `null`), names it in `report.md`, and exits 1; `eval report` reads the same file. `hillclimb run` keeps the rows
@@ -255,8 +259,8 @@ All notable changes to this project are documented here. The format is based on
   variant's plugin snapshot (`sh -c`, on this host with your full environment, plus `COWORK_HARNESS_VARIANT_DIR`
   and `COWORK_HARNESS_VARIANT_ID`). A
   non-zero exit, a signal or `--gate-timeout` (default 600 s) writes a `gate_failed` errors row per open slot at no
-  agent cost and exits 1. The command's text joins the harness sha, so it needs `--approve-harness`; only its hash
-  is recorded.
+  agent cost and exits 1. The command's hash joins the harness sha, so it needs `--approve-harness`; only the hash is
+  recorded (`harness_gate_sha` in `_state.json`).
 - **`hillclimb run --max-budget-usd <x>`** caps one pass: no slot starts whose estimate would take the pass's spend,
   plus the slots in flight, past `x`. A stop exits 1 with `stopped.reason: "budget"` and `error.code:
   "budget_stopped"`, and keeps the rows already written; a cap below every open slot's estimate is refused before
@@ -332,11 +336,6 @@ All notable changes to this project are documented here. The format is based on
   `ANTHROPIC_AUTH_TOKEN` is not reported as an auth error at `protocol`: the agent retries it until the run's timeout,
   so the run ends as a timeout. `doctor` says so when it is your only credential.
 - **`hillclimb check` no longer notes `judge_invalid` or `gate_failed` rows** as an unknown failure class.
-- **With `CLAUDE_CODE_OAUTH_TOKEN` set, the hostloop agent gets the token alone.** It no longer carries
-  `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_CUSTOM_HEADERS` beside the token, as in Desktop and as at
-  container and microvm. Only the environment is covered: a managed `settings.json` (an `env` entry or `apiKeyHelper`)
-  can still hand the agent a key. The message `hillclimb run` prints after a run at
-  hostloop could not authenticate says which credential the agent is given.
 - **Which credential the graders get.** With `CLAUDE_CODE_OAUTH_TOKEN` set, the graders get the token alone, which is
   the credential the agent authenticates with at the container, hostloop and microvm tiers. On protocol, with
   `ANTHROPIC_API_KEY` set, the agent gets the key and not the token (the harness passes the token there only when no
@@ -348,6 +347,10 @@ All notable changes to this project are documented here. The format is based on
   assert before giving up; it now costs one.
 - **`critique --fidelity protocol` gives its real reason.** The refusal stays. The protocol tier runs the host `claude`,
   not the agent Cowork runs, so a critique there would grade the skill under a runtime Cowork never uses.
+- **New lines and fields a script may see.** `[budget] timeout <ms> ms (flag)` on stderr when `--timeout` sets the budget;
+  `turnCap` and `grades[].judgeErrorsRecorded` in `eval`'s `runs.jsonl`; `harness_gate_sha` in hillclimb's `_state.json`;
+  a `.cowork-harness-config-dir` marker in a pinned config dir; and `doctor`'s `grader-credential` row, which can now fail
+  (it stays non-blocking).
 
 ### Fixed
 
@@ -370,8 +373,9 @@ All notable changes to this project are documented here. The format is based on
   their own code, which on some Node 24+ builds could deadlock inside the exit itself. A command now sets its exit
   code and the process ends once its work is done. If something still holds the process 5 seconds after the command
   finished, it exits anyway with the same code and names what was holding it on stderr
-  (`::warning:: [exit] the event loop was still busy …`). Exit codes and output are unchanged, for
-  `cowork-harness` and for critique's module run directly (`node dist/critique/command.js`).
+  (`::warning:: [exit] the event loop was still busy …`). Exit codes are unchanged, for
+  `cowork-harness` and for critique's module run directly (`node dist/critique/command.js`). When a pool of jobs stops, it
+  now waits for the jobs in flight, and `eval` prints `stopping: waiting for N in-flight job(s)`.
 - **`prune` reports every usage error as a JSON envelope under `COWORK_HARNESS_OUTPUT_FORMAT=json`**, as other
   commands do. Before, each printed only the plain message. prune has no `--output-format` flag. The text form is
   unchanged.
