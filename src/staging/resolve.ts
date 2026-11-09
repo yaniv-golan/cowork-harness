@@ -72,7 +72,7 @@ export function resolveDeclaredSource(
 
 /**
  * A single safe path segment: not empty, not "." / "..", no separators. For ids interpolated into a
- * fixed parent (`.projects/<id>`, `uploads/<id>`, `.local-plugins/cache/<id>`) so a crafted or
+ * fixed parent (`.projects/<id>`, `uploads/<id>`, `.local-plugins/marketplaces/<id>`) so a crafted or
  * default id cannot escape it. NOTE: `basename("..")` is `".."` (it does NOT collapse), so a default
  * id derived from `basename(src)` must pass through here too, not just an explicit user-supplied id.
  */

@@ -643,15 +643,12 @@ export interface MountedPlugin {
 /** Best-effort marketplace qualifier for a plugin mount's `pluginId` (spec shape `<name>@<marketplace>`).
  *  Real Cowork's `pluginId` is the marketplace-qualified install key from its own plugin registry; the
  *  harness keeps no such registry, so this recovers the marketplace segment already embedded in the
- *  mount-path shapes `buildLaunchPlan` produces (`.local-plugins/marketplaces/<mkt>/<name>`, or the
- *  legacy `.local-plugins/cache/<mkt>/<name>/<version>` for a `marketplace-plugin` mount) and falls back
- *  to a synthetic qualifier for the shapes that carry none (a bare `local_plugins` mount under the legacy
- *  cache path, or a `remote_plugins` mount). This is advisory text in a deterministic stub response, not
+ *  mount-path shapes `buildLaunchPlan` produces (`.local-plugins/marketplaces/<mkt>/<name>`) and falls back
+ *  to a synthetic qualifier for the shape that carries none (a `remote_plugins` mount). This is advisory text in a deterministic stub response, not
  *  a production lookup key — plugin install/search itself happens out of band, outside the session. */
 function guessMarketplaceQualifier(mount: Mount): string {
   const segs = mount.mountPath.split("/");
   if (segs[0] === ".local-plugins" && segs[1] === "marketplaces" && segs.length >= 3) return segs[2]; // <mkt>/<name>
-  if (segs[0] === ".local-plugins" && segs[1] === "cache" && mount.kind === "marketplace-plugin" && segs.length >= 4) return segs[2]; // <mkt>/<name>/<version>
   return mount.kind === "remote-plugin" ? "remote" : "local";
 }
 
@@ -1074,10 +1071,6 @@ export function resolveLaunchSources(
   // Local marketplaces: resolve enabled `name@marketplace` plugins to --plugin-dir.
   // The agent loads plugins via --plugin-dir, not the marketplace registry (inert in
   // cowork mode — SPEC §6), so we read marketplace.json and mount the referenced plugins.
-  // Real Cowork stages each marketplace plugin at the THREE-level cache path
-  // `.local-plugins/cache/<marketplace>/<plugin>/<version>` (verified 2026-06-13 from the
-  // desktop spawn argv — `--plugin-dir …/cache/<mp>/<plugin>/<version>`); reproduce that
-  // shape so `${CLAUDE_PLUGIN_ROOT}` and the layout match real sessions.
   const mountedBareNames = new Set<string>(); // across ALL marketplaces — dedupe bare `enabled` names
   const declaredLocalMktNames = new Set<string>(); // names of successfully-parsed local marketplaces
   const resolvedEnabled = new Set<string>(); // `enabled` entries that mounted (or hit the legit dedupe-skip)

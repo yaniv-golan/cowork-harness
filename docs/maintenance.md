@@ -39,7 +39,7 @@ forward from the previous baseline untouched)
 > `mntRoot` is DERIVED as `<sessionRoot>/mnt` (the only tree the stagers create) rather than read from
 > `mountLayout.mntRoot`; a recorded value that disagrees is reported as a fidelity divergence at spawn.
 > The one `mode === "r"` filter reads the launch plan's mounts, not the baseline's. The `projects` row reads `mode: "rw"` in every baseline before
-> `desktop-1.25927.0`, which is **not uniformly wrong**: below `MOUNT_BARE_NAME_MIN_VERSION` (1.14271.0)
+> `desktop-1.25927.0`, which is **not uniformly wrong**: below Desktop 1.14271.0
 > `.projects/<name>` really was the connected-folder namespace, and folders are resolver-driven `rw`. From
 > that boundary on, folders moved to `mnt/<basename>` and `.projects/<uuid>` became the project-attachment
 > namespace, which Cowork mounts **read-only** — so the row is stale in the 18 baselines between the
