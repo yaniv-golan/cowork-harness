@@ -20,7 +20,9 @@ import { resolveCommandMetrics, resolvedCommand } from "../metric-command/resolv
 import { resolvePython } from "../metric-command/interpreters.js";
 import { asOutcomes, commandMetricNotice, measureCommandMetrics } from "../metric-command/live.js";
 import {
+  BaselineFileError,
   BoundaryError,
+  UnknownBaselineError,
   UsageError,
   LegacyRunDirError,
   MultiLegRunDirError,
@@ -3234,6 +3236,22 @@ export function scenarioInputRefusal(
   return f.session ?? f.vacuity ?? f.inputs;
 }
 
+/** A baseline NAME that resolves nowhere, the one input a usage mistake rather than a refusal of a scenario that
+ *  loaded. A baseline file that exists but does not load is not one. */
+export function isUnknownBaselineName(e: unknown): e is UnknownBaselineError {
+  return e instanceof UnknownBaselineError && !(e instanceof BaselineFileError);
+}
+
+/** The refusal of a scenario whose baseline name resolves nowhere, without resolving the rest of its inputs. */
+export function unknownBaselineRefusal(scenario: Scenario): UnknownBaselineError | undefined {
+  try {
+    loadBaseline(scenario.baseline);
+    return undefined;
+  } catch (e) {
+    return isUnknownBaselineName(e) ? e : undefined;
+  }
+}
+
 export type ScenarioInputCheckOptions = {
   quiet?: boolean;
   ablateSkill?: boolean;
@@ -5181,7 +5199,9 @@ export function readSessionManifest(path: string, sessionId: string, expectedFid
 
 export {
   UnansweredError,
+  BaselineFileError,
   BoundaryError,
+  UnknownBaselineError,
   UsageError,
   LegacyRunDirError,
   MultiLegRunDirError,

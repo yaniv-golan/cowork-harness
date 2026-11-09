@@ -6,8 +6,8 @@
 //    names every offender;
 //  - a `tool_not_called` the scenario's tier can never violate is refused before the run dir exists too,
 //    and on a directory before the first scenario runs;
-//  - `record <dir/> --dry-run` reports a scenario whose input path is missing under `inputErrors[]`
-//    (advisory: the exit code and `ok` are unchanged until the next major).
+//  - `record <dir/>` refuses them before its first spawn, and `record <dir/> --dry-run` lists them under
+//    `refusals[]`: exit 2 when any item names a baseline that resolves nowhere, else exit 1.
 //
 // Token-free throughout. COWORK_HARNESS_FORBID_SPAWN is set, so a check that is missing ends at the spawn
 // guard (after the run dir exists), never at a real agent. Every call runs from a temp cwd with a temp runs
@@ -219,8 +219,8 @@ describe.skipIf(!can)("a tier-vacuous tool_not_called is refused before the run 
   });
 });
 
-describe.skipIf(!can)("record <dir/> --dry-run reports missing input paths under inputErrors[]", () => {
-  type Doc = { ok: boolean; refusals: { file: string; message: string }[]; inputErrors?: { file: string; message: string }[] };
+describe.skipIf(!can)("record <dir/> --dry-run refuses missing input paths", () => {
+  type Doc = { ok: boolean; refusals: { file: string; message: string }[]; inputErrors?: unknown };
 
   function twoFiles(): string {
     const d = fixture();
@@ -229,30 +229,25 @@ describe.skipIf(!can)("record <dir/> --dry-run reports missing input paths under
     return d;
   }
 
-  it("JSON: the missing path is listed under inputErrors[]; exit code and ok are unchanged", () => {
+  it("JSON: the missing path is a refusal (exit 1, ok false), and the old key is gone", () => {
     const d = twoFiles();
     const r = cli(["record", "sc/", "--dry-run", "--output-format", "json"], d);
-    expect(r.code, r.all).toBe(0);
+    expect(r.code, r.all).toBe(1);
     const doc = JSON.parse(r.stdout) as Doc;
-    expect(doc.ok).toBe(true);
-    expect(doc.refusals).toEqual([]);
-    expect(doc.inputErrors).toHaveLength(1);
-    expect(doc.inputErrors![0].file).toMatch(/b\.yaml$/);
-    expect(doc.inputErrors![0].message).toMatch(MISSING_MOUNT);
+    expect(doc.ok).toBe(false);
+    expect(doc.refusals).toHaveLength(1);
+    expect(doc.refusals[0].file).toMatch(/b\.yaml$/);
+    expect(doc.refusals[0].message).toMatch(MISSING_MOUNT);
+    expect(doc).not.toHaveProperty("inputErrors");
   });
 
-  it("text: a warning line names the file and the missing path", () => {
+  it("text: a refused line names the file and the missing path, and survives --quiet", () => {
     const d = twoFiles();
-    const r = cli(["record", "sc/", "--dry-run"], d);
-    expect(r.code, r.all).toBe(0);
-    expect(r.stderr).toMatch(/⚠ input error: .*b\.yaml: mount source\(s\) not found/);
-    expect(r.stderr).toMatch(/will fail on the real record\n/);
-  });
-
-  it("--quiet still prints the warning line", () => {
-    const d = twoFiles();
-    const r = cli(["record", "sc/", "--dry-run", "--quiet"], d);
-    expect(r.stderr).toMatch(/⚠ input error: .*b\.yaml: mount source\(s\) not found/);
+    for (const flags of [[], ["--quiet"]]) {
+      const r = cli(["record", "sc/", "--dry-run", ...flags], d);
+      expect(r.code, r.all).toBe(1);
+      expect(r.stderr).toMatch(/✗ refused: .*b\.yaml: mount source\(s\) not found/);
+    }
   });
 
   it("a file that is both unpinned and names a missing path reports the model refusal only", () => {
@@ -264,30 +259,28 @@ describe.skipIf(!can)("record <dir/> --dry-run reports missing input paths under
     const doc = JSON.parse(r.stdout) as Doc;
     expect(doc.refusals).toHaveLength(1);
     expect(doc.refusals[0].message).toMatch(/no model is pinned/);
-    expect(doc.inputErrors ?? []).toEqual([]);
   });
 });
 
 describe.skipIf(!can)("input pre-checks: baselines, --repeat, hints and the budget path", () => {
   type Doc = {
     ok: boolean;
-    refusals: { file: string; message: string }[];
-    inputErrors?: { file: string; message: string; hint?: string }[];
+    refusals: { file: string; message: string; hint?: string }[];
   };
 
-  it("record <dir/> --dry-run: a baseline that fails to LOAD is an inputErrors[] entry (exit 0, payload)", () => {
-    // The directory preview must not crash on one file; the real record fails that item, so it is listed.
+  it("record <dir/> --dry-run: a baseline that fails to LOAD is a refusal (exit 1, payload)", () => {
+    // The directory preview must not crash on one file; the real record refuses it, so it is listed.
     const d = fixture();
     writeFileSync(join(d, "bad-baseline.json"), "{not json");
     writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../ok.yaml"));
     writeFileSync(join(d, "sc", "m.yaml"), SCENARIO("m", "../ok.yaml", `baseline: ${join(d, "bad-baseline.json")}\n`));
     const r = cli(["record", "sc/", "--dry-run", "--output-format", "json"], d);
-    expect(r.code, r.all).toBe(0);
+    expect(r.code, r.all).toBe(1);
     const doc = JSON.parse(r.stdout) as Doc;
-    expect(doc.ok).toBe(true);
-    expect(doc.inputErrors).toHaveLength(1);
-    expect(doc.inputErrors![0].file).toMatch(/m\.yaml$/);
-    expect(doc.inputErrors![0].message).toMatch(/does not load: .*JSON/);
+    expect(doc.ok).toBe(false);
+    expect(doc.refusals).toHaveLength(1);
+    expect(doc.refusals[0].file).toMatch(/m\.yaml$/);
+    expect(doc.refusals[0].message).toMatch(/does not load: .*JSON/);
   });
 
   it("record <file> --dry-run: a baseline file that fails to LOAD is refused as a usage error", () => {
@@ -316,16 +309,76 @@ describe.skipIf(!can)("input pre-checks: baselines, --repeat, hints and the budg
     expect(runDirsUnder(r.runs)).toEqual([]);
   });
 
-  it("record <dir/> --dry-run: a baseline NAME that resolves nowhere is an inputErrors[] entry, hint carried", () => {
+  it("record <dir/> --dry-run: a baseline NAME that resolves nowhere exits 2, hint carried", () => {
     const d = fixture();
     writeFileSync(join(d, "sc", "u.yaml"), SCENARIO("u", "../ok.yaml", "baseline: no-such-baseline\n"));
     const r = cli(["record", "sc/", "--dry-run", "--output-format", "json"], d);
-    expect(r.code, r.all).toBe(0);
+    expect(r.code, r.all).toBe(2);
     const doc = JSON.parse(r.stdout) as Doc;
-    expect(doc.inputErrors).toHaveLength(1);
-    expect(doc.inputErrors![0].file).toMatch(/u\.yaml$/);
-    expect(doc.inputErrors![0].message).toMatch(/no-such-baseline/);
-    expect(typeof doc.inputErrors![0].hint).toBe("string");
+    expect(doc.ok).toBe(false);
+    expect(doc.refusals).toHaveLength(1);
+    expect(doc.refusals[0].file).toMatch(/u\.yaml$/);
+    expect(doc.refusals[0].message).toMatch(/no-such-baseline/);
+    expect(typeof doc.refusals[0].hint).toBe("string");
+  });
+
+  it("record <dir/> --dry-run: an unknown name outranks every other refusal", () => {
+    const d = fixture();
+    writeFileSync(join(d, "unpinned.yaml"), "folders: []\n");
+    writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../no-folder.yaml"));
+    writeFileSync(join(d, "sc", "u.yaml"), SCENARIO("u", "../unpinned.yaml", "baseline: no-such-baseline\n"));
+    const r = cli(["record", "sc/", "--dry-run", "--output-format", "json"], d);
+    expect(r.code, r.all).toBe(2);
+    const messages = (JSON.parse(r.stdout) as Doc).refusals.map((x) => x.message).join("\n");
+    expect(messages).toMatch(MISSING_MOUNT);
+    expect(messages).toMatch(/no model is pinned/);
+    expect(messages).toMatch(/no-such-baseline/);
+  });
+
+  it("record <file> --dry-run: a baseline NAME that resolves nowhere exits 2, as the real record does", () => {
+    const d = fixture();
+    writeFileSync(join(d, "sc", "u.yaml"), SCENARIO("u", "../ok.yaml", "baseline: no-such-baseline\n"));
+    const dry = cli(["record", "sc/u.yaml", "--dry-run", "--output-format", "json"], d);
+    const real = cli(["record", "sc/u.yaml", "--out", join(d, "u.cassette.json"), "--output-format", "json"], d, STUB_CREDENTIAL);
+    expect([dry.code, real.code], dry.all + real.all).toEqual([2, 2]);
+    expect(envelope(dry.stdout).error?.message).toBe(envelope(real.stdout).error?.message);
+    expect(runDirsUnder(real.runs)).toEqual([]);
+  });
+
+  it("real record <dir/>: every unknown name is refused with exit 2 before anything is spawned", () => {
+    const d = fixture();
+    writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../ok.yaml"));
+    writeFileSync(join(d, "sc", "b.yaml"), SCENARIO("b", "../ok.yaml", "baseline: no-such-baseline\n"));
+    writeFileSync(join(d, "sc", "c.yaml"), SCENARIO("c", "../ok.yaml", "baseline: no-such-baseline\n"));
+    const r = cli(["record", "sc/", "--output-format", "json"], d, STUB_CREDENTIAL);
+    expect(r.all).not.toMatch(SPAWN_GUARD);
+    expect(r.code, r.all).toBe(2);
+    const msg = envelope(r.stdout).error?.message ?? "";
+    expect(msg).toMatch(/b\.yaml: .*no-such-baseline/);
+    expect(msg).toMatch(/c\.yaml: .*no-such-baseline/);
+    expect(msg).not.toMatch(/a\.yaml/);
+    expect(runDirsUnder(r.runs)).toEqual([]);
+  });
+
+  it("real record <dir/>: an unknown name outranks the model refusal", () => {
+    const d = fixture();
+    writeFileSync(join(d, "unpinned.yaml"), "folders: []\n");
+    writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../unpinned.yaml"));
+    writeFileSync(join(d, "sc", "u.yaml"), SCENARIO("u", "../ok.yaml", "baseline: no-such-baseline\n"));
+    const r = cli(["record", "sc/", "--output-format", "json"], d, STUB_CREDENTIAL);
+    expect(r.code, r.all).toBe(2);
+    expect(envelope(r.stdout).error?.message).toMatch(/u\.yaml: .*no-such-baseline/);
+  });
+
+  it("real record <dir/>: a missing input path is refused with exit 1 before anything is spawned", () => {
+    const d = fixture();
+    writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../ok.yaml"));
+    writeFileSync(join(d, "sc", "b.yaml"), SCENARIO("b", "../no-folder.yaml"));
+    const r = cli(["record", "sc/", "--output-format", "json"], d, STUB_CREDENTIAL);
+    expect(r.all).not.toMatch(SPAWN_GUARD);
+    expect(r.code, r.all).toBe(1);
+    expect(envelope(r.stdout).error?.message).toMatch(/b\.yaml: mount source\(s\) not found/);
+    expect(runDirsUnder(r.runs)).toEqual([]);
   });
 
   it("run <dir/>: every scenario whose baseline does not resolve is named, with its file prefix", () => {
@@ -340,20 +393,37 @@ describe.skipIf(!can)("input pre-checks: baselines, --repeat, hints and the budg
     expect(runDirsUnder(r.runs)).toEqual([]);
   });
 
-  it("run --repeat keeps its per-scenario rollup for a missing input path (exit 1, error null)", () => {
-    // Pin: the batch pre-check does not apply under --repeat, whose accepted invocations report a failed
-    // scenario in its rollup (stoppedEarly "error") rather than refusing up front.
+  it("run --repeat refuses a missing input path before the first run: exit 2, no run dir", () => {
     const d = fixture();
     writeFileSync(join(d, "sc", "b.yaml"), SCENARIO("b", "../no-folder.yaml"));
     const r = cli(["run", "sc/b.yaml", "--repeat", "2", "--output-format", "json"], d, STUB_CREDENTIAL);
-    expect(r.code, r.all).toBe(1);
-    const doc = JSON.parse(r.stdout) as { rollups?: { stoppedEarly?: string }[]; error: unknown };
-    expect(doc.error).toBeNull();
-    expect(doc.rollups).toHaveLength(1);
-    expect(doc.rollups![0].stoppedEarly).toBe("error");
+    expect(r.all).not.toMatch(SPAWN_GUARD);
+    expect(r.code, r.all).toBe(2);
+    expect(envelope(r.stdout).error?.category).toBe("usage");
+    expect(envelope(r.stdout).error?.message).toMatch(MISSING_MOUNT);
+    expect(runDirsUnder(r.runs)).toEqual([]);
   });
 
-  it("record <dir/> --dry-run: input errors survive the budget refusal on stderr", () => {
+  it("run --repeat refuses an unknown baseline name and a vacuous assertion the same way", () => {
+    const d = fixture();
+    writeFileSync(join(d, "sc", "u.yaml"), SCENARIO("u", "../ok.yaml", "baseline: no-such-baseline\n"));
+    writeFileSync(
+      join(d, "sc", "v.yaml"),
+      `name: v\nprompt: hi\nfidelity: hostloop\nsession: ../ok.yaml\nassert:\n  - tool_not_called: NotebookEdit\n`,
+    );
+    for (const [file, why] of [
+      ["sc/u.yaml", /no-such-baseline/],
+      ["sc/v.yaml", /can never be violated/],
+    ] as const) {
+      const r = cli(["run", file, "--repeat", "2", "--output-format", "json"], d, STUB_CREDENTIAL);
+      expect(r.all).not.toMatch(SPAWN_GUARD);
+      expect(r.code, r.all).toBe(2);
+      expect(envelope(r.stdout).error?.message).toMatch(why);
+      expect(runDirsUnder(r.runs)).toEqual([]);
+    }
+  });
+
+  it("record <dir/> --dry-run: input refusals survive the budget refusal on stderr", () => {
     const d = fixture();
     writeFileSync(join(d, "sc", "b.yaml"), SCENARIO("b", "../no-folder.yaml"));
     const runs = join(d, ".runs");
@@ -381,7 +451,7 @@ describe.skipIf(!can)("input pre-checks: baselines, --repeat, hints and the budg
     );
     const r = cli(["record", "sc/", "--dry-run", "--max-budget-usd", "0.01", "--output-format", "json"], d);
     expect(r.all).toMatch(/refused before spending/);
-    expect(r.stderr).toMatch(/⚠ input error: .*b\.yaml: mount source\(s\) not found/);
+    expect(r.stderr).toMatch(/✗ refused: .*b\.yaml: mount source\(s\) not found/);
   });
 });
 
@@ -400,17 +470,17 @@ describe.skipIf(!can)("tier vacuity: the record lanes", () => {
     expect(runDirsUnder(r.runs)).toEqual([]);
   });
 
-  it("record <dir/> --dry-run lists it under inputErrors[] (exit and ok unchanged)", () => {
+  it("record <dir/> --dry-run refuses it (exit 1, ok false)", () => {
     const d = fixture();
     writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../ok.yaml"));
     writeFileSync(join(d, "sc", "v.yaml"), VACUOUS("v"));
     const r = cli(["record", "sc/", "--dry-run", "--output-format", "json"], d);
-    expect(r.code, r.all).toBe(0);
-    const doc = JSON.parse(r.stdout) as { ok: boolean; inputErrors?: { file: string; message: string }[] };
-    expect(doc.ok).toBe(true);
-    expect(doc.inputErrors).toHaveLength(1);
-    expect(doc.inputErrors![0].file).toMatch(/v\.yaml$/);
-    expect(doc.inputErrors![0].message).toMatch(/can never be violated/);
+    expect(r.code, r.all).toBe(1);
+    const doc = JSON.parse(r.stdout) as { ok: boolean; refusals: { file: string; message: string }[] };
+    expect(doc.ok).toBe(false);
+    expect(doc.refusals).toHaveLength(1);
+    expect(doc.refusals[0].file).toMatch(/v\.yaml$/);
+    expect(doc.refusals[0].message).toMatch(/can never be violated/);
   });
 
   it("record <file> --dry-run with a vacuous assertion AND a missing path refuses with the real record's message", () => {
@@ -434,25 +504,33 @@ describe.skipIf(!can)("tier vacuity: the record lanes", () => {
     expect(envelope(dry.stdout).error?.category).toBe(envelope(real.stdout).error?.category);
   });
 
-  it("record <file> --dry-run warns (inputErrors[] + a ⚠ line) and keeps exit 0", () => {
+  it("record <file> --dry-run refuses it (exit 1), and the refusal survives --quiet", () => {
     const d = fixture();
     writeFileSync(join(d, "sc", "v.yaml"), VACUOUS("v"));
     const json = cli(["record", "sc/v.yaml", "--dry-run", "--output-format", "json"], d);
-    expect(json.code, json.all).toBe(0);
-    const doc = JSON.parse(json.stdout) as { ok: boolean; inputErrors?: { file: string; message: string }[] };
-    expect(doc.ok).toBe(true);
-    expect(doc.inputErrors).toHaveLength(1);
-    expect(doc.inputErrors![0].message).toMatch(/can never be violated/);
+    expect(json.code, json.all).toBe(1);
+    expect(envelope(json.stdout).ok).toBe(false);
+    expect(envelope(json.stdout).error?.message).toMatch(/can never be violated/);
     const text = cli(["record", "sc/v.yaml", "--dry-run", "--quiet"], d);
-    expect(text.code, text.all).toBe(0);
-    expect(text.stderr).toMatch(/⚠ input error: .*v\.yaml: .*can never be violated/);
+    expect(text.code, text.all).toBe(1);
+    expect(text.stderr).toMatch(/can never be violated/);
+  });
+
+  it("record <file> --dry-run with an unreadable session AND a vacuous assertion names the session, as the real record does", () => {
+    const d = fixture();
+    writeFileSync(
+      join(d, "sc", "sv.yaml"),
+      `name: sv\nprompt: hi\nfidelity: hostloop\nsession: ../gone.yaml\nassert:\n  - tool_not_called: NotebookEdit\n`,
+    );
+    const r = cli(["record", "sc/sv.yaml", "--dry-run", "--model", "claude-sonnet-5", "--output-format", "json"], d);
+    expect(r.code, r.all).toBe(1);
+    expect(envelope(r.stdout).error?.message).toMatch(/^record: session file not found/);
   });
 });
 
 // A `session:` file that is not there is an input-path error like any other: `run` refuses it as a usage
 // error before a run dir exists (it was a raw ENOENT, category `internal`), `run <dir/>` refuses the batch
-// before its first scenario runs, and both `record --dry-run` arms report it under `inputErrors[]` with the
-// exit code and `ok` unchanged.
+// before its first scenario runs, and both `record --dry-run` arms refuse it with exit 1.
 describe.skipIf(!can)("a missing session file is an input error on every lane", () => {
   const NOT_FOUND = /^session file not found: .*gone\.yaml/;
 
@@ -482,19 +560,16 @@ describe.skipIf(!can)("a missing session file is an input error on every lane", 
     expect(runDirsUnder(r.runs)).toEqual([]);
   });
 
-  it("record <file> --dry-run: reported under inputErrors[], exit 0 and ok unchanged", () => {
+  it("record <file> --dry-run: refused with exit 1, and the refusal survives --quiet", () => {
     const d = fixture();
     writeFileSync(join(d, "sc", "m.yaml"), SCENARIO("m", "../gone.yaml"));
     const r = cli(["record", "sc/m.yaml", "--dry-run", "--model", "claude-sonnet-5", "--output-format", "json"], d);
-    expect(r.code, r.all).toBe(0);
-    const doc = JSON.parse(r.stdout) as { ok: boolean; inputErrors?: { file: string; message: string }[] };
-    expect(doc.ok).toBe(true);
-    expect(doc.inputErrors).toHaveLength(1);
-    expect(doc.inputErrors![0].file).toMatch(/m\.yaml$/);
-    expect(doc.inputErrors![0].message).toMatch(NOT_FOUND);
+    expect(r.code, r.all).toBe(1);
+    expect(envelope(r.stdout).ok).toBe(false);
+    expect(envelope(r.stdout).error?.message).toMatch(/^record: session file not found: .*gone\.yaml/);
     const text = cli(["record", "sc/m.yaml", "--dry-run", "--model", "claude-sonnet-5", "--quiet"], d);
-    expect(text.code, text.all).toBe(0);
-    expect(text.stderr).toMatch(/⚠ input error: .*m\.yaml: session file not found/);
+    expect(text.code, text.all).toBe(1);
+    expect(text.stderr).toMatch(/session file not found/);
   });
 
   it("real record <file>: refused (exit 1, usage) with the clean message, no run dir", () => {
@@ -515,26 +590,25 @@ describe.skipIf(!can)("a missing session file is an input error on every lane", 
     expect(runDirsUnder(r.runs)).toEqual([]);
   });
 
-  it("record <dir/> --dry-run: reported under inputErrors[], exit 0 and ok unchanged", () => {
+  it("record <dir/> --dry-run: refused with exit 1", () => {
     const d = fixture();
     writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../ok.yaml"));
     writeFileSync(join(d, "sc", "b.yaml"), SCENARIO("b", "../gone.yaml"));
     const r = cli(["record", "sc/", "--dry-run", "--model", "claude-sonnet-5", "--output-format", "json"], d);
-    expect(r.code, r.all).toBe(0);
-    const doc = JSON.parse(r.stdout) as { ok: boolean; inputErrors?: { file: string; message: string }[] };
-    expect(doc.ok).toBe(true);
-    expect(doc.inputErrors).toHaveLength(1);
-    expect(doc.inputErrors![0].file).toMatch(/b\.yaml$/);
-    expect(doc.inputErrors![0].message).toMatch(NOT_FOUND);
+    expect(r.code, r.all).toBe(1);
+    const doc = JSON.parse(r.stdout) as { ok: boolean; refusals: { file: string; message: string }[] };
+    expect(doc.ok).toBe(false);
+    expect(doc.refusals).toHaveLength(1);
+    expect(doc.refusals[0].file).toMatch(/b\.yaml$/);
+    expect(doc.refusals[0].message).toMatch(NOT_FOUND);
   });
 
-  it("`~<user>` session: record --dry-run reports it under inputErrors[], the real record refuses it (usage)", () => {
+  it("`~<user>` session: record --dry-run and the real record both refuse it (usage)", () => {
     const d = fixture();
     writeFileSync(join(d, "sc", "u.yaml"), SCENARIO("u", "~someone-else/s.yaml"));
     const dry = cli(["record", "sc/u.yaml", "--dry-run", "--model", "claude-sonnet-5", "--output-format", "json"], d);
-    expect(dry.code, dry.all).toBe(0);
-    const doc = JSON.parse(dry.stdout) as { ok: boolean; inputErrors?: { message: string }[] };
-    expect(doc.inputErrors?.[0]?.message).toMatch(/another user's home directory/);
+    expect(dry.code, dry.all).toBe(1);
+    expect(envelope(dry.stdout).error?.message).toMatch(/another user's home directory/);
     expect(dry.all).not.toMatch(/expandUserPath:/);
     const real = cli(
       ["record", "sc/u.yaml", "--model", "claude-sonnet-5", "--out", join(d, "u.cassette.json"), "--output-format", "json"],

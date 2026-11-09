@@ -32,6 +32,10 @@ All notable changes to this project are documented here. The format is based on
   its first turn while a plugin's MCP reconnect is pending; and the VM agent staging step may turn a failed staging
   into a not-ready result, in the one handler shape `sync` admits. Each form is pinned, so a real change still refuses.
 
+- **`toolCalls[].denied` and a `denied: N` footer count show which calls the agent was refused.** `denied: true` means
+  the agent received a deny answer to that call's permission request. `decisions[].toolUseId` names the call a
+  permission decision answered. A hook block and the agent's own `permission_denied` event never set it; see
+  `docs/cli.md`.
 - **`agent_env.passthrough`** lists environment variable names to give the `hostloop` agent beside the ones
   Desktop copies, for example `SSH_AUTH_SOCK`, `NODE_EXTRA_CA_CERTS`, `HTTPS_PROXY` or `LANG` for a plugin MCP server or
   hook that needs one. It is accepted at `protocol`, where the agent inherits your environment anyway, and refused at
@@ -125,6 +129,8 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **A relative symlink inside a scenario plugin stays relative when staged.** On `container`, `microvm`, `hostloop` and
+  `protocol` it was rewritten to an absolute host path, which dangles in the sandbox.
 - **`record --rerecord-stale` no longer overwrites a cassette written by a newer cowork-harness.** Such a cassette
   can read as stale (its baseline moved), and the re-record then replaced it with this build's recording. It is now
   reported as failed (`stamped vN, newer than this build (vM) — upgrade cowork-harness to re-record`) and left
@@ -158,6 +164,20 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **Breaking: an input a run would refuse is now refused before any spend, on every form.** A baseline file that exists
+  but does not load stays exit 1. To keep recording the rest of a directory past a bad item, fix or move that item.
+
+  | Form | Input | Before | Now |
+  |---|---|---|---|
+  | `run <file or dir/> --repeat N` | unknown baseline name, missing input path, tier-vacuous assertion | exit 1, `stoppedEarly: "error"` in the rollup | exit 2 before the first run, no run dir |
+  | `record <file> --dry-run` | unknown baseline name | exit 1 | exit 2 |
+  | `record <file> --dry-run` | unreadable `session:` file, tier-vacuous assertion | exit 0, reported | exit 1 |
+  | `record <dir/> --dry-run` | unknown baseline name | exit 0, reported | exit 2 |
+  | `record <dir/> --dry-run` | unreadable `session:` file, missing input path, tier-vacuous assertion | exit 0, reported | exit 1, in `refusals[]` |
+  | `record <dir/>` | unknown baseline name | exit 1 for that item, after earlier items were paid for | exit 2 before the first spawn |
+  | `record <dir/>` | unreadable `session:` file, missing input path, tier-vacuous assertion | exit 1 for that item, after earlier items were paid for | exit 1 before the first spawn |
+
+  On a directory, any unknown baseline name gives exit 2, else any broken or refused item gives exit 1, else exit 0.
 - **Breaking: eight environment variables moved into the `COWORK_HARNESS_` namespace:** `COWORK_LOCKDOWN`,
   `COWORK_LIMA_INSTANCE`, `COWORK_LIMACTL`, `COWORK_VM_PROVISION_TIMEOUT_S`, `COWORK_VM_PROXY_PORT`, `COWORK_VM_GATEWAY`,
   `COWORK_CONTAINER_RUNTIME` and `COWORK_SKIP_CAPABILITY_PROBE` are now `COWORK_HARNESS_LOCKDOWN` and so on. Setting
@@ -266,6 +286,9 @@ All notable changes to this project are documented here. The format is based on
 
 ### Removed
 
+- **Breaking: `inputErrors[]` is gone from `record --dry-run`.** Its findings are refusals now: `refusals[]` on a
+  directory, the error envelope on a single file. A gate written as `jq -e '.ok and (.inputErrors == [])'` becomes
+  `jq -e '.ok'`, or the exit code.
 - **Breaking: cassettes below v12, or without `controlOut` or `userVisibleRoots`, are no longer read.** `replay`
   refuses one (exit 2) and `verify-cassettes` reports it as could-not-verify (exit 3), naming the remedy:
   for v10/v11, run `npx cowork-harness@4 rehash <dir/>` on it, or re-record it; for v9 and below, or a missing

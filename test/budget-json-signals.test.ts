@@ -236,8 +236,7 @@ describe.skipIf(!can)("--max-budget-usd refusal is distinguishable in JSON (`err
     });
     expect(r.json?.error.message).toMatch(/refused before spending/);
     expect(r.json?.budget).toEqual(r.json?.error.budget);
-    // The single dry-run's input findings survive the refusal on the envelope.
-    expect(r.json?.inputErrors).toEqual([]);
+    expect(r.json).not.toHaveProperty("inputErrors");
   });
 
   it("run: the same refusal keeps run's exit 2, now with error.code", () => {
@@ -292,6 +291,16 @@ describe.skipIf(!can)("--max-budget-usd refusal is distinguishable in JSON (`err
     expect(r.json?.broken).toHaveLength(1);
   });
 
+  it("an unknown baseline name in a dir dry-run keeps its exit 2 when the budget would also refuse", () => {
+    const { runs, work } = pricey();
+    writeFileSync(join(work, "u.yaml"), `${scenarioYaml("u")}baseline: no-such-baseline\n`);
+    const r = cli(["record", work, "--max-budget-usd", "0.1", "--dry-run", "--output-format", "json"], runs);
+    expect(r.code).toBe(2);
+    expect(r.json?.ok).toBe(false);
+    expect(r.json?.error).toBeNull();
+    expect(r.json?.refusals.map((x: { message: string }) => x.message).join()).toMatch(/no-such-baseline/);
+  });
+
   it("budget refusal AND load failures together (dir dry-run): error.code AND broken[] both on the envelope", () => {
     const { runs, work } = pricey();
     writeFileSync(join(work, "bad.yaml"), "name: [broken\nprompt: x\n");
@@ -302,7 +311,7 @@ describe.skipIf(!can)("--max-budget-usd refusal is distinguishable in JSON (`err
     expect(r.json?.broken).toHaveLength(1);
     expect(r.json?.broken[0].file).toMatch(/bad\.yaml$/);
     expect(r.json?.scenarios).toHaveLength(1);
-    expect(r.json?.inputErrors).toEqual([]);
+    expect(r.json).not.toHaveProperty("inputErrors");
     expect(r.json?.refusals).toEqual([]);
     expect(r.json?.dryRun).toBe(true);
   });

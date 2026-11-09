@@ -73,6 +73,8 @@ import {
   credentialPreflight,
   scenarioInputRefusal,
   scenarioInputFindings,
+  unknownBaselineRefusal,
+  isUnknownBaselineName,
   loadSessionFromFile,
   deviceBridgeFolderPreflight,
   sessionOriginSources,
@@ -201,13 +203,6 @@ import { exitWith, rethrowIfExit } from "./exit.js";
 // a bare writeSync does NOT block until drained once the fd is non-blocking.
 const out = (s: string) => writeAllSync(1, s + "\n");
 const log = (s: string) => writeAllSync(2, s + "\n");
-/** A dry run's `⚠ input error:` line. The verdict goes on the FIRST line: a multi-line message (the
- *  tier-vacuity refusal has a second line) would otherwise bury it after the explanation. */
-const inputErrorLine = (file: string, message: string): string => {
-  const [first, ...rest] = message.split("\n");
-  return [`⚠ input error: ${file}: ${first} — will fail on the real record`, ...rest].join("\n");
-};
-
 /** Format a record error for the user. An `UnansweredError` carries the offered labels (and a closest-match
  *  suggestion) in `.hint`; the record catch sites historically printed only `.message`, so a scripted-answer
  *  mismatch hid what WAS offered. Surface the hint — guarded by `!message.includes(hint)` so the
@@ -4534,8 +4529,8 @@ export function cassettePortabilityPreflight(
 ): { kind: "ok" } | { kind: "warn"; message: string } {
   const refs: { name: string; path: string }[] = [];
   // `(inline)` is stored as the literal sentinel, never as a path — nothing to resolve, nothing to break.
-  // A session path that cannot be expanded (`~<user>`) is not this check's to report: the input check names it
-  // (a dry run's `inputErrors[]`, the real record's usage refusal), so it simply has no reference to weigh here.
+  // A session path that cannot be expanded (`~<user>`) is not this check's to report: the input check refuses it,
+  // so it simply has no reference to weigh here.
   if (scenario.session !== "(inline)") {
     let session: string | undefined;
     try {
@@ -5392,7 +5387,7 @@ export async function cmdRecord(args: string[]) {
       // the contradiction check without it would have left an arbitrary split: batch dry-run enforcing
       // one scenario-level refusal but not its sibling.
       const parsedNames: string[] = [];
-      const refusals: { file: string; message: string }[] = [];
+      const refusals: { file: string; message: string; hint?: string }[] = [];
       // Path-dependent verdicts are ADVISORY on this arm, never refusals. Measured on a real consumer:
       // running the host-inventory pre-flight here against `defaultCassettePath(sc.name)` refused 26 of 27
       // scenarios that the real record accepts — because their CI dry-runs the directory from the repo root
@@ -5402,12 +5397,8 @@ export async function cmdRecord(args: string[]) {
       // must not gate. A preview that refuses what the real path allows is worse than one that stays quiet:
       // it teaches operators to stop trusting the preview.
       const notes: { file: string; message: string; kind: "refuse" | "warn" }[] = [];
-      // An input the real record would refuse before it runs: a baseline name that resolves nowhere, a
-      // `tool_not_called` the tier can never violate, a declared path that does not exist or is the wrong
-      // kind. Path-INDEPENDENT (none depends on `--out`), and the real record fails that scenario — but this
-      // arm exited 0 on them through 4.0.0, and the dry-run exit code is a covered meaning, so they are
-      // reported under their own key, beside `ok` and the exit code, rather than as refusals.
-      const inputErrors: { file: string; message: string; hint?: string }[] = [];
+      // A baseline name that resolves nowhere is a usage mistake: the real record exits 2 on it before any spend.
+      let unknownBaselineName = false;
       for (const f of disc.scenarios) {
         let sc;
         try {
@@ -5422,17 +5413,17 @@ export async function cmdRecord(args: string[]) {
         if (why) refusals.push({ file: f, message: why });
         // Also path-independent: whether a model resolves depends on `--model` (applied batch-wide), the
         // session and the environment, all of which this arm knows exactly as the real batch will. Opening
-        // the session is new I/O on this arm; a session that does not load is skipped, not refused (a session
-        // FILE that cannot be read is listed under `inputErrors[]` by the input check below).
+        // the session is new I/O on this arm; a session that does not load is skipped here (the input check
+        // below refuses a session FILE that cannot be read).
         const noModel = unresolvedModelPreflight(sc, modelOverride);
         if (noModel) refusals.push({ file: f, message: noModel });
-        // The inputs, checked as executeScenario checks them — but only once a model resolves: the real
-        // record stops at the model refusal first, and without a model the effort check would report a
-        // confusing second reason for the same file.
-        else {
-          // A baseline file that does not load is listed too: the real record fails that item.
-          const bad = scenarioInputRefusal(sc, modelOverride, { unloadableBaseline: "report" });
-          if (bad) inputErrors.push({ file: f, message: bad.message, ...(bad.hint !== undefined ? { hint: bad.hint } : {}) });
+        // The inputs, checked as executeScenario checks them. Without a model only the baseline name is: the real
+        // record stops at the model refusal first, and the effort check would report a confusing second reason.
+        // A baseline file that does not load is refused too: the real record refuses it before any spend.
+        const bad = noModel ? unknownBaselineRefusal(sc) : scenarioInputRefusal(sc, modelOverride, { unloadableBaseline: "report" });
+        if (bad) {
+          refusals.push({ file: f, message: bad.message, ...(bad.hint !== undefined ? { hint: bad.hint } : {}) });
+          if (isUnknownBaselineName(bad)) unknownBaselineName = true;
         }
         // Path-dependent: reported, never gating. `preSpendVerdicts` re-runs promptPolicyRejection, which is
         // already covered above — drop that one here rather than reporting it twice.
@@ -5472,8 +5463,6 @@ export async function cmdRecord(args: string[]) {
             skipped: disc.skipped,
             broken: disc.broken,
             refusals,
-            // Would fail on the real record; not (yet) a refusal — see where it is collected.
-            inputErrors,
             // Advisory; deliberately a separate key from `refusals` so automation cannot mistake a guess
             // for a verdict, and does not gate on it.
             notes,
@@ -5495,8 +5484,6 @@ export async function cmdRecord(args: string[]) {
       const logFindings = () => {
         for (const b of disc.broken) log(`✗ broken: ${b.file}: ${stripScenarioPrefix(b.error, b.file)}`);
         for (const r of refusals) log(`✗ refused: ${r.file}: ${r.message}`);
-        // Survives --quiet like a refusal: it is a failure of the real record, not part of the preview.
-        for (const e of inputErrors) log(inputErrorLine(e.file, e.message));
       };
       if (!asJson) {
         for (const s of disc.skipped) log(`· skipped: ${s}`);
@@ -5548,7 +5535,7 @@ export async function cmdRecord(args: string[]) {
       // The budget gate runs under --dry-run too, and refuses identically. A dry run whose whole job is
       // "tell me what this would do before I spend" must not report clean and then be refused for real —
       // that is a false preview, and it is free to check (history lookup, no spend).
-      if (maxBudgetUsd !== undefined) {
+      if (maxBudgetUsd !== undefined && !unknownBaselineName) {
         // A budget refusal REPLACES the JSON payload (its error envelope is the one document on stdout).
         // The findings that payload would have carried ride on the error envelope instead, as the same
         // top-level keys, so a refusal never hides what the corpus is; they also go to stderr, where text
@@ -5562,16 +5549,16 @@ export async function cmdRecord(args: string[]) {
           skipped: disc.skipped,
           broken: disc.broken,
           refusals,
-          inputErrors,
         });
         // Part of the preview: the cap is weaker than it looks above --concurrency 1, and the reader
         // deserves to learn that here rather than after spending.
         if (concurrency > 1) warn(CONCURRENCY_BUDGET_CAVEAT(concurrency));
       }
       if (asJson) emitPayload();
-      // Exit 1 when there are broken files (they won't run but the user should know) or refused ones
-      // (they parse, but no run could satisfy them — the real `record` would reject each in turn).
-      return exitWith(disc.broken.length > 0 || refusals.length > 0 ? 1 : 0);
+      // Exit 2 on a baseline name that resolves nowhere, the real record's pre-flight code. Else exit 1 when there are
+      // broken files (they won't run but the user should know) or refused ones (they parse, but no run could
+      // satisfy them — the real `record` refuses them too).
+      return exitWith(unknownBaselineName ? 2 : disc.broken.length > 0 || refusals.length > 0 ? 1 : 0);
     }
 
     // Single scenario dry-run.
@@ -5596,27 +5583,13 @@ export async function cmdRecord(args: string[]) {
     // with exit 1. This arm opens the scenario's session to answer it, so the preview agrees.
     const noModel = unresolvedModelPreflight(scenario, modelOverride);
     if (noModel) return fail("record", "usage", noModel, undefined, asJson, 1);
-    // The inputs, checked once in executeScenario's order. The input paths the session declares are checked
-    // the way `skill --dry-run` checks its own (existence and kind; not the git tracked-set filter): a
-    // preview of a path that is not there previews nothing. A scenario that loaded and is refused exits 1,
-    // record's rule — naming the reason the real record gives, which is the vacuity when both apply. A
+    // The inputs, checked once in executeScenario's order: the session, then vacuity, then the input paths, the way
+    // `skill --dry-run` checks its own (existence and kind; not the git tracked-set filter). A scenario that loaded and
+    // is refused exits 1, record's rule; a baseline name that resolves nowhere exits 2, as on the real record. A
     // baseline file that does not load throws, as it does on the real record.
     const { session, vacuity, inputs } = scenarioInputFindings(scenario, modelOverride);
-    if (inputs) {
-      const why = vacuity ?? inputs;
-      return fail("record", "usage", `record: ${why.message}`, why.hint, asJson, 1);
-    }
-    // A `session:` file that cannot be read, and a `tool_not_called` the tier can never violate: the real
-    // record refuses both, but this arm exited 0 on them through 4.1.0 and the dry-run exit code is a
-    // covered meaning, so they are reported (`inputErrors[]` and a line that survives --quiet), not refused.
-    // Session first: the real record loads the session before it checks vacuity.
-    const singleInputErrors = [session, vacuity]
-      .filter((e): e is UsageError => e !== undefined)
-      .map((e) => ({ file: target, message: e.message, ...(e.hint !== undefined ? { hint: e.hint } : {}) }));
-    const logSingleInputErrors = () => {
-      for (const e of singleInputErrors) log(inputErrorLine(e.file, e.message));
-    };
-    if (!asJson) logSingleInputErrors();
+    const why = session ?? vacuity ?? inputs;
+    if (why) return fail("record", "usage", `record: ${why.message}`, why.hint, asJson, isUnknownBaselineName(why) ? 2 : 1);
     // mirror the EXACT default cassette path recordScenarioObject uses (slugForPath via the shared
     // defaultCassettePath helper) so a name with spaces/separators reports the same path it writes.
     const cassettePath = p.options["--out"] ?? defaultCassettePath(scenario.name);
@@ -5651,9 +5624,7 @@ export async function cmdRecord(args: string[]) {
     // It exits 1, like the refusals above, on the preview and the real `record` alike (`budget.ts`), so
     // moving it keeps preview and real path agreeing, which is the property that matters.
     if (maxBudgetUsd !== undefined) {
-      // The budget refusal's error envelope replaces the payload below; keep the input errors on stderr.
-      if (asJson) logSingleInputErrors();
-      preflightBudget("record", scenario.name, maxBudgetUsd, asJson, { dryRun: true, target, inputErrors: singleInputErrors });
+      preflightBudget("record", scenario.name, maxBudgetUsd, asJson, { dryRun: true, target });
     }
     // The budget the recording would have: the flag in place of the scenario's own, as execution resolves it.
     const budget =
@@ -5667,7 +5638,6 @@ export async function cmdRecord(args: string[]) {
           fidelity: scenario.fidelity,
           ...(budget ? { timeout: budget } : {}),
           cassette: cassettePath,
-          inputErrors: singleInputErrors,
           token,
           agent: agentPayload,
         }),
@@ -6039,6 +6009,28 @@ export async function cmdRecord(args: string[]) {
     // Every scenario must resolve a model (`--model`, its session's `model:`, or COWORK_HARNESS_MODEL). Checked
     // for the whole batch before the first spawn, as the budget is below; each offender is named. Exit 1, like
     // the other refusals of a scenario that loaded. An unparseable file is already listed as broken.
+    const loadedForSweep = disc.scenarios.flatMap((file) => {
+      try {
+        return [{ file, scenario: parseScenarioFile(file) }];
+      } catch (caught) {
+        rethrowIfExit(caught);
+        return [];
+      }
+    });
+    // A baseline name that resolves nowhere is a usage mistake, refused for the whole batch before anything else:
+    // on an item-by-item refusal the earlier items had already been paid for.
+    const unknownNames = loadedForSweep.flatMap(({ file, scenario: sc }) => {
+      const unknown = unknownBaselineRefusal(sc);
+      return unknown ? [{ file, unknown }] : [];
+    });
+    if (unknownNames.length)
+      return fail(
+        "record",
+        "usage",
+        `record: ${unknownNames.map((u) => `${u.file}: ${u.unknown.message}`).join("\n")}`,
+        unknownNames.length === 1 ? unknownNames[0]!.unknown.hint : undefined,
+        asJson,
+      );
     const unpinned = disc.scenarios.filter((f) => {
       try {
         return unresolvedModelPreflight(parseScenarioFile(f), modelOverride) !== undefined;
@@ -6048,6 +6040,13 @@ export async function cmdRecord(args: string[]) {
       }
     });
     if (unpinned.length) return fail("record", "usage", `record: ${unresolvedModelRefusal(unpinned.join(", "))}`, undefined, asJson, 1);
+    // Every other input a scenario declares, again before the first spawn, as `run <dir/>` sweeps them. Quiet: the
+    // record resolves again and prints any warning itself.
+    const badInputs = loadedForSweep.flatMap(({ file, scenario: sc }) => {
+      const refused = scenarioInputRefusal(sc, modelOverride, { quiet: true, unloadableBaseline: "report" });
+      return refused ? [`${file}: ${refused.message}`] : [];
+    });
+    if (badInputs.length) return fail("record", "usage", `record: ${badInputs.join("\n")}`, undefined, asJson, 1);
     // Two scenarios pinning the same config_dir: the first would spend, then the marker refuse the second.
     const sharedDir = sharedConfigDirPreflight(
       disc.scenarios.flatMap((f) => {
@@ -6231,10 +6230,8 @@ export async function cmdRecord(args: string[]) {
     }
   } catch (e) {
     rethrowIfExit(e);
-    // A scenario naming no baseline is a usage mistake like any other entry point's: exit 2 with the
-    // valid baselines as the hint, not record's general exit 1.
-    // A baseline FILE that exists but does not load is a refusal of a scenario that loaded: exit 1, as it was
-    // before it had its own error class.
+    // A baseline name that resolves nowhere is a usage mistake: exit 2, every record form alike, with the valid
+    // baselines as the hint. A baseline FILE that exists but does not load is a refusal of a scenario that loaded: exit 1.
     if (e instanceof BaselineFileError) return fail("record", "usage", `record: ${e.message}`, e.hint, asJson, 1);
     if (e instanceof UnknownBaselineError) return fail("record", "usage", `record: ${e.message}`, e.hint, asJson);
     // A post-run refusal (failing verdict, an assert on an artifact too large to commit, a quarantined
