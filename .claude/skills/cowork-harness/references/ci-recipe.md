@@ -361,8 +361,8 @@ A typical skill repo runs four stages, fastest/cheapest first:
    offending file *and* the rejected key, one line per file, and the step still exits 1. An input the real record would refuse
    (an unreadable `session:` file, a missing path, a tier-vacuous negative tool check) exits 1 too, with a `✗ refused:`
    line and an entry in `refusals[]`; an unknown baseline name exits 2. The exit code is the gate. Point `lint`
-   at scenarios only: a session or matrix YAML in the linted set is reported as a file that does not
-   load.
+   at scenarios only: a session file in the linted set is one INFO, and a matrix YAML is reported as a file
+   that does not load.
 
    **If the repo pays for `critique`, gate the evidence corpus here first, for free:**
 

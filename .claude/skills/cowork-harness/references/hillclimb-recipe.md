@@ -108,7 +108,8 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   nothing for slots that already have a row: ask the user to start a fresh flow dir and run the baseline there.
 - **Served model.** A run served by another model, or with no evidence of the pinned one, is an `errors.jsonl`
   row (`serving_substitution`), not a score; a run with no model evidence whose agent failed on its own is a
-  scored agent failure.
+  scored agent failure. Two served ids for one pin exit 1 and refuse later passes; tell the user, `--allow-model-split`
+  is their call.
 - **Sub-agents.** Their turns are inlined in the trace after each dispatch; their cost is in `cost_usd`.
 
 ## Step 1 — goal, scope, wiring
@@ -185,8 +186,10 @@ Each line matches one entry of the list in [the hillclimb guide](https://github.
   `echo $?`) and the shell bookkeeping ask for approval each round; allow rules for the flow dir cover only Edit and
   Write. For unattended rounds, tell the user to run the session in auto mode. When it exits, verify N×R rows in
   `F/vN/results.jsonl` and that `F/vN/summary.json` exists; if rows are short, re-launch the same command (resume
-  is by (case, rep) slot). Slots with only an `errors.jsonl` row re-run on every pass; a permanent fault re-runs
-  forever, so read `failure_class` before re-launching again.
+  is by (case, rep) slot). A pass that stopped (exit 1, `stopped` in the envelope, for a spend cap or a grader failure)
+  is not short rows: show the user the cause; a re-launch spends another per-pass cap and is their call. Slots with only
+  an `errors.jsonl` row re-run on every pass; a permanent fault re-runs forever, so read `failure_class` before
+  re-launching again. For a `judge_invalid` slot, `hillclimb regrade` re-judges it at judge cost, with no agent re-run.
 - **Progress:** answer "how's it going" from `F/vN/progress.txt`.
 - **Reps count from 0:** `rep: 0`, `traces/<id>_rep0.json`. `F/vN/summary.json` is shared: the runner adds `model`
   and `source_sig` only when missing, and recomputes its own keys (requested/sent model and effort, the spend and

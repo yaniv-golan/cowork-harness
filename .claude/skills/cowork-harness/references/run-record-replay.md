@@ -72,7 +72,7 @@ concluded the free pre-flight was unavailable:
   knowing: it is **non-recursive** (`readdirSync` — scenarios in subdirectories are never opened), a file
   with no `prompt:` key reports as `· skipped:` rather than broken (so a renamed or mis-indented
   `prompt:` reads as "not a scenario" and the batch still exits 0), exit 1 covers **refused**
-  (path-independent only — prompt policy, assert contradiction, duplicate target) as well as broken, and
+  (path-independent only — prompt policy, assert contradiction, duplicate target, unreadable session, missing path, tier-vacuous assertion, a baseline file that does not load) as well as broken, and
   `--quiet` suppresses the advisory notes entirely — it keeps `✗ broken:` / `✗ refused:` / `· skipped:`,
   which is what you want in CI but means the notes are not a thing you will see there.
 - **"Would THIS record be refused?"** → the **single-file** arm **with the flags and `--out` the real
@@ -85,7 +85,7 @@ Neither question is answered by passing `--allow-host-inventory-fixture` to get 
 flag is consent for a recording you intend to make, and reaching for it as a load-check habit is how it
 stops meaning anything.
 
-**`record <file>` exit codes.** `2` means the scenario did not load. `1` means it loaded and this record
+**`record <file>` exit codes.** `2` means the scenario did not load or names an unknown baseline (ahead of every `1`; a baseline file that does not load is `1`). `1` means it loaded and this record
 was refused: before the spend (`on_unanswered: prompt`, an unsatisfiable assert pairing, the host-inventory
 destination refusal, a slug collision, a scenario that resolves no model, and the `--max-budget-usd`
 refusal — `1` on `record` since 4.0.0, still `2` on `run`/`skill`), or after it, once the agent has
