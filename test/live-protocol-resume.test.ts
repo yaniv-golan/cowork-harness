@@ -108,13 +108,14 @@ describe.runIf(CAN || REQUIRE)("protocol agent_max_turns stops the agent at the 
       const res = JSON.parse(r.stdout || "{}").results?.[0] ?? {};
       // The agent's own outcome, from its result frame: the cap stopped it, at the cap.
       expect(res.resultSubtype, r.stderr).toBe("error_max_turns");
-      // The cap held: one model request and one tool call, so the second `echo` never ran. The agent's `num_turns`
+      // The cap held: one model request, so the second `echo` request never happened. The agent's `num_turns`
       // is not pinned: 2.1.319 reports 2 for this same run.
       const frames = readFileSync(join(res.outDir, "events.jsonl"), "utf8")
         .split("\n")
         .filter(Boolean)
         .map((l) => JSON.parse(l));
       const assistant = frames.filter((f) => f.type === "assistant");
+      expect(assistant.every((f) => typeof f.message.id === "string")).toBe(true);
       expect(new Set(assistant.map((f) => f.message.id)).size).toBe(1);
       expect(assistant.flatMap((f) => f.message.content).filter((c) => c.type === "tool_use").length).toBeGreaterThan(0);
       expect(res.turnCap).toEqual({ maxTurns: 1, source: "session" });

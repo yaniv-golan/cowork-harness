@@ -1353,8 +1353,7 @@ cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'
 > names, so on such a recording a built-in command that is not a skill (`compact`, `init`, …) keeps its text.
 > **A bare-named agent is always withheld, and it is never the plugin under test's**: every plugin agent is named
 > `<plugin>:<agent>`. A bare name is the agent's own or a *user* agent from the config dir: the `agents/` of a
-> session's pinned `plugins.config_dir` (which load bare under `settingSources: ["user"]`), or, at a tier that
-> inherits the host's config dir (`protocol`/`hostloop`), the operator's own. Their descriptions are withheld too.
+> session's pinned `plugins.config_dir` (which load bare under `settingSources: ["user"]`). Their descriptions are withheld too.
 > No verdict reads a registry description, so this costs nothing but the text. (Project agents in a working
 > directory's `.claude/agents/` never load: `settingSources` is pinned to `user` by the baseline.)
 >

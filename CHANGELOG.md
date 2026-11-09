@@ -35,7 +35,7 @@ All notable changes to this project are documented here. The format is based on
 - **Eight environment variables moved into the `COWORK_HARNESS_` namespace:** `COWORK_LOCKDOWN`,
   `COWORK_LIMA_INSTANCE`, `COWORK_LIMACTL`, `COWORK_VM_PROVISION_TIMEOUT_S`, `COWORK_VM_PROXY_PORT`, `COWORK_VM_GATEWAY`,
   `COWORK_CONTAINER_RUNTIME` and `COWORK_SKIP_CAPABILITY_PROBE` are now `COWORK_HARNESS_LOCKDOWN` and so on. Setting
-  an old name to a non-empty value refuses every command but `--version` at startup (exit 2), naming the new one. The bare names that
+  an old name to a non-empty value refuses every command except `--version` and help at startup (exit 2), naming the new one. The bare names that
   stay are the agent and proxy overrides (`COWORK_AGENT_BINARY`, `COWORK_AGENT_IMAGE`, `COWORK_HOST_AGENT_BINARY`,
   `COWORK_PROXY_IMAGE`), now all covered by the compatibility contract, and `COWORK_ARTIFACTS_ROOT`, which Desktop
   sets.
@@ -136,7 +136,7 @@ All notable changes to this project are documented here. The format is based on
   `desktop-4.23118.0`, so a cassette recorded through it reports `[stale] baseline moved 4.16336.0 → 4.23118.0 since
   record — re-record`. A cassette below v12, or without `controlOut` or `userVisibleRoots`, is refused (see Breaking
   changes). `record <dir/> --rerecord-stale` handles these. A recording using `allow_max_turns` stamps format 19; every
-  other recording stamps what it did. The cassettes in this repository are re-recorded.
+  other recording stamps what it did. The example and test-fixture cassettes in this repository are re-recorded.
 - **`protocol` runs change on an unchanged scenario.** The session's `agent_max_turns`, thinking, `--thinking-display`
   and `--session-id`/`--resume` now reach the agent. A protocol scenario whose session sets `agent_max_turns` can now end
   `error_max_turns`; add `allow_max_turns: true` if the cap is intended. A protocol `--resume` now resumes. Protocol runs
@@ -159,8 +159,8 @@ All notable changes to this project are documented here. The format is based on
     across runs from before and after the upgrade;
   - a setup that sends the token through a proxy needs `ANTHROPIC_BASE_URL` listed in `agent_env.passthrough`, and a proxy
     that needs a header from `ANTHROPIC_CUSTOM_HEADERS` stops working at hostloop: that name cannot be listed while the
-    agent is given the token. Without the token the API key is still given, and both names need listing in
-    `agent_env.passthrough` (see Breaking changes).
+    agent is given the token. Without the token the API key is still given, and `ANTHROPIC_BASE_URL` and
+    `ANTHROPIC_CUSTOM_HEADERS` each need listing in `agent_env.passthrough` (see Breaking changes).
 
 ### Added
 

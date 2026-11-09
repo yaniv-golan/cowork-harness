@@ -127,7 +127,20 @@ const full: RunResult = {
   thinking: [{ text: "considering the approach" }, { text: "", redacted: true }],
   thinkingElided: 2,
   toolErrors: { Bash: { calls: 2, errors: 1 } },
-  modelUsage: { "claude-opus-4-8": { inputTokens: 100, outputTokens: 50, costUSD: 0.01, cacheReadInputTokens: 200 } },
+  modelUsage: {
+    "claude-opus-4-8": {
+      inputTokens: 100,
+      outputTokens: 50,
+      costUSD: 0.01,
+      cacheReadInputTokens: 200,
+      thinkingTokens: 5,
+      cacheCreationEphemeral5mInputTokens: 1,
+      cacheCreationEphemeral1hInputTokens: 2,
+      canonicalModel: "claude-opus-4-8",
+      provider: "firstParty",
+      costBasis: "api",
+    },
+  },
   redundantToolCalls: [{ name: "Bash", argHash: "a".repeat(16), count: 3 }],
   skillActivity: [
     { skillId: "my-plugin:my-skill", invocationSeq: 3, toolCounts: { Bash: 1 }, toolCallCount: 1, dispatchCount: 0, durationMs: 120 },

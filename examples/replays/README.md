@@ -47,8 +47,8 @@ that allows choosing more than one option (`choose: [Auth, Audit]`, comma-separa
 > plugins. As of the 1.32885.1 re-record it is a **real captured manifest from a sealed run** — every
 > `protocol` run now gives the agent a fresh managed config dir, so what it carries
 > is the product's own built-in commands/agents/skills and no operator inventory. `verify-cassettes`
-> enforces that distinction on every commit. The current take was re-recorded on 2026-10-03 the same way,
-> on the host CLI 2.1.287 with auto-memory off. That CLI adds a built-in `plugin-authoring` skill, which
+> enforces that distinction on every commit. The current take was re-recorded on 2026-11-09 the same way,
+> on the host CLI 2.1.319 with auto-memory off. That CLI adds a built-in `schedule` skill, which
 > is part of the product's own roster, not operator inventory.
 
 > Replaying a cassette needs neither Docker nor a staged agent **whatever tier it was recorded at** —
