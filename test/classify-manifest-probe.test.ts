@@ -43,7 +43,7 @@ function fromMainLoop(lines: string[], indexes: number[]): void {
   for (const i of indexes) lines[i] = JSON.stringify({ ...JSON.parse(lines[i]!), parent_tool_use_id: null });
 }
 
-async function replayed(lines: string[]): Promise<RunResult> {
+async function replayed(lines: string[], controlOut?: string[]): Promise<RunResult> {
   const cassette = {
     scenario: {
       name: "probe",
@@ -56,6 +56,7 @@ async function replayed(lines: string[]): Promise<RunResult> {
       assert: [{ result: "success" }],
     },
     events: lines,
+    ...(controlOut ? { controlOut } : {}),
     preRunPaths: [],
     artifacts: [],
   } as any;
@@ -137,6 +138,35 @@ const CASES: Array<[string, () => string[], ManifestProbeOutcome]> = [
 
 describe("classify-manifest-probe, over the replay re-drive of a kept run", () => {
   for (const [name, build, want] of CASES) it(name, async () => expect(classifyManifestProbe(await replayed(build()))).toBe(want));
+
+  // A gate deny: the agent is told no through the permission channel, and its tool result carries no error flag.
+  for (const [name, toolUseId, askedPath] of [
+    ["joined by the tool id alone", "toolu_0176Eg3XKaFQXtt6ryDahg2e", `${VM_NOTE}.other`],
+    ["joined by tool and path when the request names no tool id", undefined, VM_NOTE],
+  ] as const)
+    it(`a /sessions/ Write denied at the gate is the refusal, ${name}`, async () => {
+      const l = frames();
+      writeTo(l, VM_NOTE);
+      edit(l, WRITE_RESULT, (b) => delete b.is_error);
+      const ask = JSON.stringify({
+        type: "control_request",
+        request_id: "req-1",
+        request: {
+          subtype: "can_use_tool",
+          tool_name: "Write",
+          input: { file_path: askedPath },
+          ...(toolUseId ? { tool_use_id: toolUseId } : {}),
+        },
+      });
+      l.splice(WRITE_USE + 1, 0, ask);
+      const denied = JSON.stringify({
+        type: "control_response",
+        response: { subtype: "success", request_id: "req-1", response: { behavior: "deny", message: "no" } },
+      });
+      const r = await replayed(l, [denied]);
+      expect(r.toolResults?.find((t) => t.toolUseId === "toolu_0176Eg3XKaFQXtt6ryDahg2e")?.isError).toBe(false);
+      expect(classifyManifestProbe(r)).toBe("vm-path refused");
+    });
 
   it("a result without the telemetry claims no outcome", () => {
     expect(() => classifyManifestProbe({})).toThrow(ManifestProbeEvidenceError);

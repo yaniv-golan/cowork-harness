@@ -6185,6 +6185,9 @@ export async function cmdRecord(args: string[]) {
   // pre-flight warnings and matches `record --dry-run` exactly. Exit 1, the record split's pre-spend code.
   const noModel = unresolvedModelPreflight(scenario!, modelOverride);
   if (noModel) return fail("record", "usage", `record: ${noModel}`, undefined, asJson, 1);
+  // Before the budget, as `--dry-run` and a directory order it: a baseline name that resolves nowhere exits 2 on every form.
+  const unknownName = unknownBaselineRefusal(scenario!);
+  if (unknownName) return fail("record", "usage", `record: ${unknownName.message}`, unknownName.hint, asJson);
   if (maxBudgetUsd !== undefined) preflightBudget("record", scenario!.name, maxBudgetUsd, asJson);
   // Last, as `run` orders it: no credential this scenario's tier hands the agent.
   const noCredential = credentialPreflight([scenario!]);

@@ -173,12 +173,13 @@ All notable changes to this project are documented here. The format is based on
   | `run <file or dir/> --repeat N` | unknown baseline name, missing input path, tier-vacuous assertion | exit 1, `stoppedEarly: "error"` in the rollup | exit 2 before the first run, no run dir |
   | `record <file> --dry-run` | unknown baseline name | exit 1 | exit 2 |
   | `record <file> --dry-run` | unreadable `session:` file, tier-vacuous assertion | exit 0, reported | exit 1 |
+  | `record <file> --max-budget-usd` | unknown baseline name, cost history over the cap | exit 1, `budget_exceeded` | exit 2 |
   | `record <dir/> --dry-run` | unknown baseline name | exit 0, reported | exit 2 |
   | `record <dir/> --dry-run` | unreadable `session:` file, missing input path, tier-vacuous assertion | exit 0, reported | exit 1, in `refusals[]` |
-| `record <dir/> --dry-run` | baseline file that does not load | exit 0, reported | exit 1, in `refusals[]` |
+  | `record <dir/> --dry-run` | baseline file that does not load | exit 0, reported | exit 1, in `refusals[]` |
   | `record <dir/>` | unknown baseline name | exit 1 for that item, after earlier items were paid for | exit 2 before the first spawn |
   | `record <dir/>` | unreadable `session:` file, missing input path, tier-vacuous assertion | exit 1 for that item, after earlier items were paid for | exit 1 before the first spawn |
-| `record <dir/>` | baseline file that does not load | exit 1 for that item, after earlier items were paid for | exit 1 before the first spawn |
+  | `record <dir/>` | baseline file that does not load | exit 1 for that item, after earlier items were paid for | exit 1 before the first spawn |
 
   On a directory, any unknown baseline name gives exit 2, else any broken or refused item gives exit 1, else exit 0.
 - **Breaking: eight environment variables moved into the `COWORK_HARNESS_` namespace:** `COWORK_LOCKDOWN`,

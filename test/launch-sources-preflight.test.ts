@@ -58,7 +58,7 @@ function runDirsUnder(runs: string): string[] {
   return readdirSync(runs).filter((n) => !n.startsWith("."));
 }
 
-function envelope(stdout: string): { ok?: boolean; results?: unknown[]; error?: { category?: string; message?: string } } {
+function envelope(stdout: string): { ok?: boolean; results?: unknown[]; error?: { category?: string; message?: string; hint?: string } } {
   return JSON.parse(stdout);
 }
 
@@ -357,6 +357,7 @@ describe.skipIf(!can)("input pre-checks: baselines, --repeat, hints and the budg
     expect(msg).toMatch(/b\.yaml: .*no-such-baseline/);
     expect(msg).toMatch(/c\.yaml: .*no-such-baseline/);
     expect(msg).not.toMatch(/a\.yaml/);
+    expect(envelope(r.stdout).error?.hint).toBeUndefined();
     expect(runDirsUnder(r.runs)).toEqual([]);
   });
 
@@ -368,6 +369,7 @@ describe.skipIf(!can)("input pre-checks: baselines, --repeat, hints and the budg
     const r = cli(["record", "sc/", "--output-format", "json"], d, STUB_CREDENTIAL);
     expect(r.code, r.all).toBe(2);
     expect(envelope(r.stdout).error?.message).toMatch(/u\.yaml: .*no-such-baseline/);
+    expect(typeof envelope(r.stdout).error?.hint).toBe("string");
   });
 
   it("real record <dir/>: a missing input path is refused with exit 1 before anything is spawned", () => {

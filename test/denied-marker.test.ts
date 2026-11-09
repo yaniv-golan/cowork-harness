@@ -103,6 +103,18 @@ describe("toolCalls[].denied and the summary's denied count", () => {
     expect(footer(r)).toContain("denied: 1");
   });
 
+  it("a request and a call that both lack a tool id are not joined", async () => {
+    const events: AgentEvent[] = [
+      { type: "tool_use", name: "Write", input: { file_path: "/x" } },
+      { type: "decision", request: write(undefined) },
+      { type: "result", isError: false },
+    ];
+    const r = await drive(new MockSession(events), decider(deny));
+    expect(r.toolCalls[0]!.toolUseId).toBeUndefined();
+    expect(r.toolCalls[0]!.denied).toBeUndefined();
+    expect(footer(r)).toContain("denied: 1");
+  });
+
   it("an allowed call stays unmarked, and the summary says nothing", async () => {
     const r = await drive(new MockSession(stream(write("tu-1"))), decider({ kind: "permission", behavior: "allow", updatedInput: {} }));
     expect(r.toolCalls[0]!.denied).toBeUndefined();
