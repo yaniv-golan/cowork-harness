@@ -394,6 +394,8 @@ All notable changes to this project are documented here. The format is based on
   A judge that hits the account's usage limit is a failed call with API status 429 (not retried), and a reply
   that records an API status on a successful exit is read as the grade it carries unless it is also marked as an
   error.
+- **A `protocol` recording on host `claude` 2.1.319 is no longer refused for that agent's built-in `schedule` and
+  `send-to-project` skills**, which the host-inventory scan read as your own.
 
 ### Documentation
 

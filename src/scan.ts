@@ -235,6 +235,12 @@ export const KNOWN_BUILTIN_SKILLS: ReadonlySet<string> = new Set([
   // 2.1.287; (3) negative control: plaud-digest, overcut, docsend-to-pdf, skill-packager and proof-engine are
   // 0 in all three. The container and hostloop recordings on agent 2.1.286 do not list it.
   "plugin-authoring",
+  // EXTENDED 2026-11-09 (host CLI 2.1.319): `schedule` and `send-to-project` surfaced in skills[] on a fresh `protocol`
+  // recording. Product built-ins by the same three criteria: (1) recorded on the run's own config dir, with a session that
+  // stages no plugins or skills; (2) each is a bare quoted literal in the host CLI, the staged agent ELF 2.1.317 and the
+  // staged native agent 2.1.317 (9x and 1x in each); (3) negative control: the same five personal names are 0 in all three.
+  "schedule",
+  "send-to-project",
   "design-sync",
   "doctor",
   "fewer-permission-prompts",
