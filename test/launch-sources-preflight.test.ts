@@ -345,6 +345,28 @@ describe.skipIf(!can)("input pre-checks: baselines, --repeat, hints and the budg
     expect(runDirsUnder(real.runs)).toEqual([]);
   });
 
+  it("record <file> --dry-run: an unknown name outranks the model refusal", () => {
+    const d = fixture();
+    writeFileSync(join(d, "unpinned.yaml"), "folders: []\n");
+    writeFileSync(join(d, "sc", "u.yaml"), SCENARIO("u", "../unpinned.yaml", "baseline: no-such-baseline\n"));
+    const r = cli(["record", "sc/u.yaml", "--dry-run", "--output-format", "json"], d);
+    expect(r.code, r.all).toBe(2);
+    expect(envelope(r.stdout).error?.message).toMatch(/no-such-baseline/);
+    expect(typeof envelope(r.stdout).error?.hint).toBe("string");
+  });
+
+  it("real record <file>: an unknown name outranks the model refusal, before anything is spawned", () => {
+    const d = fixture();
+    writeFileSync(join(d, "unpinned.yaml"), "folders: []\n");
+    writeFileSync(join(d, "sc", "u.yaml"), SCENARIO("u", "../unpinned.yaml", "baseline: no-such-baseline\n"));
+    const r = cli(["record", "sc/u.yaml", "--output-format", "json"], d, STUB_CREDENTIAL);
+    expect(r.all).not.toMatch(SPAWN_GUARD);
+    expect(r.code, r.all).toBe(2);
+    expect(envelope(r.stdout).error?.message).toMatch(/no-such-baseline/);
+    expect(typeof envelope(r.stdout).error?.hint).toBe("string");
+    expect(runDirsUnder(r.runs)).toEqual([]);
+  });
+
   it("real record <dir/>: every unknown name is refused with exit 2 before anything is spawned", () => {
     const d = fixture();
     writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../ok.yaml"));

@@ -5582,6 +5582,9 @@ export async function cmdRecord(args: string[]) {
     if (contradiction) return fail("record", "usage", contradiction, undefined, asJson, 1);
     // The real record refuses a scenario that resolves no model (executeScenario, and the pre-flight below),
     // with exit 1. This arm opens the scenario's session to answer it, so the preview agrees.
+    // A baseline name that resolves nowhere exits 2 on every form, ahead of the exit-1 refusals, as a directory orders it.
+    const unknownName = unknownBaselineRefusal(scenario);
+    if (unknownName) return fail("record", "usage", `record: ${unknownName.message}`, unknownName.hint, asJson);
     const noModel = unresolvedModelPreflight(scenario, modelOverride);
     if (noModel) return fail("record", "usage", noModel, undefined, asJson, 1);
     // The inputs, checked once in executeScenario's order: the session, then vacuity, then the input paths, the way
@@ -6183,11 +6186,11 @@ export async function cmdRecord(args: string[]) {
   // used to change a broken file's exit code) is gone. `preflightBudget` never throws; it `fail()`s.
   // The same model check executeScenario makes, made here so the refusal comes before the recording's own
   // pre-flight warnings and matches `record --dry-run` exactly. Exit 1, the record split's pre-spend code.
-  const noModel = unresolvedModelPreflight(scenario!, modelOverride);
-  if (noModel) return fail("record", "usage", `record: ${noModel}`, undefined, asJson, 1);
-  // Before the budget, as `--dry-run` and a directory order it: a baseline name that resolves nowhere exits 2 on every form.
+  // First, as `--dry-run` and a directory order it: a baseline name that resolves nowhere exits 2 on every form.
   const unknownName = unknownBaselineRefusal(scenario!);
   if (unknownName) return fail("record", "usage", `record: ${unknownName.message}`, unknownName.hint, asJson);
+  const noModel = unresolvedModelPreflight(scenario!, modelOverride);
+  if (noModel) return fail("record", "usage", `record: ${noModel}`, undefined, asJson, 1);
   if (maxBudgetUsd !== undefined) preflightBudget("record", scenario!.name, maxBudgetUsd, asJson);
   // Last, as `run` orders it: no credential this scenario's tier hands the agent.
   const noCredential = credentialPreflight([scenario!]);
