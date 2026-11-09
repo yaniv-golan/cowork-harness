@@ -328,6 +328,14 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       `COWORK_LIVE_DOTENV`, and run from a worktree with no `.env`), fewer tests are listed and stderr names each
       skipped suite. A run that
       lists the same count both ways is not checking skips.
+- [ ] **Live gate (non-blocking): record which path the manifest probe's sub-agent took.** Run
+      `examples/scenarios/subagent-manifest-probe.yaml` three times, and for each run record the output of
+      `npx tsx scripts/classify-manifest-probe.ts <run>/turns/1/result.json` in the gate notes. It prints one of four:
+      `host-path write`, `vm-path refused`, `shell write`, `no sub-agent write`. Only `host-path write`, with the
+      probe's `file_exists` passing, is a pass. `vm-path refused` and `shell write` are failures of the probe and are
+      named as such; neither blocks the release. `shell write` is a heuristic over the command text. The step shows
+      whether a sub-agent can act on the manifest, not whether the manifest's wording matches Desktop's.
+
 - [ ] **Live gate: the companion skill sends an agent to the right reference.** Three prompts, each run through
       the skill on `container` with an LLM decider for any question it asks (billed, three short runs):
       ```
