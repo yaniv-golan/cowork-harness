@@ -117,10 +117,10 @@ describe("fidelity tier allowlist (container | hostloop)", () => {
   });
 
   // Each refused tier states its OWN reason (not a generic "unknown"), so a consumer learns whether it
-  // could lift (microvm: a proof) or is structural-ish (protocol: no resume plumbing).
+  // could lift (microvm: a proof) or is a choice (protocol: not the agent Cowork runs).
   for (const [tier, needle] of [
     ["microvm", /microVM guest/i],
-    ["protocol", /never plumbs a session id/i],
+    ["protocol", /runs the host `claude`, not the agent Cowork runs/i],
   ] as const) {
     it(`refuses --fidelity ${tier} with its specific reason`, () => {
       expect(() => P("--fidelity", tier)).toThrow(needle);

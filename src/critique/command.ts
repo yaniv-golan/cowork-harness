@@ -543,15 +543,13 @@ function parseArgs(
   // anything.
   if (!corpusOnly && (!prompt || !prompt.trim())) throw new Error(`--prompt "<probe>" or --prompt-file <path> is required\n${usage()}`);
   if (fidelity !== "container" && fidelity !== "hostloop" && fidelity !== "cowork") {
-    // Two proven tiers, plus `cowork` which RESOLVES to one of them below. Each refusal states its OWN
-    // reason rather than a generic "unknown tier": the reflection turn RESUMES the task turn's mounted
-    // skill + conversation, and that continuity is proven only for container (Linux ELF) and hostloop
-    // (native binary).
+    // Two accepted tiers, plus `cowork` which RESOLVES to one of them below. Each refusal states its OWN
+    // reason rather than a generic "unknown tier".
     const reason =
       fidelity === "microvm"
         ? "resume-continuity is unproven for the microVM guest (a different guest and session-store location than container/hostloop)"
         : fidelity === "protocol"
-          ? "the protocol tier never plumbs a session id or --resume, so the reflection turn cannot resume the task turn at all"
+          ? "the protocol tier runs the host `claude`, not the agent Cowork runs, so a critique there would grade the skill under a runtime Cowork never uses"
           : "it is not a fidelity tier";
     throw new Error(`skill-critique runs at the container or hostloop tier only; --fidelity ${fidelity} is refused: ${reason}`);
   }

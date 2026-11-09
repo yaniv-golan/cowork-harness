@@ -836,9 +836,8 @@ the two cannot disagree.
 - **`[unverified]` The microvm tier is refused** — resume-continuity is unproven for the microVM guest (a
   different Apple-VZ guest and in-guest session store than the proven container/hostloop tiers). A live
   resume-continuity proof there would lift it.
-- **`[not-built]` The protocol tier is refused** — it never plumbs a session id or `--resume`, so
-  critique's two-turn resume protocol has nothing to resume. Adding session plumbing to the protocol tier
-  (which also runs with no sandbox) would be the work.
+- **`[deliberate]` The protocol tier is refused** — it runs the host `claude` from your `PATH`, with no sandbox,
+  not the agent Cowork runs, so a critique there would grade the skill under a runtime Cowork never uses.
 - **`[deliberate]` Skill-authored content ships WHOLE, not rationed** — of what the mount carries: SKILL.md,
   the skill's own `references/**`, and every dispatchable `agents/**.md` are packaged in full, up to a **512 KiB combined
   corpus ceiling** covering all three together. For a multi-skill plugin, a **fourth** class joins the

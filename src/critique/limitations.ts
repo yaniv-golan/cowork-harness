@@ -59,7 +59,7 @@ export interface Limitation {
 export const CRITIQUE_LIMITATIONS: Limitation[] = [
   // The container pin was LIFTED on 2026-07-23: hostloop resume-continuity was proven live (native binary,
   // test/live-contract.test.ts) and critique now accepts `--fidelity container|hostloop`. What remains is
-  // the three tiers still refused — each for its OWN, distinctly-classed reason, which is exactly the
+  // the tiers still refused — each for its OWN, distinctly-classed reason, which is exactly the
   // per-limitation provenance this module exists to record. A cross-tier resume is blocked separately by
   // the session-manifest fidelity stamp (src/run/execute.ts).
   {
@@ -74,10 +74,11 @@ export const CRITIQUE_LIMITATIONS: Limitation[] = [
   },
   {
     id: "protocol-tier-refused",
-    summary: "the protocol tier is refused — it never plumbs a session id or --resume",
+    summary: "the protocol tier is refused — it runs the host `claude`, not the agent Cowork runs",
     provenance: {
-      kind: "not-built",
-      note: "protocol's spawn hand-builds its argv and never emits --session-id/--resume, so critique's two-turn resume protocol has nothing to resume; adding session plumbing to the protocol tier (which also runs with no sandbox) is the work",
+      kind: "deliberate",
+      rationale:
+        "critique grades a skill under the runtime Cowork uses, and the protocol tier spawns whatever `claude` is on the host's PATH, with no sandbox, so a critique there would grade it under a runtime Cowork never uses",
     },
     docsAnchor: "protocol tier is refused",
   },

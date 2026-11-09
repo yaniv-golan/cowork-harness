@@ -82,7 +82,7 @@ describe("--fidelity cowork resolves to a concrete tier at parse time", () => {
   it("still refuses microvm and protocol, each with its own reason", () => {
     // Guards against the allowlist being widened past what resume-continuity is proven for.
     expect(() => P(HOST, "--fidelity", "microvm")).toThrow(/microVM guest/i);
-    expect(() => P(HOST, "--fidelity", "protocol")).toThrow(/never plumbs a session id/i);
+    expect(() => P(HOST, "--fidelity", "protocol")).toThrow(/runs the host `claude`, not the agent Cowork runs/i);
     expect(() => P(HOST, "--fidelity", "banana")).toThrow(/not a fidelity tier/i);
   });
 });
