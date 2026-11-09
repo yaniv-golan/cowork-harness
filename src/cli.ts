@@ -184,7 +184,6 @@ import {
   type StatsGroupBy,
   type RunListEntry,
 } from "./run/run-index.js";
-import { cmdMigrateRunDir } from "./run/migrate-run-dir.js";
 import {
   canonicalizeInput,
   diffToolSequence,
@@ -362,8 +361,6 @@ const HELP = `cowork-harness <command>   (v${"$VERSION"})
                                only run dirs (local_<lowercase letters, digits>, and sess-<id> under
                                --pinned-older-than) are deleted; a <runs-dir> at the wrong level is refused
                                (exit 2; see prune --help)
-  migrate-run-dir [<runs-dir>] [--scenario <n>] [--write]
-                               convert pre-layout run dirs to the per-turn turns/<N>/ layout (DRY RUN by default)
 
 ── CI lint + assertion reference ──────────────────────────────────────────────
   lint <scenario.yaml | dir/>…  check scenarios for silent false-greens (bundled scenario.py; needs python3 — PyYAML is bundled)
@@ -836,14 +833,6 @@ const SUBCOMMAND_USAGE: Record<string, string> = {
     "  another runs root (found without following symlinks), and a root the bounded check cannot clear that is\n" +
     "  not itself a runs root.\n" +
     "  exit: 0 done (or nothing to prune) · 2 usage, or a <runs-dir> at the wrong level",
-  "migrate-run-dir":
-    "usage: migrate-run-dir [<runs-dir>] [--scenario <name>] [--write] [--verbose]\n" +
-    "       convert pre-layout run dirs (artifacts at the run-dir root) to the per-turn `turns/<N>/` layout, in place.\n" +
-    "       DRY RUN BY DEFAULT — pass --write to apply. Back up the runs root first; this rewrites directories.\n" +
-    "       Preserves file and directory mtimes (they are the recency signal `stats` and `--latest-for` read), recovers an\n" +
-    "       interrupted run from its journal, and refuses any directory it cannot resolve rather than guessing.\n" +
-    "       --scenario <name> scopes the run to one scenario dir — migrate a single scenario, verify it, then do the rest.\n" +
-    "       exit: 0 nothing refused · 1 one or more directories refused (unfinished work) · 2 usage (or unknown --scenario)",
 
   eval: EVAL_USAGE,
   hillclimb: HILLCLIMB_USAGE,
@@ -905,7 +894,6 @@ const COMMANDS = [
   "rehash",
   "init-redact",
   "prune",
-  "migrate-run-dir",
 ];
 
 // --dotenv / --run-dir BEFORE the subcommand are handled here, and this scan stops at the subcommand, so a
@@ -1158,8 +1146,6 @@ async function main() {
       return cmdGates(rest);
     case "answer":
       return cmdAnswer(rest);
-    case "migrate-run-dir":
-      return cmdMigrateRunDir(rest);
     case "prune":
       return cmdRunsGc(rest); // top-level: no `gc` token to strip, so pass `rest` whole (NOT rest.slice(1))
     default: {
@@ -4197,7 +4183,7 @@ function cmdStats(args: string[]) {
       skipped ? `${skipped} skipped — missing/corrupt result.json` : "",
       skippedReplay ? `${skippedReplay} skipped — replay re-check, not evidence` : "",
       // Naming the remedy matters: a bare count reads as "nothing I can do about it".
-      skippedLegacy ? `${skippedLegacy} skipped — pre-layout, run: cowork-harness migrate-run-dir` : "",
+      skippedLegacy ? `${skippedLegacy} skipped — pre-layout, run: npx cowork-harness@4 migrate-run-dir` : "",
       skippedUnsafe ? `${skippedUnsafe} skipped — symlinked run dir/result.json rejected` : "",
       skippedInFlightLegs ? `${skippedInFlightLegs} skipped — multi-leg run not finished (no scenario-result.json)` : "",
     ].filter(Boolean);

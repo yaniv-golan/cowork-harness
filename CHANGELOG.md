@@ -291,6 +291,9 @@ All notable changes to this project are documented here. The format is based on
 
 ### Removed
 
+- **Breaking: the `migrate-run-dir` command.** A run dir from before the per-turn `turns/<N>/` layout is still refused
+  by name, and `trace` still reads it. Convert one with `npx cowork-harness@4 migrate-run-dir`: a dry run by default,
+  `--write` to apply.
 - **Breaking: `inputErrors[]` is gone from `record --dry-run`.** Its findings are refusals now: `refusals[]` on a
   directory, the error envelope on a single file. A gate written as `jq -e '.ok and (.inputErrors == [])'` becomes
   `jq -e '.ok'`, or the exit code.

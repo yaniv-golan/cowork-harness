@@ -37,11 +37,6 @@ const ALLOWED = new Map<string, string>([
   ["src/run/execute.ts", "the WRITER: it owns the layout it writes"],
   ["src/run/chat.ts", "a WRITER of its own turn-1 artifacts, same as execute.ts"],
   ["src/runtime/resource-sampler.ts", "a WRITER; takes an explicit turn and builds its own path"],
-  [
-    "src/run/migrate-run-dir.ts",
-    "the MIGRATOR: reading a pre-layout dir's ROOT artifacts is its entire subject matter — it is the one " +
-      "component whose INPUT is by definition the old shape. Every DESTINATION it builds goes through the seam.",
-  ],
 ]);
 
 /** Names a per-turn artifact, or the `<stem>.turn-<N>.<ext>` mangle a pre-layout writer produced. */

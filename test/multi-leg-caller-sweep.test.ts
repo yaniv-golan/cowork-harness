@@ -30,7 +30,6 @@ const DISPOSITIONS: Record<string, string> = {
   "src/run/execute.ts": "the writer",
   "src/run/inspect-view.ts": "requireTurns refuses a root; a leg dir is unchanged",
   "src/run/latest-run.ts": "branches on the legs shape before latestTurn",
-  "src/run/migrate-run-dir.ts": "no-op on legs / action-leg before any listTurns",
   "src/run/recorded-agent-version.ts": "per-leg events lines by construction",
   "src/run/regrade.ts": "through assertContextFromRunDir: refuses a root and a non-final persistent leg",
   "src/run/renderer.ts": "writer side: prints leg paths",

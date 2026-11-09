@@ -74,7 +74,6 @@ const MATRIX: Array<[string, string[]]> = [
   ["rehash", ["rehash", "x.cassette.json"]],
   ["init-redact", ["init-redact"]],
   ["prune", ["prune"]],
-  ["migrate-run-dir", ["migrate-run-dir"]],
 ];
 
 describe.skipIf(!can)("per-command --dotenv reaches every command's parser", () => {

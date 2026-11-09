@@ -82,7 +82,7 @@
   (`["claude-sonnet-5", "<synthetic>"]`) and is not a sign the run used a stub or a fixture. Drop every
   `<…>`-wrapped entry before reading the array as run provenance; comparing two runs without doing so can
   show a "model change" that is only a difference in whether a synthesized turn occurred.
-- **An old run dir predates the per-turn `turns/<N>/` layout?** `cowork-harness migrate-run-dir`
+- **An old run dir predates the per-turn `turns/<N>/` layout?** `npx cowork-harness@4 migrate-run-dir`
   converts it in place (dry run by default; pass `--write` to apply) — see
   [debugging.md](./debugging.md#old-run-dirs-pre-turns-layout).
 
