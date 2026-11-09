@@ -348,6 +348,28 @@ describe("plugins.from_host: every tier stages the hashed copy as it is", () => 
   });
 });
 
+describe("plugins.local_plugins: every tier keeps an in-tree link as written", () => {
+  it("container / microvm, hostloop and protocol: a relative link in a scenario plugin stays relative when staged", () => {
+    const dir = join(mkdtempSync(join(tmpdir(), "local-plugin-link-")), "linked");
+    mkdirSync(join(dir, ".claude-plugin"), { recursive: true });
+    writeFileSync(join(dir, ".claude-plugin", "plugin.json"), JSON.stringify({ name: "linked", version: "1.0.0" }));
+    writeFileSync(join(dir, "target.md"), "t");
+    symlinkSync("target.md", join(dir, "alias.md"));
+    const roots = { sessionRoot: "/sessions/t", vmSessionRoot: "/sessions/t" };
+    for (const tier of ["container", "hostloop", "protocol"] as const) {
+      const { plan: p, runRoot } = plan(session(undefined, { plugins: { local_plugins: [dir] } }), undefined, tier);
+      const mnt = join(runRoot, "mnt");
+      mkdirSync(mnt, { recursive: true });
+      if (tier === "container") stageWorkspace(p, mnt, roots);
+      else if (tier === "hostloop") stageHostLoopWorkspace(p, mnt, roots);
+      else stageProtocolMounts(p, mnt);
+      const pluginMount = p.mounts.find((m) => m.hostPath === dir);
+      expect(pluginMount?.hostInputKey, tier).toBeUndefined();
+      expect(readlinkSync(join(mnt, pluginMount!.mountPath, "alias.md")), tier).toBe("target.md");
+    }
+  });
+});
+
 describe("plugins.from_host: a later leg stages the snapshot as it is too", () => {
   it("a second leg's plan, staged at container and hostloop, still hashes to the recorded sha on a git tree", () => {
     const cfg = fakeHostConfig([{ key: "a@m", files: { "tracked.md": "t" } }]);
