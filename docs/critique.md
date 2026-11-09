@@ -318,7 +318,7 @@ It does **not** record their contents — see Known limitations.
   telemetry) is consistent with WebSearch working normally — it is *not* evidence that research was
   blocked. `web_fetch` is **not** in that log on either tier: since `a459c80` (2.4.0) the container
   tier registers the same host-side workspace handler that `hostloop` does whenever
-  `coworkWebFetchViaApi` is on (every baseline from `desktop-1.13576.1`), so its fetches run in the
+  `coworkWebFetchViaApi` is on (every committed baseline), so its fetches run in the
   harness's own Node process, outside the container network namespace, and the sidecar proxy never sees
   them. Both tiers' `web_fetch` decisions land in `RunResult.egress` as bare `{host, decision}`
   records — no `ts`, no `port`, no `reason` — while every row the sidecar proxy writes carries a

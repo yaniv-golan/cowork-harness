@@ -583,7 +583,7 @@ function indexRow(root: string): void {
     slug: "s",
     runId: "local_0000000000001",
     fidelity: "container",
-    baseline: "desktop-0.0.0",
+    baseline: "desktop-999.0.0",
     result: "success",
     pass: true,
   } as RunIndexRow);

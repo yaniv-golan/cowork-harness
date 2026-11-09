@@ -14,7 +14,7 @@
 // root, so a leftover run dir is observable and the shell cannot supply a model the test did not choose.
 import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -367,6 +367,24 @@ describe.skipIf(!can)("input pre-checks: baselines, --repeat, hints and the budg
     expect(runDirsUnder(r.runs)).toEqual([]);
   });
 
+  it.each([
+    ["run", ["run", "sc/o.yaml"]],
+    ["record --dry-run", ["record", "sc/o.yaml", "--dry-run"]],
+    ["real record", ["record", "sc/o.yaml"]],
+  ])("%s: a baseline below the oldest committed one exits 2, by name and by file", (_n, argv) => {
+    const d = fixture();
+    const raw = JSON.parse(readFileSync(join(import.meta.dirname, "..", "baselines", "desktop-1.14271.0.json"), "utf8"));
+    writeFileSync(join(d, "old.json"), JSON.stringify({ ...raw, appVersion: "1.13576.1" }));
+    for (const baseline of ["desktop-1.13576.1", join(d, "old.json")]) {
+      writeFileSync(join(d, "sc", "o.yaml"), SCENARIO("o", "../ok.yaml", `baseline: ${baseline}\n`));
+      const r = cli([...argv, "--output-format", "json"], d, STUB_CREDENTIAL);
+      expect(r.all).not.toMatch(SPAWN_GUARD);
+      expect(r.code, r.all).toBe(2);
+      expect(envelope(r.stdout).error?.message).toMatch(/older than desktop-/);
+      expect(runDirsUnder(r.runs)).toEqual([]);
+    }
+  });
+
   it("real record <dir/>: every unknown name is refused with exit 2 before anything is spawned", () => {
     const d = fixture();
     writeFileSync(join(d, "sc", "a.yaml"), SCENARIO("a", "../ok.yaml"));
@@ -704,5 +722,31 @@ describe.skipIf(!can)("a missing session file is an input error on every lane", 
     const r = cli(["run", "sc/t.yaml", "--output-format", "json"], d, { ...STUB_CREDENTIAL, HOME: d });
     expect(r.all).toMatch(SPAWN_GUARD);
     expect(r.all).not.toMatch(/ENOENT|session file not found/);
+  });
+});
+
+describe.skipIf(!can)("a cassette recorded against a baseline this version no longer ships", () => {
+  const STALE = "baseline moved 1.13576.1";
+  const retiredCassette = (): string => {
+    const d = work();
+    mkdirSync(join(d, "replays"));
+    cpSync(resolve("examples/sessions"), join(d, "sessions"), { recursive: true });
+    const cassette = JSON.parse(readFileSync(resolve("examples/replays/hostloop-computer-links.cassette.json"), "utf8"));
+    cassette.scenario.baseline = "desktop-1.13576.1";
+    cassette.fingerprint.baseline = "1.13576.1";
+    writeFileSync(join(d, "replays", "x.cassette.json"), JSON.stringify(cassette));
+    return join(d, "replays");
+  };
+
+  it("replay still replays it and warns that it is stale", () => {
+    const r = cli(["replay", "x.cassette.json", "--output-format", "json"], retiredCassette());
+    expect(r.code, r.all).toBe(0);
+    expect(r.stderr).toContain(STALE);
+  });
+
+  it("verify-cassettes fails it as stale", () => {
+    const r = cli(["verify-cassettes", "x.cassette.json", "--output-format", "json"], retiredCassette());
+    expect(r.code, r.all).toBe(1);
+    expect(JSON.parse(r.stdout).results[0].staleness.join("\n")).toContain(STALE);
   });
 });

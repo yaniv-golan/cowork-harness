@@ -70,8 +70,7 @@ story:
   **Search by the skill's own path, not by the plugin's directory name.** An installed plugin's directory
   is named by its id (`.remote-plugins/plugin_<id>`), never by the plugin name, so a `find … -name
   '<plugin-name>'` matches nothing for it. A local plugin sits deeper
-  (`.local-plugins/marketplaces/<marketplace>/<plugin>/…`, or `.local-plugins/cache/<marketplace>/<plugin>/<version>/…`
-  for a marketplace plugin), so keep `-maxdepth` off, or loose enough to reach
+  (`.local-plugins/marketplaces/<marketplace>/<plugin>/…`), so keep `-maxdepth` off, or loose enough to reach
   `<plugin>/skills/<skill-name>/SKILL.md` from there. The `-path '*/skills/<skill-name>/…'` form is also
   the one `lint-skill` checks against the skill's own name (the `guard-pattern-mismatch` WARN below). If
   two plugins in one session ship a skill with the same name, match on something only yours has — a

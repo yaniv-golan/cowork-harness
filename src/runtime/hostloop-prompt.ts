@@ -32,7 +32,7 @@ export interface HostLoopShellInputs {
   sessionRoot: string;
   /** Mount root, e.g. "/sessions/<id>/mnt". */
   mntRoot: string;
-  /** Mountable work folders — for Desktop >= 1.14271.0 these are the bare collision-resolved names
+  /** Mountable work folders — the bare collision-resolved names
    *  (e.g. `project`); the bullet renders whatever `mountPath` the plan resolved. */
   folders: HostLoopFolder[];
   /** Attached-file uploads (the harness's `uploads/<base>` mounts), if any. */
@@ -77,8 +77,7 @@ export function generateHostLoopShellSection(inp: HostLoopShellInputs): string {
   const outputsBullet = `- ${inp.hostOutputsDir} → ${mntRoot}/outputs/  (your outputs directory${inp.processCwdOffOutputs ? "" : " — cwd"})`;
 
   // Per-folder bullets (asar `te`): `- <hostPath> → <mntRoot>/<name>/`. We render the folder's REAL
-  // resolved mount path. For Desktop >= 1.14271.0 that's the bare collision-resolved basename (matching
-  // real Cowork, e.g. `mnt/project`); on legacy baselines it's `mnt/.projects/<name>`. Either way the
+  // resolved mount path, the bare collision-resolved basename (matching real Cowork, e.g. `mnt/project`), so the
   // rendered path matches where files actually are, so the model's bash paths line up.
   const folderBullets = folders.map((f) => `- ${f.hostPath} → ${mntRoot}/${f.mountPath}/`);
   const te = folderBullets.length > 0 ? folderBullets.join("\n") + "\n" + outputsBullet : outputsBullet;

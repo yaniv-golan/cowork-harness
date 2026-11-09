@@ -9,7 +9,7 @@ import { loadSession, buildLaunchPlan, resolveSessionPaths } from "../src/sessio
 // migration), NOT `.remote-plugins/<basename>`. The mount leaf is a stable synthetic id derived from the
 // DECLARED source string (pre-absolutization), carried through `resolveSessionPaths` so it stays relocatable
 // across machines/checkouts; unique per distinct source.
-const baseline = loadBaseline("desktop-1.11847.5");
+const baseline = loadBaseline("desktop-1.14271.0");
 
 // Inline session (no resolveSessionPaths) — the id falls back to hashing the given string directly.
 function remoteMount(declared: string) {

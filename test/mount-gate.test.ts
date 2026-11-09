@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadBaseline, MOUNT_BARE_NAME_MIN_VERSION } from "../src/baseline.js";
+import { loadBaseline } from "../src/baseline.js";
 import { loadSession, buildLaunchPlan } from "../src/session.js";
 
 /** Build a local marketplace dir with one plugin `<name>` and return its path. */
@@ -19,11 +19,9 @@ function makeMarketplace(mktName: string, pluginName: string): string {
 }
 
 /**
- * Version-gated, tier-accurate work-folder mount naming. The bare-name scheme applies only to
- * Desktop >= 1.14271.0 (`MOUNT_BARE_NAME_MIN_VERSION`); older baselines keep `.projects/<basename>`.
+ * Tier-accurate work-folder mount naming, on the oldest supported baseline.
  */
-const gated = loadBaseline("desktop-1.14271.0"); // >= MIN → bare names
-const legacy = loadBaseline("desktop-1.11847.5"); // < MIN → .projects/<name>
+const gated = loadBaseline("desktop-1.14271.0");
 
 const folderMount = (sessionObj: unknown, baseline: ReturnType<typeof loadBaseline>, tier: any) => {
   const out = mkdtempSync(join(tmpdir(), "cwh-gate-"));
@@ -31,27 +29,22 @@ const folderMount = (sessionObj: unknown, baseline: ReturnType<typeof loadBaseli
   return plan.mounts.filter((m) => m.kind === "folder").map((m) => m.mountPath);
 };
 
-describe("work-folder mount naming — version gate", () => {
-  it("gated baseline (>=1.14271.0) mounts a folder at the BARE basename, not .projects/", () => {
+describe("work-folder mount naming", () => {
+  it("a folder mounts at the BARE basename, not .projects/", () => {
     const paths = folderMount({ folders: [{ from: "./examples/data/project" }] }, gated, "hostloop");
     expect(paths).toEqual(["project"]);
   });
-
-  it("legacy baseline (<1.14271.0) keeps the .projects/<basename> prefix", () => {
-    const paths = folderMount({ folders: [{ from: "./examples/data/project" }] }, legacy, "hostloop");
-    expect(paths).toEqual([".projects/project"]);
-  });
 });
 
-describe("tier-accurate naming (gated)", () => {
+describe("tier-accurate naming", () => {
   it("two distinct-basename folders both mount bare", () => {
     const paths = folderMount({ folders: [{ from: "./examples/data" }, { from: "./examples/skills" }] }, gated, "hostloop");
     expect(paths).toEqual(["data", "skills"]);
   });
 });
 
-describe("plugin mount paths — version gate", () => {
-  it("gated baseline: a local plugin mounts under marketplaces/local-desktop-app-uploads/<name> (no cache/)", () => {
+describe("plugin mount paths", () => {
+  it("a local plugin mounts under marketplaces/local-desktop-app-uploads/<name> (no cache/)", () => {
     const base = mkdtempSync(join(tmpdir(), "cwh-plug-"));
     const pluginDir = join(base, "my-skill");
     mkdirSync(pluginDir);
@@ -64,16 +57,7 @@ describe("plugin mount paths — version gate", () => {
     expect(plan.pluginDirs).toContain(p);
   });
 
-  it("legacy baseline: a local plugin keeps the .local-plugins/cache/<name> shape", () => {
-    const base = mkdtempSync(join(tmpdir(), "cwh-plug2-"));
-    const pluginDir = join(base, "my-skill");
-    mkdirSync(pluginDir);
-    const out = mkdtempSync(join(tmpdir(), "cwh-po2-"));
-    const plan = buildLaunchPlan(loadSession({ plugins: { local_plugins: [pluginDir] } }), legacy, out, "container");
-    expect(plan.mounts.find((m) => m.kind === "local-plugin")!.mountPath).toBe(".local-plugins/cache/my-skill");
-  });
-
-  it("gated marketplace plugin → marketplaces/<mkt>/<plugin> (no cache/, no version)", () => {
+  it("a marketplace plugin → marketplaces/<mkt>/<plugin> (no cache/, no version)", () => {
     const mk = makeMarketplace("mymkt", "withver");
     const out = mkdtempSync(join(tmpdir(), "cwh-mp-"));
     const plan = buildLaunchPlan(
@@ -86,7 +70,7 @@ describe("plugin mount paths — version gate", () => {
     expect(plan.pluginDirs.some((p) => p.includes("/cache/") || p.endsWith("/1.2.3"))).toBe(false);
   });
 
-  it("gated: same plugin name across two marketplaces → DISTINCT dests (no duplicate-dest throw)", () => {
+  it("same plugin name across two marketplaces → DISTINCT dests (no duplicate-dest throw)", () => {
     const mk1 = makeMarketplace("mkt1", "foo");
     const mk2 = makeMarketplace("mkt2", "foo");
     const out = mkdtempSync(join(tmpdir(), "cwh-mp2-"));
@@ -98,14 +82,6 @@ describe("plugin mount paths — version gate", () => {
     );
     expect(plan.pluginDirs).toContain(".local-plugins/marketplaces/mkt1/foo");
     expect(plan.pluginDirs).toContain(".local-plugins/marketplaces/mkt2/foo");
-  });
-});
-
-describe("gate constant alignment", () => {
-  it("the shipped 1.14271.0 baseline sits exactly at the gate boundary", () => {
-    // backstop: if the gate constant and the baseline we ship ever drift, bare-name mounting would apply to
-    // the wrong releases. (HOSTLOOP_DYNAMIC_PROMPT_MIN_VERSION aliases this same constant in hostloop.ts.)
-    expect(loadBaseline("desktop-1.14271.0").appVersion).toBe(MOUNT_BARE_NAME_MIN_VERSION);
   });
 });
 

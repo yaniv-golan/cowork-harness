@@ -27,7 +27,6 @@ import { SECRET_ENV_KEYS } from "./runtime/host-env.js";
 import {
   loadBaseline,
   BASELINES_DIR,
-  cmpVersionStrings,
   listBaselineNames,
   sha256File,
   countStringInBuffer,
@@ -3914,20 +3913,6 @@ async function cmdSync(args: string[]) {
     // Only after a written baseline, and only an observed organisation: an unobserved capture never resets the record.
     const recordWarning = recordCaptureOrg(LOCAL_ORG_RECORD, res.captureOrg);
     if (recordWarning) log(recordWarning);
-    // The host-loop prompt asset is hand-authored (not extracted), so a new LEGACY baseline silently
-    // lands WITHOUT it — and every host-loop record then runs with an EMPTY shell-access section. Warn loudly
-    // here, tying the missing asset to the baseline just synced (mirrors the agentBinary.stagedPath warn).
-    // Generator-era versions (>= 1.14271.0) build the section dynamically from mount state and ship NO static
-    // asset, so the warning must be version-scoped — otherwise sync nags forever for a file we don't want.
-    if (cmpVersionStrings(res.appVersion, "1.14271.0") < 0) {
-      const hostLoopAsset = join(BASELINES_DIR, "prompts", `desktop-${res.appVersion}`, "host-loop-append.md");
-      if (!existsSync(hostLoopAsset)) {
-        log(
-          `WARNING: host-loop prompt asset missing for the synced baseline: ${hostLoopAsset} — host-loop records will run with an EMPTY shell-access section. ` +
-            `Author it (carry forward baselines/prompts/desktop-1.12603.1/host-loop-append.md and verify against the desktop-${res.appVersion} asar).`,
-        );
-      }
-    }
   }
 }
 

@@ -2,10 +2,9 @@ import { warn } from "../io.js";
 import { assertSpawnCredential } from "./protocol.js";
 import { spawn } from "node:child_process";
 import { registerCleanup, removeContainer } from "../egress/sidecar.js";
-import { appendFileSync, readFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, realpathSync } from "node:fs";
 import { resolve, join } from "node:path";
 import type { SessionRoots } from "../fixture/session-tokens.js";
-import { fileURLToPath } from "node:url";
 import type { PlatformBaseline, Scenario, InfraErrorSource } from "../types.js";
 import type { LaunchPlan } from "../session.js";
 import { SCRUBBED_AGENT_ENV_KEYS, pluginSkillRootsFromPlan, mountedPluginsFromPlan, isConnectedContent } from "../session.js";
@@ -18,18 +17,10 @@ import {
   resolveAgentBinary,
   resolveHostAgentBinary,
   cmpVersionStrings,
-  MOUNT_BARE_NAME_MIN_VERSION,
   PLUGIN_PATH_VM_REWRITE_MIN_VERSION,
 } from "../baseline.js";
 import { generateHostLoopShellSection } from "./hostloop-prompt.js";
 
-/**
- * The host-loop "## Shell access" section is built dynamically from mount state (asar fn Lxr) at/above
- * this release, and read from the static `host-loop-append.md` asset below it. This is the SAME release
- * boundary as bare-name mounting (the asar switched both together), so it aliases the single shared
- * constant `MOUNT_BARE_NAME_MIN_VERSION` — keeping prompt-gating and mount-gating impossible to desync.
- */
-const HOSTLOOP_DYNAMIC_PROMPT_MIN_VERSION = MOUNT_BARE_NAME_MIN_VERSION;
 import { makeWorkspaceHandler, type McpHandler, type EgressEntry, type WebFetchProvenance } from "../hostloop/workspace-handler.js";
 import type { WebFetchDedupCache } from "../hostloop/webfetch-dedup.js";
 import { BACKGROUND_TASKS_ENV_KEY, baseAgentArgs, hostNativeSpawnEnv, dockerRunArgv, proxyEnvVars, pluginDirArgs } from "./argv.js";
@@ -50,7 +41,6 @@ import {
   resolveHostProcessCwd,
   type HostLoopFenceRoots,
 } from "../hostloop/process-cwd.js";
-import { stripComments } from "../prompt.js";
 import { resolveAgentImage, resolveContainerRuntime } from "./agent-image.js";
 
 /** Desktop passes its own `CLAUDE_CODE_TMPDIR` into the host-loop spawn when it is set (spawn-env registry, class
@@ -858,45 +848,19 @@ function hostLoopShellSection(
   hostOutputsDir: string,
   hostUploadsDir: string,
 ): string {
-  const appVersion = baseline.appVersion;
-  // Generator era (Desktop >= 1.14271.0): the section is built from live mount state, not a static
-  // file. Branch BEFORE any file read so generator-era versions never hit the missing-asset throw.
-  if (cmpVersionStrings(appVersion, HOSTLOOP_DYNAMIC_PROMPT_MIN_VERSION) >= 0) {
-    const skillsDir = join(plan.configDir, "skills");
-    const skillsPresent = existsSync(skillsDir) && readdirSync(skillsDir).length > 0;
-    return generateHostLoopShellSection({
-      sessionRoot,
-      mntRoot,
-      folders: plan.mounts.filter((m) => m.kind === "folder"),
-      uploads: plan.mounts.filter((m) => m.kind === "upload"),
-      skillsConfigDir: skillsPresent ? plan.configDir : undefined,
-      hostOutputsDir,
-      hostUploadsDir,
-      processCwdOffOutputs: hostLoopUsesSystemEmptyCwd(baseline),
-    });
-  }
-
-  // Legacy era (< 1.14271.0): read the per-version static asset and substitute {{vmMnt}}.
-  // The path must resolve to baselines/prompts/desktop-<appVersion>/host-loop-append.md.
-  const vmMnt = mntRoot;
-  const dir = fileURLToPath(new URL(`../../baselines/prompts/desktop-${appVersion}/host-loop-append.md`, import.meta.url));
-  let content: string;
-  try {
-    content = readFileSync(dir, "utf8");
-  } catch (err) {
-    // A missing host-loop prompt asset is a real fidelity gap — the shell-access section would be
-    // silently empty, making the run look green while missing key Cowork framing. By default this is fatal.
-    // Set COWORK_HARNESS_ALLOW_MISSING_PROMPT=1 to continue with an empty section (still warns).
-    if (process.env.COWORK_HARNESS_ALLOW_MISSING_PROMPT === "1") {
-      warn(
-        `::warning:: [hostloop] host-loop prompt asset not found at ${dir} (baseline desktop-${appVersion}) — host-loop shell section will be EMPTY. ` +
-          `Run \`cowork-harness sync\` to update baselines, or set COWORK_AGENT_BINARY to a matching binary. (${String(err)})\n`,
-      );
-      return "";
-    }
-    throw new Error(`cowork-harness: missing host-loop shell prompt asset: ${dir}. Set COWORK_HARNESS_ALLOW_MISSING_PROMPT=1 to skip.`);
-  }
-  return stripComments(content).split("{{vmMnt}}").join(vmMnt).trim();
+  // Built from live mount state, as the asar does (fn Lxr).
+  const skillsDir = join(plan.configDir, "skills");
+  const skillsPresent = existsSync(skillsDir) && readdirSync(skillsDir).length > 0;
+  return generateHostLoopShellSection({
+    sessionRoot,
+    mntRoot,
+    folders: plan.mounts.filter((m) => m.kind === "folder"),
+    uploads: plan.mounts.filter((m) => m.kind === "upload"),
+    skillsConfigDir: skillsPresent ? plan.configDir : undefined,
+    hostOutputsDir,
+    hostUploadsDir,
+    processCwdOffOutputs: hostLoopUsesSystemEmptyCwd(baseline),
+  });
 }
 
 /**

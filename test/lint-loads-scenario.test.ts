@@ -72,7 +72,7 @@ describe.skipIf(!can || !havePython)("lint reports what the scenario loader reje
 
   it("a `baseline:` naming no committed baseline is baseline-unknown, and the fix names real ones and `latest`", () => {
     const d = mkdtempSync(join(tmpdir(), "cwh-lint-load-"));
-    const f = scenario(d, "s.yaml", ["baseline: desktop-0.0.0", ...CLEAN.slice(1)]);
+    const f = scenario(d, "s.yaml", ["baseline: desktop-999.0.0", ...CLEAN.slice(1)]);
     const r = runCli(["lint", f, "--output-format", "json"]);
     expect(r.code).toBe(1);
     const hit = jsonFindings(r.stdout).find((x) => x.rule === "baseline-unknown");

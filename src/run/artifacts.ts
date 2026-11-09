@@ -283,8 +283,7 @@ export interface WorkspaceFile {
  * is 2 lines of stdlib `crypto`, cheap enough to duplicate rather than restructure module boundaries).
  *
  * Classification matches each path against the FULL root string (not a first-path-segment split) —
- * `userVisibleRoots`/`readonlyFolderRoots` entries can be multi-segment (e.g. `.projects/myfolder` on
- * pre-1.14271.0 baselines), mirroring the exact full-string-equality convention the pre-existing
+ * `userVisibleRoots`/`readonlyFolderRoots` entries can be multi-segment (e.g. `.projects/<uuid>`), mirroring the exact full-string-equality convention the pre-existing
  * `captureRoots` filter (`execute.ts:689`) already uses.
  */
 /** F12 default per-file hash cap for `classifyWorkspaceFiles`: above this, a file is recorded with

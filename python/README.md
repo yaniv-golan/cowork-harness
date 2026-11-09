@@ -140,7 +140,7 @@ pytest -m 'not cowork'      # the fast loop (skips this lane) — the CI default
   - `upload=` (str or list) — attach files at `mnt/uploads/`, e.g.
     `upload=str(REPO_ROOT / "examples/data/sales.csv")` for `csv-metrics` (see the worked example above)
     or a PDF for `my-pdf-skill`
-  - `folder=` (str or list) — connect folders at `mnt/<basename>` (collision-resolved; older baselines use `.projects/<id>`)
+  - `folder=` (str or list) — connect folders at `mnt/<basename>` (collision-resolved)
   - `session_id="…"` + `resume=True` — pin then resume a session (checkpoint-and-resume gated skills)
   - `decider_cmd="python decider.py"` — answer **live** (stochastic) questions via a spawned helper. The
     helper owns its own pipes, so this composes with `--output-format json` (the fixture parses the one envelope

@@ -26,7 +26,7 @@ This page describes the limitations the harness reproduces, how each tier enforc
 
 | Limitation | In Cowork | Why a skill must respect it |
 |---|---|---|
-| **Sealed filesystem** | The agent runs in a microVM; it sees only mounted folders (`mnt/uploads`, work folders at `mnt/<folder-name>` — the collision-resolved basename, at `mnt/.projects/<name>` on Desktop older than 1.14271.0; plugins under `.local-plugins/…`, `mnt/outputs`). No `~/`, no `/Users`, no arbitrary host path. | A skill that hard-codes a host path works on your laptop and fails in Cowork. |
+| **Sealed filesystem** | The agent runs in a microVM; it sees only mounted folders (`mnt/uploads`, work folders at `mnt/<folder-name>` — the collision-resolved basename; plugins under `.local-plugins/…`, `mnt/outputs`). No `~/`, no `/Users`, no arbitrary host path. | A skill that hard-codes a host path works on your laptop and fails in Cowork. |
 | **Default-deny egress** | `vm_network_mode: "gvisor"` with a compiled domain allowlist; off-list hosts are rejected. | A skill that calls an un-allowlisted API silently fails for real users. |
 | **Cross-boundary only via MCP** | The VM shell is sealed; reaching host resources/services goes through MCP servers (which Cowork runs host-side). | A skill that shells out to a host tool instead of an MCP server won't have that tool in Cowork. |
 

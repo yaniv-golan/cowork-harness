@@ -293,7 +293,7 @@ describe("the baseline's recorded outputs mode", () => {
     expect(baselineOutputsMountMode(raw("2.19675.0"))).toBe("rwd");
     expect(baselineOutputsMountMode(raw("2.16120.0"))).toBe("rwd");
     expect(baselineOutputsMountMode(raw("2.9939.4"))).toBe("rw");
-    expect(baselineOutputsMountMode(raw("1.11847.5"))).toBe("rw");
+    expect(baselineOutputsMountMode(raw("1.14271.0"))).toBe("rw");
   });
 
   it("fails closed: no outputs mount, or any mode other than exactly rwd, reads as rw", () => {

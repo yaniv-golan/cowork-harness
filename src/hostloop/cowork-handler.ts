@@ -149,7 +149,7 @@ export function makeCoworkHandler(opts: {
   sessionRootVm: string; // "/sessions/<id>"
   sessionHostDir: string; // host path bind-mounted at sessionRootVm
   outputsHostDir: string; // host path of mnt/outputs
-  /** Connected-folder mount paths (relative to mnt/, e.g. "my-src" or ".projects/my-src") — the
+  /** Connected-folder mount paths (relative to mnt/, e.g. "my-src") — the
    *  session's `folder`-kind mounts. Real Cowork accepts a presented mnt path under one of these too. */
   folderMounts?: string[];
   onPresent?: (p: PresentedFile) => void;
@@ -169,8 +169,7 @@ export function makeCoworkHandler(opts: {
     const firstSegment = rel.split("/", 1)[0];
     if (firstSegment === "" || firstSegment === "." || firstSegment === "..") return false;
     if (MOUNT_ROOT_ALLOWLIST.has(firstSegment)) return true;
-    // A connected folder mounts at mnt/<mountPath> (mountPath may itself be multi-segment, e.g.
-    // ".projects/<name>") — accept a path AT or under it.
+    // A connected folder mounts at mnt/<mountPath> — accept a path AT or under it.
     return folderMounts.some((mp) => rel === mp || rel.startsWith(`${mp}/`));
   };
 

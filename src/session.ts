@@ -8,7 +8,6 @@ import { homedir } from "node:os";
 import type { PlatformBaseline } from "./types.js";
 import { safePathSegment, safeMountSegment, resolveDeclaredSource } from "./staging/resolve.js";
 import { assignFolderMountNames, RESERVED_MOUNT_NAMES, type MountTier } from "./staging/mount-naming.js";
-import { MOUNT_BARE_NAME_MIN_VERSION, cmpVersionStrings } from "./baseline.js";
 import { containedRealPath } from "./boundary-paths.js";
 import { gitModeEnabled, gitFilterFromSet, gitStageStats, gitCpFilter } from "./run/skill-files.js";
 import { BoundaryError, UsageError, compactSchemaError } from "./errors.js";
@@ -73,7 +72,7 @@ export function strippedEnv(baseline: PlatformBaseline, from: NodeJS.ProcessEnv 
 const Folder = z.strictObject({
   from: z.string().min(1), // host path; the mount name is ALWAYS derived (collision-resolved basename of the
   // canonical path), matching real Cowork — there is no author-chosen `to:` override (it has no Cowork
-  // analog). For Desktop >= 1.14271.0 the folder mounts at `mnt/<name>`; below it at `mnt/.projects/<name>`.
+  // analog). The folder mounts at `mnt/<name>`.
   // Binary-verified default: Cowork mounts userSelectedFolders `rw` (delete DENIED until approved via
   // fileDeleteApprovedMounts; asar IX resolver). Set `rwd` explicitly to model a delete-approved folder.
   mode: z.enum(["r", "rw", "rwd"]).default("rw"),
@@ -135,7 +134,7 @@ export const SessionConfig = z.strictObject({
   // the session fingerprint for nothing. See docs/headless-no-answer.md for what it refuses and why.
   answer_channel: z.enum(["none"]).optional(),
 
-  // --- work folders (Cowork "add folder" / Spaces) -> mnt/<name> (>=1.14271.0) or mnt/.projects/<name> (legacy) ---
+  // --- work folders (Cowork "add folder" / Spaces) -> mnt/<name> ---
   folders: z.array(Folder).default([]),
   // Connected PROJECTS. Separate from `folders` because production keys them off a different config
   // field (`userSelectedProjectUuids` vs `userSelectedFolders`), mounts them at a different path, and
@@ -159,7 +158,7 @@ export const SessionConfig = z.strictObject({
       // marketplace add` registry is inert in cowork mode (SPEC §6), so there is no pre-registration step.
       local_marketplaces: z.array(z.string().min(1)).default([]),
       enabled: z.array(z.string().min(1)).default([]), // enabledPlugins (name@marketplace)
-      local_plugins: z.array(z.string().min(1)).default([]), // host plugin dirs -> mnt/.local-plugins/marketplaces/<marketplace>/<plugin> (>=1.14271.0; older baselines: mnt/.local-plugins/cache) (--plugin-dir)
+      local_plugins: z.array(z.string().min(1)).default([]), // host plugin dirs -> mnt/.local-plugins/marketplaces/<marketplace>/<plugin> (--plugin-dir)
       remote_plugins: z.array(z.string().min(1)).default([]), // host plugin dirs -> mnt/.remote-plugins
       // The operator's installed set as a recorded run input: `true` (every enabled user-scope plugin and every
       // user skill) or the named ones. See src/host-inputs.ts and docs/session.md.
@@ -705,28 +704,6 @@ export function mountedPluginsFromPlan(plan: LaunchPlan): MountedPlugin[] {
   return out;
 }
 
-/**
- * Read a plugin's declared version from its `.claude-plugin/plugin.json`.
- *
- * split missing-vs-malformed. A genuinely-absent manifest returns `null` (legitimately
- * versionless plugins fall back to the caller's default), but a PRESENT-but-corrupt manifest THROWS —
- * silently defaulting an unparseable plugin.json to "0.0.0" would mask a real authoring error and
- * stage the plugin at a wrong cache path. A present manifest with no/empty `version` is not corrupt:
- * it returns `null` (the version field is genuinely absent, same as a versionless plugin).
- */
-function readPluginVersion(pluginRoot: string): string | null {
-  const pj = join(pluginRoot, ".claude-plugin", "plugin.json");
-  if (!existsSync(pj)) return null;
-  let parsed: { version?: unknown };
-  try {
-    parsed = JSON.parse(readFileSync(pj, "utf8"));
-  } catch (e) {
-    throw new Error(`plugin manifest is not valid JSON: ${pj} (${(e as Error).message}). Fix it, or remove the plugin.`);
-  }
-  const v = parsed.version;
-  return typeof v === "string" && v ? v : null;
-}
-
 /** Synthesize a migrated-Cowork remote-plugin mount id (`plugin_<24 base62>`) from a declared source
  *  string. Deterministic (same declared value → same id) and collision-safe across distinct values.
  *  base62-encodes a sha256 of the value and takes 24 chars — matching the observed opaque shape (mixed-case
@@ -1016,11 +993,9 @@ export function resolveLaunchSources(
       throw new UsageError(`upload "${src}" is a directory; uploads model attached files. Use folders: for a directory mount.`);
     mounts.push({ hostPath: src, mountPath: `uploads/${safePathSegment(basename(src), "upload basename")}`, mode: "r", kind: "upload" });
   }
-  // Work folders. Real Cowork (Desktop >= MIN) mounts each connected folder at `mnt/<name>` where
-  // `<name>` is a collision-resolved BASENAME of the folder's CANONICAL path (no author override, no
-  // `.projects/` parent). Below MIN we keep the legacy `.projects/<basename>` shape (unverified older
-  // builds — gated, not churned). There is NO `to:` override: names are always derived (faithful).
-  const bareNames = cmpVersionStrings(baseline.appVersion, MOUNT_BARE_NAME_MIN_VERSION) >= 0;
+  // Work folders. Real Cowork mounts each connected folder at `mnt/<name>` where `<name>` is a collision-resolved
+  // BASENAME of the folder's CANONICAL path (no author override, no `.projects/` parent). There is NO `to:` override:
+  // names are always derived (faithful).
   // Canonicalize (realpath) to match real Cowork's `Os()`=canonical; fall back to the expanded path
   // when the source is missing (softMissing/deferred) so naming still works.
   const canon = (p: string) => {
@@ -1031,16 +1006,14 @@ export function resolveLaunchSources(
     }
   };
   const folderCanon = session.folders.map((f) => canon(expand(f.from)));
-  const nameByCanon = bareNames ? assignFolderMountNames(folderCanon, tier) : null;
+  const nameByCanon = assignFolderMountNames(folderCanon, tier);
   for (let i = 0; i < session.folders.length; i++) {
     const f = session.folders[i];
     const src = expand(f.from);
     // a folder models a workspace DIRECTORY; a file source would be copied as a lone file, diverging
     // from Cowork. The resolver kind-checks only when the source EXISTS — a missing source is deferred
     // to the post-loop missing-mount check (softMissing-aware).
-    const mountPath = bareNames
-      ? safePathSegment(nameByCanon!.get(folderCanon[i])!, "folder mount name")
-      : `.projects/${safePathSegment(basename(src), "folder default id (from basename)")}`;
+    const mountPath = safePathSegment(nameByCanon.get(folderCanon[i])!, "folder mount name");
     mounts.push({
       ...resolveDeclaredSource(src, mountPath, f.mode, "dir", { softMissing, deferMissing: true, what: `folder "${f.from}"` })!,
       kind: "folder",
@@ -1061,14 +1034,14 @@ export function resolveLaunchSources(
     const src = expand(p);
     // a plugin root is a DIRECTORY (mounted as a --plugin-dir); a file source would yield a
     // bogus --plugin-dir. Kind-check only when present (missing deferred to the post-loop check).
-    // Real Cowork (>= MIN) mounts ALL local-class plugins under `.local-plugins/marketplaces/<mp>/<plugin>`;
+    // Real Cowork mounts ALL local-class plugins under `.local-plugins/marketplaces/<mp>/<plugin>`;
     // a user-added local dir maps to the synthetic `local-desktop-app-uploads` marketplace. No `cache/`, no
-    // version segment. Below MIN, keep the legacy `.local-plugins/cache/<base>` shape (gated, unverified).
+    // version segment.
     // NOTE: this is the LEGACY pre-migration / install-staging channel (`local-desktop-app-uploads` is a real
     // marketplace). To exercise an UPLOADED plugin the way a migrated Cowork install serves it, use
     // `remote_plugins` (→ `.remote-plugins/plugin_<id>`) below.
     const leaf = safePathSegment(basename(src), "local_plugin basename");
-    const mountPath = bareNames ? `.local-plugins/marketplaces/local-desktop-app-uploads/${leaf}` : `.local-plugins/cache/${leaf}`;
+    const mountPath = `.local-plugins/marketplaces/local-desktop-app-uploads/${leaf}`;
     const stageFilter = existsSync(src) ? (stageFilterFor(src, `local_plugin '${leaf}'`) ?? undefined) : undefined;
     mounts.push({
       ...resolveDeclaredSource(src, mountPath, "r", "dir", { softMissing, deferMissing: true, what: `local_plugin "${p}"` })!,
@@ -1246,17 +1219,9 @@ export function resolveLaunchSources(
       // (pName may legitimately nest for a scoped name like "@scope/pkg", so nesting is allowed.)
       safeMountSegment(mktName, "marketplace name");
       safeMountSegment(pName, "plugin name");
-      // Real Cowork (>= MIN): `.local-plugins/marketplaces/<marketplaceName>/<pluginName>` (NO `cache/`, NO
-      // version segment — the `<mkt>/<plugin>` pair is the natural collision-free disambiguator). Legacy
-      // keeps the harness's synthetic 3-level `cache/<mkt>/<plugin>/<version>` shape (gated).
-      let mountPath: string;
-      if (bareNames) {
-        mountPath = `.local-plugins/marketplaces/${mktName}/${pName}`;
-      } else {
-        const version = entry.version ?? readPluginVersion(pluginSrc) ?? "0.0.0";
-        safeMountSegment(version, "plugin version");
-        mountPath = `.local-plugins/cache/${mktName}/${pName}/${version}`;
-      }
+      // Real Cowork: `.local-plugins/marketplaces/<marketplaceName>/<pluginName>` (NO `cache/`, NO version segment —
+      // the `<mkt>/<plugin>` pair is the natural collision-free disambiguator).
+      const mountPath = `.local-plugins/marketplaces/${mktName}/${pName}`;
       mounts.push({
         hostPath: pluginSrc,
         mountPath,
@@ -1339,7 +1304,7 @@ export function resolveLaunchSources(
         if (shadowed.includes(p.key)) continue;
         mounts.push({
           hostPath: p.installPath,
-          mountPath: hostPluginMountPath(p.marketplace, p.name, bareNames),
+          mountPath: hostPluginMountPath(p.marketplace, p.name),
           mode: "r",
           kind: "local-plugin",
           hostInputKey: p.key,

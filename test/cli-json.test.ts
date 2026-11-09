@@ -151,10 +151,10 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
   // message was the raw ENOENT with no list. loadBaseline now throws a UsageError naming the valid
   // baselines, so each fails as usage, exit 2. All fail before any agent spawn or Docker call.
   describe("an unknown baseline is a usage error at every entry point", () => {
-    const UNKNOWN = /no baseline named "desktop-0\.0\.0" — a baseline is `latest`/;
+    const UNKNOWN = /no baseline named "desktop-999\.0\.0" — a baseline is `latest`/;
     const scenarioIn = (cwd: string) => {
       const session = resolve("examples/sessions/protocol-smoke.yaml");
-      writeIn(cwd, "s.yaml", `name: s\nsession: ${session}\nfidelity: protocol\nbaseline: desktop-0.0.0\nprompt: hi\n`);
+      writeIn(cwd, "s.yaml", `name: s\nsession: ${session}\nfidelity: protocol\nbaseline: desktop-999.0.0\nprompt: hi\n`);
       return join(cwd, "s.yaml");
     };
     const expectUnknown = (r: ReturnType<typeof run>) => {
@@ -164,17 +164,17 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
       expect(r.json?.error?.hint).toMatch(/^valid baselines \(newest first\): desktop-\d/);
     };
 
-    it("boundary-check <unknown>", () => expectUnknown(run(["boundary-check", "desktop-0.0.0", "--output-format", "json"])));
+    it("boundary-check <unknown>", () => expectUnknown(run(["boundary-check", "desktop-999.0.0", "--output-format", "json"])));
 
     it("boundary-check <unknown> (text) prints the message, not a stack trace", () => {
-      const r = run(["boundary-check", "desktop-0.0.0"]);
+      const r = run(["boundary-check", "desktop-999.0.0"]);
       expect(r.code).toBe(2);
       expect(r.stderr).toMatch(UNKNOWN);
       expect(r.stderr).not.toMatch(/ENOENT|\n\s+at /);
     });
 
     it("diff <unknown> <baseline> carries the valid baselines as its hint", () =>
-      expectUnknown(run(["diff", "desktop-0.0.0", "desktop-2.9939.2", "--output-format", "json"])));
+      expectUnknown(run(["diff", "desktop-999.0.0", "desktop-2.9939.2", "--output-format", "json"])));
 
     it("run <scenario with an unknown baseline:>", () => {
       const cwd = mkdtempSync(join(tmpdir(), "cc-bl-"));
@@ -189,7 +189,7 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
       const r = run(["record", scenarioIn(cwd), "--out", join(cwd, "c.json"), "--output-format", "json"], {
         CLAUDE_CODE_OAUTH_TOKEN: "test-not-a-real-token",
       });
-      expect(r.json?.error?.message).toMatch(/^record: no baseline named "desktop-0\.0\.0"/);
+      expect(r.json?.error?.message).toMatch(/^record: no baseline named "desktop-999\.0\.0"/);
       expect(r.code).toBe(2);
       expect(r.json?.error?.hint).toMatch(/^valid baselines/);
       expect(existsSync(join(cwd, "c.json"))).toBe(false);
@@ -198,7 +198,7 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     it("run --matrix with an unknown baselines: axis reports the clean message on the cell", () => {
       const cwd = mkdtempSync(join(tmpdir(), "cc-bl-"));
       const s = scenarioIn(cwd);
-      writeIn(cwd, "m.yaml", "baselines: [desktop-0.0.0]\n");
+      writeIn(cwd, "m.yaml", "baselines: [desktop-999.0.0]\n");
       // A stand-in credential (never sent: the cell fails on its baseline first), past the protocol credential pre-flight.
       const r = run(["run", s, "--matrix", join(cwd, "m.yaml"), "--output-format", "json"], {
         CLAUDE_CODE_OAUTH_TOKEN: "stub-not-a-real-token",
@@ -223,9 +223,9 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
     });
 
     it.skipIf(process.platform !== "darwin")(`vm ${sub} <unknown baseline> (text) → usage message listing baselines, exit 2`, () => {
-      const r = run(["vm", sub, "desktop-0.0.0"]);
+      const r = run(["vm", sub, "desktop-999.0.0"]);
       expect(r.code).toBe(2);
-      expect(r.stderr).toMatch(/no baseline named "desktop-0\.0\.0"/);
+      expect(r.stderr).toMatch(/no baseline named "desktop-999\.0\.0"/);
       expect(r.stderr).toMatch(/desktop-\d/);
       expect(r.stderr).not.toMatch(/ENOENT|\n\s+at /);
     });

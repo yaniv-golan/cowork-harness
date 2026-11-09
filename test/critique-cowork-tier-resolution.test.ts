@@ -135,7 +135,7 @@ describe("the PRODUCTION resolver (not a test double)", () => {
   // never worked. These exercise the real one.
 
   it("resolves against the pinned baselines actually committed here", () => {
-    // Every committed baseline from desktop-1.12603.1 onward carries hostLoop gate "on(force)", and none
+    // Every committed baseline carries hostLoop gate "on(force)", and none
     // sets requireFullVmSandbox — so the real gate read yields hostloop. Asserted as a MEMBERSHIP check
     // plus the gate-derived expectation: if a future sync flips the gate off, this should start failing
     // loudly rather than silently describing a stale world.

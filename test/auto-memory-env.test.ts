@@ -16,7 +16,7 @@ import type { PlatformBaseline } from "../src/types.js";
 
 const KEY = "CLAUDE_CODE_DISABLE_AUTO_MEMORY";
 const OFF = loadBaseline("desktop-2.19675.0"); // recorded gate row: {on:false, source:"defaultValue"}
-const OLD = loadBaseline("desktop-1.12603.1"); // predates the gate pin: no row at all
+const OLD = loadBaseline("desktop-1.14271.0"); // predates the gate pin: no row at all
 
 function withGate(base: PlatformBaseline, on: boolean): PlatformBaseline {
   const p = (base as unknown as { provenance: { gates: Record<string, unknown> } }).provenance;
@@ -33,7 +33,7 @@ const ON = withGate(OFF, true);
 const cases: Array<[string, PlatformBaseline, string | undefined]> = [
   ["gate off (desktop-2.19675.0)", OFF, "1"],
   ["gate on", ON, undefined],
-  ["old baseline with no gate row (desktop-1.12603.1)", OLD, "1"],
+  ["old baseline with no gate row (desktop-1.14271.0)", OLD, "1"],
 ];
 
 // The protocol plan MUST carry `baseEnv` — it is what buildProtocolEnv builds from; without it an
@@ -109,7 +109,7 @@ describe("autoMemoryEnv", () => {
   });
   // Every committed baseline, not a sample: 41 record the gate off and 9 predate it (no row). A future sync that
   // legitimately records the gate ON turns this red — next to sync's WARNING note, that is the point.
-  it("every committed baseline resolves to disabled: 42 rows off, 9 with no row", () => {
+  it("every committed baseline resolves to disabled: 43 rows off, 6 with no row", () => {
     const dir = join(import.meta.dirname, "..", "baselines");
     let off = 0;
     let noRow = 0;
@@ -119,7 +119,7 @@ describe("autoMemoryEnv", () => {
       if (readGateBool(b, AUTO_MEMORY_GATE) === false) off++;
       else noRow++;
     }
-    expect({ off, noRow }).toEqual({ off: 43, noRow: 9 });
+    expect({ off, noRow }).toEqual({ off: 43, noRow: 6 });
   });
 });
 

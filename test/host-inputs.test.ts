@@ -216,17 +216,8 @@ describe("plugins.from_host: launch plan", () => {
     expect(p.mounts.filter((m) => m.hostInputKey)).toEqual([]);
   });
 
-  it("below the bare-names baseline a host plugin mounts at the legacy cache/ leaf", () => {
-    vi.stubEnv("CLAUDE_CONFIG_DIR", fakeHostConfig([{ key: "a@m" }]));
-    const legacy = loadBaseline("desktop-1.13576.1");
-    const runRoot = mkdtempSync(join(tmpdir(), "fh-legacy-"));
-    const s = session(true);
-    const sources = resolveLaunchSources(s, legacy, "container", false, { quiet: true, runRoot });
-    vi.spyOn(process.stderr, "write").mockReturnValue(true);
-    const p = buildLaunchPlan(s, legacy, runRoot, "container", false, "local", sources, { runRoot });
-    vi.restoreAllMocks();
-    expect(p.mounts.filter((m) => m.hostInputKey).map((m) => m.mountPath)).toEqual([".local-plugins/cache/m/a"]);
-    expect(hostPluginMountPath("m", "a", true)).toBe(".local-plugins/marketplaces/m/a");
+  it("a host plugin mounts under marketplaces/<marketplace>/<name>", () => {
+    expect(hostPluginMountPath("m", "a")).toBe(".local-plugins/marketplaces/m/a");
   });
 
   it("is refused with a pinned config_dir, and on --resume", () => {

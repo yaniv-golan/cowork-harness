@@ -360,7 +360,7 @@ silently misreading it, and `stats --reindex` counts it as skipped instead of dr
 index. `trace` still reads it fine, which is why every refusal points there: its views come from
 `events.jsonl`, which never moves.
 
-**Convert it in place with the last 4.x release.** 5.0 no longer ships the converter:
+**Convert it in place with the 4.x release, which carries the converter:**
 
 ```bash
 npx cowork-harness@4 migrate-run-dir              # DRY RUN by default — reports, changes nothing

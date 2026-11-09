@@ -303,14 +303,14 @@ debug:
                                   # YAML that still sets it fails to load with a targeted removal hint)
 
 # work folders / uploads  → mnt/<folder-name>, mnt/uploads/<basename>
-#   (mount name = collision-resolved folder basename; ≥1.14271.0, older baselines use mnt/.projects/<id>)
+#   (mount name = collision-resolved folder basename)
 folders:
   - { from: ~/code/myproject, mode: rw }   # mounted at mnt/myproject; mode: r | rw | rwd
 uploads:
   - ~/Downloads/report.pdf
 
 # connected PROJECTS (userSelectedProjectUuids) — NOT the same as a work folder above, and not the
-#   legacy mnt/.projects/<id> work-folder path older baselines used
+#   mnt/.projects/<uuid>
 projects:
   - { uuid: 7f3c…, from: ~/code/myproject }   # mounted READ-ONLY at mnt/.projects/<uuid>
                                               #   no mode: knob — production hardcodes ro
@@ -322,8 +322,7 @@ plugins:
   local_marketplaces: []         # local marketplace dirs (each has a marketplace.json)
   enabled: [my-skill@local]      # enabledPlugins (name@marketplace)
   local_plugins: [./skills/my-skill]   # host plugin dirs → mnt/.local-plugins/marketplaces/local-desktop-app-uploads/<plugin>
-                                       #   (the marketplace segment is that fixed synthetic name; ≥1.14271.0 —
-                                       #   older baselines use mnt/.local-plugins/cache)
+                                       #   (the marketplace segment is that fixed synthetic name)
   remote_plugins: []             # → mnt/.remote-plugins/plugin_<id> — how Cowork serves a UI-installed plugin
   from_host: true                # or {plugins: [name@mkt], skills: [name]}: copy YOUR installed set (user scope) into
                                  #   the run, snapshotted + hashed (RunResult.hostInputs); the scenario's own wins a name.
