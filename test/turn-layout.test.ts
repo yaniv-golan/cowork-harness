@@ -177,6 +177,15 @@ describe("classifyRunDir: the ONLY place the legacy/mixed shape is still named, 
     expect(classifyRunDir(dir).kind).toBe("mixed");
   });
 
+  it.each([
+    ["legacy", { kind: "legacy", markers: ["events.jsonl"] }],
+    ["mixed", { kind: "mixed", turns: [1], markers: ["events.jsonl"] }],
+  ] as const)("preLayoutMessage: a %s dir is pointed at the last release that can convert it", (_label, shape) => {
+    expect(preLayoutMessage(shape as unknown as Parameters<typeof preLayoutMessage>[0], "/d")).toContain(
+      "npx cowork-harness@4 migrate-run-dir",
+    );
+  });
+
   it('preLayoutMessage names the shape and the markers found, not just "missing"', () => {
     put("result.json");
     const shape = classifyRunDir(dir);

@@ -727,13 +727,17 @@ describe.skipIf(!can)("a missing session file is an input error on every lane", 
 
 describe.skipIf(!can)("a cassette recorded against a baseline this version no longer ships", () => {
   const STALE = "baseline moved 1.13576.1";
-  const retiredCassette = (): string => {
+  const retiredCassette = (cowork = false): string => {
     const d = work();
     mkdirSync(join(d, "replays"));
     cpSync(resolve("examples/sessions"), join(d, "sessions"), { recursive: true });
     const cassette = JSON.parse(readFileSync(resolve("examples/replays/hostloop-computer-links.cassette.json"), "utf8"));
     cassette.scenario.baseline = "desktop-1.13576.1";
     cassette.fingerprint.baseline = "1.13576.1";
+    if (cowork) {
+      cassette.scenario.fidelity = "cowork";
+      cassette.effectiveFidelity = "hostloop";
+    }
     writeFileSync(join(d, "replays", "x.cassette.json"), JSON.stringify(cassette));
     return join(d, "replays");
   };
@@ -748,5 +752,11 @@ describe.skipIf(!can)("a cassette recorded against a baseline this version no lo
     const r = cli(["verify-cassettes", "x.cassette.json", "--output-format", "json"], retiredCassette());
     expect(r.code, r.all).toBe(1);
     expect(JSON.parse(r.stdout).results[0].staleness.join("\n")).toContain(STALE);
+  });
+
+  it("verify-cassettes says a cowork cassette's pin is below the oldest baseline, which a merely old pin is not", () => {
+    const r = cli(["verify-cassettes", "x.cassette.json", "--output-format", "json"], retiredCassette(true));
+    expect(r.code, r.all).toBe(1);
+    expect(JSON.parse(r.stdout).results[0].unverifiable.join("\n")).toContain("older than desktop-");
   });
 });

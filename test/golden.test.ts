@@ -27,7 +27,7 @@ function plan(over: Partial<LaunchPlan> = {}): LaunchPlan {
     permissionParity: "cowork",
     baseEnv: {},
     mounts: [],
-    pluginDirs: [".local-plugins/cache/my-skill"],
+    pluginDirs: [".local-plugins/marketplaces/local-desktop-app-uploads/my-skill"],
     egressAllow: ["api.anthropic.com"],
     ...over,
   };
@@ -108,7 +108,7 @@ describe("golden — container (VM-loop)", () => {
   it("SPEC §9 argv invariants", () => {
     const docker = dockerRunArgv(dockerInput(args));
     expect(docker[docker.indexOf("-w") + 1]).toBe(sessionRoot); // cwd = session root, not mnt
-    expect(args[args.indexOf("--plugin-dir") + 1]).toBe(`${mntRoot}/.local-plugins/cache/my-skill`);
+    expect(args[args.indexOf("--plugin-dir") + 1]).toBe(`${mntRoot}/.local-plugins/marketplaces/local-desktop-app-uploads/my-skill`);
     expect(args.indexOf("--tools")).toBeGreaterThan(args.indexOf("--effort")); // variadic flags last
     expect(lastFlag(args)).toMatch(/--tools|--allowedTools/);
   });

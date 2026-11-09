@@ -24,7 +24,7 @@ const files = readdirSync(BASELINES)
   .sort();
 
 const SESSION = "sess-1";
-const PLUGIN_REL = ".local-plugins/cache/skill-under-test";
+const PLUGIN_REL = ".local-plugins/marketplaces/local-desktop-app-uploads/skill-under-test";
 
 const planWith = (): LaunchPlan =>
   ({

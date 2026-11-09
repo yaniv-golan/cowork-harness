@@ -946,7 +946,7 @@ function belowFloorName(name: string): UnknownBaselineError | undefined {
   if (version === undefined || floor === undefined || cmpVersionStrings(version, versionOfBaselineName(floor)) >= 0) return undefined;
   return new UnknownBaselineError(
     name,
-    `no baseline named "${name}": it is older than ${floor}, the oldest baseline this version supports — re-record against ${floor} or newer`,
+    `no baseline named "${name}": it is older than ${floor}, the oldest baseline this version supports — use ${floor} or newer`,
     validBaselinesHint(names),
   );
 }
@@ -959,7 +959,7 @@ function refuseBelowFloor(baseline: PlatformBaseline, file: string): PlatformBas
   if (floor !== undefined && cmpVersionStrings(baseline.appVersion, versionOfBaselineName(floor)) < 0)
     throw new UnknownBaselineError(
       file,
-      `baseline file at "${file}" is for Desktop ${baseline.appVersion}, older than ${floor}, the oldest baseline this version supports — use ${floor} or newer`,
+      `baseline file at "${file}" is for Desktop ${baseline.appVersion || "(no version)"}, older than ${floor}, the oldest baseline this version supports — use ${floor} or newer`,
       validBaselinesHint(names),
     );
   return baseline;

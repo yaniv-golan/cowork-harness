@@ -6186,7 +6186,7 @@ export async function cmdRecord(args: string[]) {
   // used to change a broken file's exit code) is gone. `preflightBudget` never throws; it `fail()`s.
   // The same model check executeScenario makes, made here so the refusal comes before the recording's own
   // pre-flight warnings and matches `record --dry-run` exactly. Exit 1, the record split's pre-spend code.
-  // First, as `--dry-run` and a directory order it: a baseline name that resolves nowhere exits 2 on every form.
+  // Ahead of the model check, as `--dry-run` and a directory order it: a baseline name that resolves nowhere exits 2.
   const unknownName = unknownBaselineRefusal(scenario!);
   if (unknownName) return fail("record", "usage", `record: ${unknownName.message}`, unknownName.hint, asJson);
   const noModel = unresolvedModelPreflight(scenario!, modelOverride);

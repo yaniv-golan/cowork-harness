@@ -67,7 +67,7 @@ describe("checkBaselineStaleness", () => {
 
   it("a corrupt FIRST baseline cannot mask a stale LATER baseline", () => {
     // Iteration order = argument order. Corrupt file first, genuinely stale file second.
-    const corrupt = baseline("desktop-999.0.0.json", "garbage");
+    const corrupt = baseline("desktop-0.0.0.json", "garbage");
     const stale = baseline("desktop-1.0.0.json", daysAgo(200));
     const r = checkBaselineStaleness([corrupt, stale], { now: NOW });
     expect(r.ok).toBe(false);

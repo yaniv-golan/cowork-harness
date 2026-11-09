@@ -1149,6 +1149,14 @@ async function main() {
       return cmdRunsGc(rest); // top-level: no `gc` token to strip, so pass `rest` whole (NOT rest.slice(1))
     default: {
       const jsonOut = isJsonOutput(argv);
+      if (cmd === "migrate-run-dir")
+        fail(
+          "cowork-harness",
+          "usage",
+          "migrate-run-dir was removed in 5.0: convert a pre-layout run dir with `npx cowork-harness@4 migrate-run-dir`",
+          undefined,
+          jsonOut,
+        );
       if (!jsonOut) printHelp(); // full help is stderr-only human context; skip it for a clean json envelope
       fail("cowork-harness", "usage", `unknown command: ${cmd}`, undefined, jsonOut);
     }

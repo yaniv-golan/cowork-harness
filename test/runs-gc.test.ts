@@ -190,6 +190,7 @@ describe.skipIf(!can)("prune refuses to rank a scenario with a migration in flig
     expect(existsSync(kept), "prune deleted a run while a migration was in flight").toBe(true);
     expect(existsSync(crashed), "prune deleted the half-migrated dir, orphaning its journal").toBe(true);
     expect(`${r.stdout}${r.stderr}`, "prune said nothing about skipping the scenario").toMatch(/migrat/i);
+    expect(`${r.stdout}${r.stderr}`, "the remedy is not one a 5.0 user can run").toContain("npx cowork-harness@4 migrate-run-dir");
   });
 
   it("prunes normally once the journal is gone", () => {

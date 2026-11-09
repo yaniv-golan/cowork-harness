@@ -43,6 +43,15 @@ describe("a baseline older than the oldest committed one", () => {
     expect(e.message).toContain(`older than ${floor}`);
   });
 
+  it.each(["not-a-version", ""])("a file whose appVersion is %j does not parse as new enough, and is refused", (appVersion) => {
+    const file = join(mkdtempSync(join(tmpdir(), "cwh-bad-version-baseline-")), "custom.json");
+    const raw = JSON.parse(readFileSync(join(import.meta.dirname, "..", "baselines", `${floor}.json`), "utf8"));
+    writeFileSync(file, JSON.stringify({ ...raw, appVersion }));
+    const e = refusalOf(file);
+    expect(e.message).toContain(`older than ${floor}`);
+    expect(e.message).not.toContain("Desktop ,");
+  });
+
   it("the oldest baseline itself loads, by name and as a file", () => {
     expect(loadBaseline(floor).appVersion).toBe(floor.replace("desktop-", ""));
     const file = join(mkdtempSync(join(tmpdir(), "cwh-floor-baseline-")), "custom.json");
