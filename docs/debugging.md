@@ -20,6 +20,7 @@ Docker, no re-record.
 |---|---|---|
 | **The skill misbehaved** | wrong output, an unexpected gate, a denied tool, an opaque crash | `inspect` — what did it produce? · `trace <run-dir> --view <view>` — what did it actually do (tools; gates are the questions view, as there is no gates view; the sub-agent tree is the dispatches view)? · `verify-run` — re-assert cheaply when only an assertion is wrong · `diff <old-run> <new-run>` — what changed since it worked · `chat` — reproduce it by hand |
 | **A green you don't trust** | an assert that may have tested nothing, a stale cassette, an auto-answered or decided gate | `replay --explain` — the evidence trail behind each *passing* assert · `replay --mutate` — perturbs a CAPPED SAMPLE of recorded JSON values (10/file, 50 total) and reports which perturbations NOTHING caught; the report names the sample size, so read it as a sample not a total (reporting only; never moves the verdict/exit code) · `lint` — assertions on the wrong CI lane / mixed-class keys · `verify-cassettes` — privacy + staleness over committed cassettes · the Gotchas landmine catalog — how a check passes vacuously · `run --repeat N` / `skill --repeat N` — did it pass, or pass once? · `stats` — flaky or expensive over time |
+| **A judge or grader call failed** | an assert reads `judge call FAILED (API 401, …)`, or `eval` stops at its credential check; often a stale key, such as an old one in `.env` | `cowork-harness doctor` — which credential the graders and the agent each use · the graders get `CLAUDE_CODE_OAUTH_TOKEN` alone when it is set, so a stale token fails even with a good API key · `COWORK_HARNESS_GRADER_AUTH=inherit` passes every key |
 
 A failed run also records `errorSource` (where the failure originated) and `stderrLogPath` (the captured
 agent stderr) — read those before re-running (`answer_channel_violation` means a run under `answer_channel: none`
@@ -231,6 +232,22 @@ the reason to read the *record* rather than the answer. (`critique` is built on 
   [stats.md](./stats.md).
 
 ---
+
+## Reading a run's assertions by hand
+
+Each turn writes `<run>/turns/<n>/result.json`. Its top-level `assertions[]` has one entry per check:
+`assertion` (the item as written in `assert:`), `pass` (a boolean), and, where the check has them, `message` and
+`evidence`. `source` is set on an entry the harness added itself rather than one you wrote.
+
+This prints each failed check and its message. It says so when the result has no assertions at all, which a bare
+empty output would hide:
+
+```bash
+jq -r 'if (.assertions // []) == [] then "no assertions recorded" else (.assertions[] | select(.pass == false) | (.assertion | tojson) + "\t" + (.message // "")) end' <run>/turns/1/result.json
+```
+
+No output means at least one assertion ran and none failed. It does not mean the run passed: read `.verdict` for that,
+since a guard can fail a run whose assertions all hold.
 
 ## Iterating a skill across fixes — the verification loop
 

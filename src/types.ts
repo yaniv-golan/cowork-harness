@@ -2562,6 +2562,14 @@ export interface ToolCallRecord {
   input: Record<string, { text: string; truncated?: boolean }>;
   origin: "main" | "subagent" | "unknown";
   parentToolUseId?: string;
+  /** The agent received a deny answer to this call's permission request (`isDeliveredDeny`). Absent otherwise. */
+  denied?: boolean;
+}
+
+/** A `decisions[]` row whose deny answer to a permission request reached the agent: an explicit deny, the fail-closed
+ *  deny of an unanswered ask, or the deny a mismatched decider response becomes. Never an `undelivered` row. */
+export function isDeliveredDeny(d: { kind: string; decision: string }): boolean {
+  return d.kind === "tool" && (d.decision === "deny" || d.decision === "abstain→deny" || d.decision === "mismatch→deny");
 }
 
 export interface RunResult {
@@ -2660,6 +2668,8 @@ export interface RunResult {
     // request_id (UUID) of a question gate — lets `trace --view questions` pair a decision to its event row by id
     // instead of positionally (retried/duplicated gate events would shift a positional pairing). Optional.
     requestId?: string;
+    /** The `tool_use` a permission decision answered, when the request named one. */
+    toolUseId?: string;
     /** The LLM decider's model on a `by: "llm"` decision: a question gate, or a permission it answered. */
     model?: string;
     /** The LLM decider's effort on a `by: "llm"` decision (a question gate, or a permission it answered): the `--effort`

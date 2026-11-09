@@ -2,7 +2,7 @@ import { scrubForTerminal, tildeify, writeAllSync } from "../io.js";
 import { ANSWER_CHANNEL_NONE_LABEL } from "../answer-channel.js";
 import type { AgentEvent } from "../agent/session.js";
 import type { RunHooks } from "./run.js";
-import type { RunResult } from "../types.js";
+import { isDeliveredDeny, type RunResult } from "../types.js";
 import { computeVerdict, type GuardReport, type GuardStatus, type VerdictSignal } from "./verdict.js";
 import { formatGateProvenanceLine } from "./gate-provenance.js";
 import { formatProvenanceLine } from "./provenance.js";
@@ -301,7 +301,8 @@ export function renderFooter(
         (r.searchCorpus.metrics.unattributed ? ` · ${r.searchCorpus.metrics.unattributed} unattributed` : "") +
         "]"
       : "");
-  const meta = `[${r.fidelity}]${channel} · ${sum.tools} tools${sum.subagents ? ` · ${sum.subagents} sub-agents` : ""}${dur}${cost}`;
+  const denied = (r.decisions ?? []).filter(isDeliveredDeny).length;
+  const meta = `[${r.fidelity}]${channel} · ${sum.tools} tools${sum.subagents ? ` · ${sum.subagents} sub-agents` : ""}${denied ? ` · denied: ${denied}` : ""}${dur}${cost}`;
   // Iterate-across-fixes discoverability hook: fires on exploratory (skill-lane, `scaffoldTip`) runs that
   // are non-deterministic — the exact signature of a `--decider-llm --intent` loop run — in BOTH the pass
   // AND fail branches (a failing/partial run is arguably the more useful moment to harvest). Points at the

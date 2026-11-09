@@ -118,6 +118,7 @@ import {
   type RunRecord,
   unionReferenceAccesses,
   capToolCallInput,
+  decisionRows,
 } from "./run.js";
 import {
   parseMessage,
@@ -10051,18 +10052,7 @@ export async function replayCassette(
       finalMessage: rec.resultText, // the SDK result text, re-derived from the frozen result event
       stderrLogPath: undefined, // live path only — no live process on replay
       stalledOnQuestion: rec.stalledOnQuestion, // re-derived by run.ts's detector during the replay re-drive — so a recorded stall fails replay too
-      decisions: rec.decisions.map((d) => ({
-        kind: d.kind,
-        name: d.name,
-        decision: d.decision,
-        by: d.by,
-        requestId: d.requestId,
-        model: d.model,
-        ...(d.effort !== undefined ? { effort: d.effort } : {}),
-        detail: d.detail,
-        rationale: d.rationale,
-        questions: d.questions,
-      })),
+      decisions: decisionRows(rec.decisions),
       toolCounts: rec.toolCounts,
       webSearches: rec.webSearches.length ? rec.webSearches : undefined,
       infraErrors: infraErrorsForResult(rec),

@@ -5084,6 +5084,9 @@
       ".decisions[].requestId": {
         "type": "string"
       },
+      ".decisions[].toolUseId": {
+        "type": "string"
+      },
       ".deviceBridge": {
         "type": "object",
         "closed": true
@@ -6497,6 +6500,9 @@
       },
       ".toolCalls[]": {
         "type": "object"
+      },
+      ".toolCalls[].denied": {
+        "type": "boolean"
       },
       ".toolCalls[].input": {
         "type": "object",
