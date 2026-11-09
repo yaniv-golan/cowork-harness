@@ -312,7 +312,7 @@ tagging `1.0.0`, deliberately review and freeze the surfaces with no machine-rea
       - `COWORK_LIVE_PROTOCOL_RESUME=1` is the opt-in; `COWORK_LIVE_REQUIRE=1` alone fails the prerequisites check
         rather than spending. The token lookup is the auto-memory step's.
       - **It must print `Tests  2 passed (2)`**: `--resume` recalls a codeword told only to turn 1, and
-        `agent_max_turns: 1` ends the agent with its own `error_max_turns` at `num_turns` 1, which `allow_max_turns`
+        `agent_max_turns: 1` ends the agent with its own `error_max_turns` after one model request and one tool call, which `allow_max_turns`
         counts as completed.
 - [ ] **Live gate: nothing in the live suite skips silently.** A live test that cannot find its prerequisites
       (a token, `dist/cli.js`, host `claude`, Docker) skips instead of failing, so count what will run before running

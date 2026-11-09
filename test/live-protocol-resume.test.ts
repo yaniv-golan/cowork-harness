@@ -86,7 +86,7 @@ describe.runIf(CAN || REQUIRE)("protocol --resume conversation continuity (bille
 });
 
 describe.runIf(CAN || REQUIRE)("protocol agent_max_turns stops the agent at the cap (billed, opt-in)", () => {
-  it("agent_max_turns: 1 ⇒ the agent's result is error_max_turns with num_turns == 1, and allow_max_turns completes it", () => {
+  it("agent_max_turns: 1 ⇒ the agent stops with error_max_turns after one model request and one tool call, and allow_max_turns completes it", () => {
     expect(CAN, "prerequisites missing under COWORK_LIVE_REQUIRE=1").toBe(true);
     const dir = mkdtempSync(join(tmpdir(), "cwh-pcap-"));
     const runsDir = mkdtempSync(join(tmpdir(), "cwh-pcap-runs-"));
@@ -108,7 +108,15 @@ describe.runIf(CAN || REQUIRE)("protocol agent_max_turns stops the agent at the 
       const res = JSON.parse(r.stdout || "{}").results?.[0] ?? {};
       // The agent's own outcome, from its result frame: the cap stopped it, at the cap.
       expect(res.resultSubtype, r.stderr).toBe("error_max_turns");
-      expect(res.usage?.turns).toBe(1);
+      // The cap held: one model request and one tool call, so the second `echo` never ran. The agent's `num_turns`
+      // is not pinned: 2.1.319 reports 2 for this same run.
+      const frames = readFileSync(join(res.outDir, "events.jsonl"), "utf8")
+        .split("\n")
+        .filter(Boolean)
+        .map((l) => JSON.parse(l));
+      const assistant = frames.filter((f) => f.type === "assistant");
+      expect(new Set(assistant.map((f) => f.message.id)).size).toBe(1);
+      expect(assistant.flatMap((f) => f.message.content).filter((c) => c.type === "tool_use")).toHaveLength(1);
       expect(res.turnCap).toEqual({ maxTurns: 1, source: "session" });
       expect(res.result).toBe("error");
       expect(res.verdict?.pass, JSON.stringify(res.verdict?.signals)).toBe(true);
