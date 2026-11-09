@@ -3,21 +3,20 @@
 exports[`buildLaunchPlan > SPEC §7 buildLaunchPlan output snapshot (mounts/pluginDirs/egressAllow, volatile paths normalized) 1`] = `
 {
   "egressAllow": [
+    "sentry.io",
+    "preview.claude.ai",
+    "downloads.claude.ai",
     "api.anthropic.com",
-    "a-api.anthropic.com",
     "a-cdn.anthropic.com",
-    "api-staging.anthropic.com",
+    "a-api.anthropic.com",
     "console.anthropic.com",
+    "api-staging.anthropic.com",
+    "www.anthropic.com",
     "docs.anthropic.com",
     "mcp-proxy.anthropic.com",
+    "pivot.claude.ai",
     "support.anthropic.com",
     "assets.claude.ai",
-    "downloads.claude.ai",
-    "pivot.claude.ai",
-    "preview.claude.ai",
-    "sentry.io",
-    "statsig.anthropic.com",
-    "statsigapi.net",
     "api.github.com",
   ],
   "model": undefined,
@@ -28,16 +27,16 @@ exports[`buildLaunchPlan > SPEC §7 buildLaunchPlan output snapshot (mounts/plug
     },
     {
       "mode": "rw",
-      "mountPath": ".projects/project",
+      "mountPath": "project",
     },
     {
       "mode": "r",
-      "mountPath": ".local-plugins/cache/my-pdf-skill",
+      "mountPath": ".local-plugins/marketplaces/local-desktop-app-uploads/my-pdf-skill",
     },
   ],
   "permissionParity": "cowork",
   "pluginDirs": [
-    ".local-plugins/cache/my-pdf-skill",
+    ".local-plugins/marketplaces/local-desktop-app-uploads/my-pdf-skill",
   ],
 }
 `;

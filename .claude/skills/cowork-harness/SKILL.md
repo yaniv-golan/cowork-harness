@@ -105,7 +105,7 @@ CI-grade scenario, and the post-hoc debug loop; the rest are narrower tools that
 > `node_modules/cowork-harness/docs/<name>.md` before assuming a pointer dangles. A **plugin**
 > install loads a trimmed source-only cache where those pointers genuinely do dangle.
 
-Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · prune · migrate-run-dir · lint ·
+Full command set: `skill · run · chat · record · replay · verify-cassettes · rehash · prune · lint ·
 lint-skill · analyze-skill · probe-dispatch ·
 verify-run · regrade · fixture · search-pool <build|export|import> · ref <freeze|verify> · trace · inspect · diff · critique · eval · eval report · hillclimb <run|check|state-template|freeze-ref|regrade|seed> · stats · decide · gates · answer · scaffold · assertions --list · sync ·
 list · boundary-check · status · vm <init|status|delete|prune> · doctor · init-redact`. Always check `cowork-harness <cmd> --help`.

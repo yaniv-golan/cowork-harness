@@ -26,6 +26,10 @@ import { existsSync, readFileSync, readdirSync, mkdirSync, lstatSync } from "nod
 import { join } from "node:path";
 import { LegacyRunDirError, MultiLegRunDirError } from "../errors.js";
 
+/** Where a 4.x `migrate-run-dir` keeps its crash journals, under the runs root. `prune` must recognise it: a journal in
+ *  flight means a conversion was interrupted, and that scenario's dirs are not safe to delete. */
+export const MIGRATION_JOURNAL_DIR = ".migrating";
+
 /** The four artifacts written once per turn. Anything else in a run dir is cumulative or session state. */
 export const PER_TURN_ARTIFACTS = ["result.json", "run.jsonl", "trace.json", "resources.jsonl"] as const;
 export type PerTurnArtifact = (typeof PER_TURN_ARTIFACTS)[number];
@@ -333,14 +337,14 @@ export function preLayoutMessage(shape: RunDirShape, outDir: string, command = "
     return (
       `${outDir} is a pre-layout run dir (written before the turns/<N>/ layout): ${shape.markers.join(", ")} ` +
       `found at the run-dir root, no turns/ directory. \`trace ${outDir}\` still works (its views derive ` +
-      `from events.jsonl, which never moves). Convert it in place: \`cowork-harness migrate-run-dir\`.`
+      `from events.jsonl, which never moves). Convert it in place: \`npx cowork-harness@4 migrate-run-dir\`.`
     );
   if (shape.kind === "mixed")
     return (
       `${outDir} is a MIXED run dir: turns/ (${shape.turns.join(", ")}) AND pre-layout markers at the root ` +
       `(${shape.markers.join(", ")}) — almost certainly a pre-layout dir that was resumed under current code, ` +
       `which leaves its earliest turn unaddressable. \`trace ${outDir}\` still works. Convert it in place: ` +
-      `\`cowork-harness migrate-run-dir\`.`
+      `\`npx cowork-harness@4 migrate-run-dir\`.`
     );
   if (shape.kind === "none")
     return (

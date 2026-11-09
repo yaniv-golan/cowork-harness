@@ -11,7 +11,7 @@ meta: identical
 `;
 
 exports[`golden — E7 changelog rendering (full output) > renderChangelog over the frozen fixture pair 1`] = `
-"- Desktop version bumped: \`1.0.0-fixture-a\` → \`1.0.0-fixture-b\`
+"- Desktop version bumped: \`99.0.0-fixture-a\` → \`99.0.0-fixture-b\`
 - staged agent bumped: \`1.0.0\` → \`2.0.0\`
 - egress allowlist: added \`b.example.com\`
 - egress allowlist: removed \`a.example.com\`

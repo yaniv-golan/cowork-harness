@@ -10,10 +10,9 @@ import { verifyStagedHostInputs } from "../host-inputs.js";
 import { stageWorkspaceFixture } from "../fixture/workspace.js";
 import type { SessionRoots } from "../fixture/session-tokens.js";
 
-/** Subdirs the writable session tree always pre-creates under mnt (idempotent). `.local-plugins` (not
- *  `.local-plugins/cache`) so both the gated `marketplaces/<mp>/<plugin>` and legacy `cache/<x>` plugin
- *  layouts nest under it; per-mount parents are created on demand in stageWorkspace. `.projects` stays for
- *  the legacy folder layout (an empty hidden dir is harmless under the gated bare-name layout). */
+/** Subdirs the writable session tree always pre-creates under mnt (idempotent). `.local-plugins` so the
+ *  `marketplaces/<mp>/<plugin>` layout nests under it; per-mount parents are created on demand in stageWorkspace.
+ *  `.projects` holds connected projects (`.projects/<uuid>`). */
 const BARE_DIRS = ["uploads", "outputs", ".projects", ".local-plugins", ".remote-plugins", ".claude"];
 
 export interface StageResult {

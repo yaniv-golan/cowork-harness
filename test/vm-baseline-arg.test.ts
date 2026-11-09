@@ -1,12 +1,64 @@
 import { describe, it, expect } from "vitest";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { resolveVmBaselineArg, type VmBaselineArgDeps } from "../src/runtime/vm-baseline-arg.js";
 import { loadBaseline, listBaselineNames } from "../src/baseline.js";
-import { UnknownBaselineError, UsageError } from "../src/errors.js";
+import { BaselineFileError, UnknownBaselineError, UsageError } from "../src/errors.js";
 import type { PlatformBaseline } from "../src/types.js";
 
 // Platform-independent half of the fix. The CLI tests in cli-json.test.ts cover each entry point
 // end to end; the `vm` ones are darwin-only (cmdVm refuses other platforms before parsing), so this is
 // what Linux CI exercises for `vm`, plus loadBaseline's own contract that every entry point relies on.
+
+describe("a baseline older than the oldest committed one", () => {
+  const floor = listBaselineNames().at(-1)!;
+  const refusalOf = (name: string): UnknownBaselineError => {
+    let caught: unknown;
+    try {
+      loadBaseline(name);
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeInstanceOf(UnknownBaselineError);
+    expect(caught).not.toBeInstanceOf(BaselineFileError); // the class `record` answers with exit 1
+    return caught as UnknownBaselineError;
+  };
+
+  it.each(["desktop-1.11847.5", "desktop-1.12603.1", "desktop-1.13576.1", "desktop-1.13000.0", "desktop-1.13576.1.json"])(
+    "%s is refused, naming the oldest baseline",
+    (name) => {
+      const e = refusalOf(name);
+      expect(e.message).toContain(`older than ${floor}`);
+      expect(e.hint).toBe(`valid baselines (newest first): ${listBaselineNames().join(", ")}`);
+    },
+  );
+
+  it("a file for an older Desktop is refused by its appVersion, naming the oldest baseline", () => {
+    const file = join(mkdtempSync(join(tmpdir(), "cwh-old-baseline-")), "custom.json");
+    const raw = JSON.parse(readFileSync(join(import.meta.dirname, "..", "baselines", `${floor}.json`), "utf8"));
+    writeFileSync(file, JSON.stringify({ ...raw, appVersion: "1.13576.1" }));
+    const e = refusalOf(file);
+    expect(e.message).toContain("1.13576.1");
+    expect(e.message).toContain(`older than ${floor}`);
+  });
+
+  it.each(["not-a-version", ""])("a file whose appVersion is %j does not parse as new enough, and is refused", (appVersion) => {
+    const file = join(mkdtempSync(join(tmpdir(), "cwh-bad-version-baseline-")), "custom.json");
+    const raw = JSON.parse(readFileSync(join(import.meta.dirname, "..", "baselines", `${floor}.json`), "utf8"));
+    writeFileSync(file, JSON.stringify({ ...raw, appVersion }));
+    const e = refusalOf(file);
+    expect(e.message).toContain(`older than ${floor}`);
+    expect(e.message).not.toContain("Desktop ,");
+  });
+
+  it("the oldest baseline itself loads, by name and as a file", () => {
+    expect(loadBaseline(floor).appVersion).toBe(floor.replace("desktop-", ""));
+    const file = join(mkdtempSync(join(tmpdir(), "cwh-floor-baseline-")), "custom.json");
+    writeFileSync(file, readFileSync(join(import.meta.dirname, "..", "baselines", `${floor}.json`)));
+    expect(loadBaseline(file).appVersion).toBe(floor.replace("desktop-", ""));
+  });
+});
 
 describe("loadBaseline: a user-supplied name that names no baseline", () => {
   it("throws UnknownBaselineError (a UsageError) listing the committed baselines, not ENOENT", () => {
@@ -14,15 +66,15 @@ describe("loadBaseline: a user-supplied name that names no baseline", () => {
     expect(names.length).toBeGreaterThan(0);
     let caught: unknown;
     try {
-      loadBaseline("desktop-0.0.0");
+      loadBaseline("desktop-999.0.0");
     } catch (e) {
       caught = e;
     }
     expect(caught).toBeInstanceOf(UnknownBaselineError);
     expect(caught).toBeInstanceOf(UsageError); // what main().catch maps to category usage, exit 2
     const e = caught as UnknownBaselineError;
-    expect(e.baselineName).toBe("desktop-0.0.0");
-    expect(e.message).toMatch(/^no baseline named "desktop-0\.0\.0" — a baseline is `latest`/);
+    expect(e.baselineName).toBe("desktop-999.0.0");
+    expect(e.message).toMatch(/^no baseline named "desktop-999\.0\.0" — a baseline is `latest`/);
     expect(e.message).not.toMatch(/ENOENT/);
     expect(e.hint).toBe(`valid baselines (newest first): ${names.join(", ")}`);
   });
@@ -118,10 +170,10 @@ describe("resolveVmBaselineArg", () => {
 
   it("with the real baselines: an unknown name lists the committed baselines newest first", () => {
     const names = listBaselineNames();
-    const r = resolveVmBaselineArg("delete", "desktop-0.0.0");
+    const r = resolveVmBaselineArg("delete", "desktop-999.0.0");
     expect(r.ok).toBe(false);
     if (!r.ok) {
-      expect(r.message).toMatch(/^vm delete: no baseline named "desktop-0\.0\.0"/);
+      expect(r.message).toMatch(/^vm delete: no baseline named "desktop-999\.0\.0"/);
       expect(r.hint).toContain(`valid baselines (newest first): ${names[0]}`);
     }
   });

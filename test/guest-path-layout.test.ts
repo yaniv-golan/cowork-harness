@@ -24,7 +24,7 @@ const files = readdirSync(BASELINES)
   .sort();
 
 const SESSION = "sess-1";
-const PLUGIN_REL = ".local-plugins/cache/skill-under-test";
+const PLUGIN_REL = ".local-plugins/marketplaces/local-desktop-app-uploads/skill-under-test";
 
 const planWith = (): LaunchPlan =>
   ({
@@ -102,14 +102,24 @@ describe("every shipped baseline emits guest paths inside the staged tree", () =
   }
 });
 
+const divergent = (): PlatformBaseline => {
+  const b = JSON.parse(JSON.stringify(loadBaseline("desktop-1.19367.0"))) as PlatformBaseline;
+  // Exactly the legacy shape, on a baseline that can spawn: session root already ends in the mnt
+  // segment, and the recorded mnt root claims to be that same dir.
+  b.mountLayout.sessionRoot = "/sessions/{sessionId}/mnt";
+  b.mountLayout.cwd = "/sessions/{sessionId}/mnt";
+  b.mountLayout.mntRoot = "/sessions/{sessionId}/mnt";
+  return b;
+};
+
 describe("the divergence tripwire fires on exactly the un-stageable recording", () => {
-  it("the legacy baseline is the one shipped baseline it flags", () => {
+  it("no shipped baseline is flagged", () => {
     const flagged = files.filter((f) => recordedLayoutDivergence(JSON.parse(readFileSync(join(BASELINES, f), "utf8")) as PlatformBaseline));
-    expect(flagged).toEqual(["desktop-1.11847.5.json"]);
+    expect(flagged).toEqual([]);
   });
 
   it("its recorded mnt root really is one level above what would be staged", () => {
-    const b = loadBaseline("desktop-1.11847.5");
+    const b = divergent();
     const d = recordedLayoutDivergence(b)!;
     expect(d.staged).toBe(`${d.recorded}/${GUEST_MNT_SEGMENT}`);
     // And resolveMounts now reports the STAGED tree, not the recorded one.
@@ -117,20 +127,9 @@ describe("the divergence tripwire fires on exactly the un-stageable recording", 
   });
 });
 
-// The shipped table above cannot exercise the defect on real data: the ONE baseline with a divergent
-// recorded layout has no `spawn` block, so it is refused before any guest path is built. This synthetic
-// pair is the case that would have caught the original bug — a divergent recording that IS spawnable.
+// The shipped table above cannot exercise the defect on real data: no committed baseline has a divergent recorded
+// layout. This synthetic case is the one that would have caught the original bug — a divergent recording that IS spawnable.
 describe("a spawnable baseline with an un-stageable recorded layout still emits staged paths", () => {
-  const divergent = (): PlatformBaseline => {
-    const b = JSON.parse(JSON.stringify(loadBaseline("desktop-1.19367.0"))) as PlatformBaseline;
-    // Exactly the legacy shape, on a baseline that can spawn: session root already ends in the mnt
-    // segment, and the recorded mnt root claims to be that same dir.
-    b.mountLayout.sessionRoot = "/sessions/{sessionId}/mnt";
-    b.mountLayout.cwd = "/sessions/{sessionId}/mnt";
-    b.mountLayout.mntRoot = "/sessions/{sessionId}/mnt";
-    return b;
-  };
-
   it("--plugin-dir lands on the staged tree, not on the recorded mnt root", () => {
     const b = divergent();
     const m = resolveMounts(b, SESSION);

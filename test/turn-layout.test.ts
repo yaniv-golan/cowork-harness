@@ -177,6 +177,15 @@ describe("classifyRunDir: the ONLY place the legacy/mixed shape is still named, 
     expect(classifyRunDir(dir).kind).toBe("mixed");
   });
 
+  it.each([
+    ["legacy", { kind: "legacy", markers: ["events.jsonl"] }],
+    ["mixed", { kind: "mixed", turns: [1], markers: ["events.jsonl"] }],
+  ] as const)("preLayoutMessage: a %s dir is pointed at the last release that can convert it", (_label, shape) => {
+    expect(preLayoutMessage(shape as unknown as Parameters<typeof preLayoutMessage>[0], "/d")).toContain(
+      "npx cowork-harness@4 migrate-run-dir",
+    );
+  });
+
   it('preLayoutMessage names the shape and the markers found, not just "missing"', () => {
     put("result.json");
     const shape = classifyRunDir(dir);
@@ -203,7 +212,7 @@ describe("classifyRunDir: the ONLY place the legacy/mixed shape is still named, 
   it("mixed: a root RETRY archive is a marker too — the migrator moves it, so a reader must not read the dir as clean", () => {
     // contaminationMarkers and the migrator's ARCHIVE_RE must agree on what a pre-layout marker is. A root
     // `run.turn-1.retry-2.jsonl` is one the migrator plans to move; if the classifier misses it, diff/verify
-    // read the dir as clean current-layout instead of refusing and pointing at migrate-run-dir.
+    // read the dir as clean current-layout instead of refusing and pointing at the 4.x migrate-run-dir.
     put("turns/1/run.jsonl");
     put("run.turn-1.retry-2.jsonl");
     const shape = classifyRunDir(dir);

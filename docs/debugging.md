@@ -45,7 +45,7 @@ and how to relocate it. The tools below digest them so you rarely hand-parse.
 > A run dir with root `result.json`/`run.jsonl` (or a name-mangled `result.turn-<N>.json` archive) and
 > no `turns/` predates this layout — the tools refuse it by name; see
 > [Old run dirs (pre-`turns/` layout)](#old-run-dirs-pre-turns-layout) at the end of this page for
-> `migrate-run-dir`.
+> how to convert one.
 
 **Why paths look different at different fidelity tiers** (see
 [boundary.md's tier table](./boundary.md#how-each-tier-enforces-the-boundary) for what each tier
@@ -360,26 +360,18 @@ silently misreading it, and `stats --reindex` counts it as skipped instead of dr
 index. `trace` still reads it fine, which is why every refusal points there: its views come from
 `events.jsonl`, which never moves.
 
-**Convert it in place:**
+**Convert it in place with the 4.x release, which carries the converter:**
 
 ```bash
-cowork-harness migrate-run-dir              # DRY RUN by default — reports, changes nothing
-cowork-harness migrate-run-dir --write      # apply
-cowork-harness migrate-run-dir --scenario <name> --write   # one scenario at a time
+npx cowork-harness@4 migrate-run-dir              # DRY RUN by default — reports, changes nothing
+npx cowork-harness@4 migrate-run-dir --write      # apply
+npx cowork-harness@4 migrate-run-dir --scenario <name> --write   # one scenario at a time
 ```
 
 It renames rather than copies, so the file timestamps `stats` and `status --latest-for` rank by survive
 untouched. Back up the runs root first, read the dry-run report, and rebuild the index afterwards with
-`stats --reindex`. Staging one scenario, checking it, then doing the rest is the safer order.
-
-**What it refuses vs. infers.** A directory it cannot resolve is **refused and named** — an artifact
-that is neither a duplicate of its slot nor placeable, a turn stamp that disagrees with its destination,
-two operations targeting one path, telemetry whose turn boundary cannot be dated or whose samples would
-land in a turn no transcript or result evidences, a directory it cannot read. It never attributes
-telemetry by guess, and it never creates a `turns/<N>/` that nothing but a resources file vouches for.
-The one inference it does make is positional: an **empty** file carries no content to attribute, so it
-follows its position to an **evidenced** turn (a root file to its own turn, an archive to the turn its
-name states) — never one that nothing else evidences.
+`stats --reindex`. Anything it cannot resolve is refused and named, not guessed at. While a conversion is
+interrupted, `prune` skips that scenario until the same command finishes it.
 
 ---
 

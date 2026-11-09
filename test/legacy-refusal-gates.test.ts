@@ -110,7 +110,7 @@ describe.skipIf(!can)("stats --reindex reports what it could not index", () => {
     });
     const all = `${r.stdout}${r.stderr}`;
     expect(all, "a skipped pre-layout run was never mentioned").toMatch(/skipped|unmigrated|pre-layout|legacy/i);
-    expect(all, "the remedy was not named").toMatch(/migrate-run-dir/);
+    expect(all, "the remedy was not one a 5.0 user can run").toContain("npx cowork-harness@4 migrate-run-dir");
     rmSync(root, { recursive: true, force: true });
   });
 });

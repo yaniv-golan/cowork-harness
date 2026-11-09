@@ -14,7 +14,7 @@ import { resolve, join } from "node:path";
 // multi-line document, and JSON.parse rejects anything after the first value.
 //
 // Deliberately absent: `gates <dir> --follow` is a JSONL stream, not a single document (its error paths
-// are covered in gates-json-contract.test.ts); `chat` / `migrate-run-dir` / `prune` / `sync` do not accept
+// are covered in gates-json-contract.test.ts); `chat` / `prune` / `sync` do not accept
 // --output-format.
 const CLI = resolve("dist/cli.js");
 const can = existsSync(CLI);

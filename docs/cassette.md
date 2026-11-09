@@ -141,7 +141,7 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
   "controlOut": [ /* JSON lines from control-out.jsonl (driver→child control_responses) */ ],
   "effectiveFidelity": "container",       // the tier the live record actually resolved to (e.g. a `fidelity: cowork` scenario resolving to hostloop/container)
-  "userVisibleRoots": ["outputs", "myproject"], // visible roots = outputs + each connected folder's mount name (its basename; `.projects` is the pre-1.14271.0 legacy fallback)
+  "userVisibleRoots": ["outputs", "myproject"], // visible roots = outputs + each connected folder's mount name (its basename)
   "preRunPaths": ["outputs/existing.json"], // pre-run path baseline for `no_unexpected_files` (workRoot-relative)
   "preRunHashes": { "outputs/existing.json": "…", "myproject/readonly-in.xlsx": null }, // pre-run per-path sha256 baseline for `input_unmodified`; `null` = body secret-scrubbed (evidence-unavailable, never a false "modified"); an UNTOUCHED file whose body the redaction policy rewrote carries the redacted body's sha instead, so `input_unmodified` still passes and `authored: true` still reads it as pre-run
   "preRunOrigin": "local-walk", // provenance of the pre-run baseline (local-walk / remote-unavailable / local-unreadable); `local-unreadable` makes no_unexpected_files/input_unmodified fail evidence-unavailable on replay instead of diffing an incomplete baseline

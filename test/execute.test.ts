@@ -173,7 +173,7 @@ describe("execute — file-relative path resolution", () => {
 // container.ts/hostloop.ts now delegate to with the explicit opts value.
 describe("execute — no process.env mutation for egress proxy/network", () => {
   it("spawnEnv uses the explicit proxyHost arg (not process.env) so proxy is concurrency-safe", () => {
-    const baseline = loadBaseline("desktop-1.12603.1");
+    const baseline = loadBaseline("desktop-1.14271.0");
     const configGuest = "/sessions/TEST/mnt/.claude";
     const explicitProxy = "http://cowork-proxy-testrun-abc:8080";
 
@@ -218,7 +218,7 @@ describe("execute — no process.env mutation for egress proxy/network", () => {
 // (CLAUDE_CODE_ACCOUNT_UUID/_USER_EMAIL/_ORGANIZATION_UUID) and OTEL_* vars require live Desktop
 // state the harness never has, and must stay absent — a drift toward fabricating them should fail loud.
 describe("execute — host-identity env vars (spawnEnv / hostNativeSpawnEnv)", () => {
-  const baseline = loadBaseline("desktop-1.12603.1");
+  const baseline = loadBaseline("desktop-1.14271.0");
   const NOT_EMITTED = [
     "CLAUDE_CODE_ACCOUNT_UUID",
     "CLAUDE_CODE_USER_EMAIL",
@@ -1070,7 +1070,7 @@ describe("executeScenario refuses a contradictory scenario before doing any work
     name: "wired",
     prompt: "hi",
     fidelity: "container",
-    baseline: "desktop-0.0.0-does-not-exist",
+    baseline: "desktop-999.0.0-does-not-exist",
     assert: [{ questions_count_max: 0 }, { gate_answer_count_min: 1 }],
   } as unknown as Parameters<typeof executeScenario>[0];
 

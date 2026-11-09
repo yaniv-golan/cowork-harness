@@ -213,7 +213,7 @@ class Result:
                     return p
         raise FileNotFoundError(
             f"no turns/<N>/run.jsonl under {self.out_dir} — this run dir predates the turns/<N>/ layout "
-            "(or never completed a turn); convert it in place with `cowork-harness migrate-run-dir`"
+            "(or never completed a turn); convert it in place with `npx cowork-harness@4 migrate-run-dir`"
         )
 
     def _transcript(self) -> str:
@@ -305,7 +305,7 @@ class Skill:
         fidelity: str = "container",
         on_unanswered: str = "fail",
         upload=None,        # str or list → --upload (attach files at mnt/uploads)
-        folder=None,        # str or list → --folder (connect folders at mnt/<basename>; collision-resolved; older baselines use .projects/<id>)
+        folder=None,        # str or list → --folder (connect folders at mnt/<basename>; collision-resolved)
         session_id: Optional[str] = None,   # pin a stable session (for resume)
         resume: bool = False,               # continue a prior session_id (gated/checkpoint skills)
         decider_cmd: Optional[str] = None,  # answer LIVE questions via a spawned helper (stochastic gates)

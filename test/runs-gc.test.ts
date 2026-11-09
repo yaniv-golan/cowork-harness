@@ -190,6 +190,7 @@ describe.skipIf(!can)("prune refuses to rank a scenario with a migration in flig
     expect(existsSync(kept), "prune deleted a run while a migration was in flight").toBe(true);
     expect(existsSync(crashed), "prune deleted the half-migrated dir, orphaning its journal").toBe(true);
     expect(`${r.stdout}${r.stderr}`, "prune said nothing about skipping the scenario").toMatch(/migrat/i);
+    expect(`${r.stdout}${r.stderr}`, "the remedy is not one a 5.0 user can run").toContain("npx cowork-harness@4 migrate-run-dir");
   });
 
   it("prunes normally once the journal is gone", () => {
@@ -205,7 +206,7 @@ describe.skipIf(!can)("prune does not demote an unmigrated legacy run to junk", 
   it("keeps a pre-layout run ahead of an empty scaffold for a keep slot", () => {
     // `isRealRun` moved from "has result.json OR events.jsonl" to "hasTurnDirs OR events.jsonl". That
     // reasons about CURRENT writers — but prune's population is history, including exactly the pre-layout
-    // dirs `migrate-run-dir` exists to preserve. A legacy dir without events.jsonl silently dropped into
+    // dirs a 4.x `migrate-run-dir` can still convert. A legacy dir without events.jsonl silently dropped into
     // the junk tier and was deleted ahead of an empty scaffold. Silent deletion of real history is the
     // failure this file's own journal guard calls the most expensive outcome in the feature.
     const root = mkdtempSync(join(tmpdir(), "prune-legacy-"));
@@ -583,7 +584,7 @@ function indexRow(root: string): void {
     slug: "s",
     runId: "local_0000000000001",
     fidelity: "container",
-    baseline: "desktop-0.0.0",
+    baseline: "desktop-999.0.0",
     result: "success",
     pass: true,
   } as RunIndexRow);

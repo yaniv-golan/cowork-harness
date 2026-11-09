@@ -238,7 +238,7 @@ describe.skipIf(!RUN_HOST_E2E)("resuming a PRE-LAYOUT dir does not destroy the p
   // ON THIS BRANCH the contract is different and STRONGER: the resume is REFUSED outright, before any
   // spawn and before `beginTurn` runs, so the relocation is unreachable here by construction. What must
   // be proven is therefore not "turn 1 survives relocation" but "the dir is not touched AT ALL" —
-  // refusing is what makes the pre-layout population safe until `migrate-run-dir` converts it.
+  // refusing is what makes the pre-layout population safe until a 4.x `migrate-run-dir` converts it.
   function deShapeToLegacy(outDir: string): void {
     for (const a of ["result.json", "run.jsonl", "trace.json", "resources.jsonl"]) {
       const from = join(outDir, "turns", "1", a);

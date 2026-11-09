@@ -118,7 +118,7 @@ describe("compareBaselineVersions (semver-aware baseline sort)", () => {
 
 describe("loadBaseline — name resolution", () => {
   it("resolves a bare .json filename under baselines/ (same as the no-suffix form), regardless of cwd", () => {
-    expect(loadBaseline("desktop-1.12603.1.json")).toEqual(loadBaseline("desktop-1.12603.1"));
+    expect(loadBaseline("desktop-1.14271.0.json")).toEqual(loadBaseline("desktop-1.14271.0"));
   });
 
   // a named (non-absolute) baseline must stay inside baselines/. Path separators escape the
@@ -139,7 +139,7 @@ describe("loadBaseline — name resolution", () => {
   it("still allows an ABSOLUTE custom baseline path (explicit out-of-tree escape hatch)", () => {
     const dir = mkdtempSync(join(tmpdir(), "cwh-baseline-abs-"));
     const file = join(dir, "custom.json");
-    const ref = loadBaseline("desktop-1.12603.1");
+    const ref = loadBaseline("desktop-1.14271.0");
     writeFileSync(file, JSON.stringify(ref));
     expect(loadBaseline(file)).toEqual(ref); // absolute path loads despite being out of tree
   });
@@ -1497,7 +1497,7 @@ describe("committed baselines carry agent-binary provenance", () => {
     );
   });
   it("an absent-version baseline carries an official-manifest sha256 (staging-identity unverified, no match field)", () => {
-    const ab = loadBaseline("desktop-1.13576.1").agentBinary;
+    const ab = loadBaseline("desktop-1.14271.0").agentBinary;
     expect(ab.sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(ab.shaProvenance).toBe("official-manifest");
     expect(ab.manifestChecksumMatch).toBeUndefined();

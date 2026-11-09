@@ -66,7 +66,7 @@ Given a session + baseline, returns:
 | field | value |
 |---|---|
 | `configDir` | managed host dir (or `session.plugins.config_dir`); contains `settings.json`, `cowork_settings.json`, `skills/` |
-| `mounts[]` | `{hostPath, mountPath, mode}`, `mountPath` **relative to mnt**: `uploads/<f>`, `<collision-resolved-basename>` (work folders), `.local-plugins/marketplaces/<marketplace>/<plugin>` (marketplace-resolved), `.local-plugins/cache/<name>` (direct `local_plugins`), `.remote-plugins/plugin_<id>` (uploaded / org-remote; `id` is a stable hash of the DECLARED source, not a basename — two entries sharing a basename would collide). (≥1.14271.0; older baselines mount work folders at `.projects/<id>`, which is now a reserved name.) |
+| `mounts[]` | `{hostPath, mountPath, mode}`, `mountPath` **relative to mnt**: `uploads/<f>`, `<collision-resolved-basename>` (work folders), `.local-plugins/marketplaces/<marketplace>/<plugin>` (marketplace-resolved), `.local-plugins/marketplaces/local-desktop-app-uploads/<name>` (direct `local_plugins`), `.remote-plugins/plugin_<id>` (uploaded / org-remote; `id` is a stable hash of the DECLARED source, not a basename — two entries sharing a basename would collide). (`.projects` is a reserved name.) |
 | `pluginDirs[]` | mnt-relative plugin roots → `--plugin-dir` (incl. marketplace-resolved plugins) |
 | `model/effort/extendedThinking/permissionMode/permissionParity` | from session |
 | `egressAllow[]` | `baseline.network.allowDomains` + `session.egress.extra_allow` (or `["*"]` if unrestricted) |
@@ -310,8 +310,7 @@ server-side (`/v1/sessions`), but the agent's *behavior* depends only on (a) the
 the expected path and (b) the session being resumable. The harness models both **locally**:
 
 - **Files** — `session.uploads` / `--upload <file>` → `mnt/uploads/<name>`; `session.folders` /
-  `--folder <dir>` → `mnt/<collision-resolved-basename>` (the `register_repo_root` analog; ≥1.14271.0,
-  older baselines `.projects/<id>`). Behaviorally faithful: the agent `Read`s the file at the same path
+  `--folder <dir>` → `mnt/<collision-resolved-basename>` (the `register_repo_root` analog). Behaviorally faithful: the agent `Read`s the file at the same path
   it would in Desktop.
 - **Persistence** — `--session-id <id>` derives a stable cwd (`/sessions/sess-<id>`) + run dir and pins
   the agent's native session UUID (persisted in `<outDir>/session.json`). The agent writes its session to

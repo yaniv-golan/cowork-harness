@@ -127,6 +127,20 @@ describe.skipIf(!built)("exit matrix: each subcommand exits by itself with its d
     endedByItself(r);
   });
 
+  it("the removed migrate-run-dir exits 2 and names the release that still has it", () => {
+    const remedy = "npx cowork-harness@4 migrate-run-dir";
+    const text = cli(["migrate-run-dir"], cwd);
+    expect(text.code).toBe(2);
+    expect(text.stderr).toContain("removed in 5.0");
+    expect(text.stderr).toContain(remedy);
+    const json = cli(["migrate-run-dir", "--output-format", "json"], cwd);
+    expect(json.code).toBe(2);
+    const env = JSON.parse(json.stdout);
+    expect(env.ok).toBe(false);
+    expect(env.error.category).toBe("usage");
+    expect(env.error.message).toContain(remedy);
+  });
+
   it("a could-not-verify analysis exits 3 (boundary)", () => {
     const d = mkdtempSync(join(tmpdir(), "exit-matrix-art-"));
     try {

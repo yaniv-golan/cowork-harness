@@ -212,8 +212,8 @@ describe("agent-version note — per tier", () => {
   });
 
   it("hostloop: SILENT against a baseline that pins no native binary", () => {
-    expect(loadBaseline("desktop-1.11847.5").agentBinary?.nativeStagedPath).toBeUndefined();
-    expect(computeAgentVersionNote(withAgent(committed(HOSTLOOP), "0.0.0-mutated", "desktop-1.11847.5"))).toEqual([]);
+    expect(loadBaseline("desktop-1.14271.0").agentBinary?.nativeStagedPath).toBeUndefined();
+    expect(computeAgentVersionNote(withAgent(committed(HOSTLOOP), "0.0.0-mutated", "desktop-1.14271.0"))).toEqual([]);
   });
 
   it("container: compared with agentVersion as before", () => {

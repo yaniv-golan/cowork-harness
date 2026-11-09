@@ -20,7 +20,7 @@ import { agentArgs } from "../src/runtime/argv.js";
 import { Scenario } from "../src/types.js";
 import { BoundaryError } from "../src/errors.js";
 
-const baseline = loadBaseline("desktop-1.11847.5");
+const baseline = loadBaseline("desktop-1.14271.0");
 
 function plan(sessionObj: unknown) {
   const out = mkdtempSync(join(tmpdir(), "cowork-test-"));
@@ -30,9 +30,9 @@ function plan(sessionObj: unknown) {
 
 describe("mount / path safety", () => {
   it("a folder whose derived name is an unsafe segment is rejected", () => {
-    // `to:` was removed (no Cowork analog) — names are always derived from the basename. A `from` whose
-    // basename is unsafe (e.g. "..") must still be rejected by safePathSegment on the derived name.
-    expect(() => plan({ folders: [{ from: "./examples/data/project/.." }] })).toThrow(/unsafe folder/);
+    // `to:` was removed (no Cowork analog) — names are always derived from the canonical basename. The filesystem root
+    // has none, so safePathSegment must reject the empty name.
+    expect(() => plan({ folders: [{ from: "/" }] })).toThrow(/unsafe folder/);
   });
   it("duplicate mount destinations fail before staging", () => {
     expect(() => plan({ uploads: ["./examples/data/report.pdf", "./examples/data/report.pdf"] })).toThrow(/duplicate mount destination/);
@@ -47,8 +47,7 @@ describe("mount / path safety", () => {
       const { plan: p } = plan({ uploads: ["./does/not/exist.pdf"], folders: [{ from: "./examples/data/project" }] });
       const paths = p.mounts.map((m) => m.mountPath);
       expect(paths).not.toContain("uploads/exist.pdf"); // missing source excluded
-      // legacy baseline (1.11847.5) → derived `.projects/<basename>`; `to:` removed
-      expect(paths).toContain(".projects/project"); // present source kept
+      expect(paths).toContain("project"); // present source kept
     } finally {
       if (prev === undefined) delete process.env.COWORK_HARNESS_SOFT_MISSING;
       else process.env.COWORK_HARNESS_SOFT_MISSING = prev;
@@ -86,9 +85,8 @@ describe("mount / path safety", () => {
 });
 
 describe("session-id / resume argv (persistence — leverages the agent's native --resume)", () => {
-  // A SPAWNABLE baseline: these assert argv the sandbox tiers emit, and `baseAgentArgs` refuses a
-  // baseline with no `spawn` block (its toolset/pre-approvals/config-dir would all be empty). The
-  // module-level legacy baseline above is exactly that case, so it cannot stand in here.
+  // A baseline with a `spawn` block: these assert argv the sandbox tiers emit, and `baseAgentArgs` refuses a
+  // baseline without one (its toolset/pre-approvals/config-dir would all be empty).
   const spawnable = loadBaseline("desktop-1.19367.0");
   const M = { mntRoot: "/sessions/x/mnt" };
   it("emits NO session flag by default (goldens unchanged)", () => {
@@ -160,12 +158,11 @@ describe("buildLaunchPlan", () => {
     });
     const paths = p.mounts.map((m) => m.mountPath);
     expect(paths).toContain("uploads/report.pdf");
-    // legacy baseline (1.11847.5) → derived `.projects/<basename>` (no `to:`)
-    expect(paths).toContain(".projects/project");
-    expect(paths.some((x) => x.startsWith(".local-plugins/cache/"))).toBe(true);
+    expect(paths).toContain("project");
+    expect(paths.some((x) => x.startsWith(".local-plugins/marketplaces/"))).toBe(true);
   });
 
-  it("resolves marketplace plugins to the three-level cache path `<marketplace>/<plugin>/<version>`", () => {
+  it("resolves marketplace plugins to `marketplaces/<marketplace>/<plugin>`, with no version segment", () => {
     const mk = mkdtempSync(join(tmpdir(), "cowork-mkt-"));
     mkdirSync(join(mk, ".claude-plugin"), { recursive: true });
     mkdirSync(join(mk, "withver", ".claude-plugin"), { recursive: true });
@@ -183,8 +180,8 @@ describe("buildLaunchPlan", () => {
     writeFileSync(join(mk, "withver", ".claude-plugin", "plugin.json"), JSON.stringify({ name: "withver", version: "1.2.3" }));
     writeFileSync(join(mk, "nover", ".claude-plugin", "plugin.json"), JSON.stringify({ name: "nover" })); // no version → 0.0.0
     const { plan: p } = plan({ plugins: { local_marketplaces: [mk], enabled: ["withver@mymkt", "nover@mymkt"] } });
-    expect(p.pluginDirs).toContain(".local-plugins/cache/mymkt/withver/1.2.3");
-    expect(p.pluginDirs).toContain(".local-plugins/cache/mymkt/nover/0.0.0"); // version fallback
+    expect(p.pluginDirs).toContain(".local-plugins/marketplaces/mymkt/withver");
+    expect(p.pluginDirs).toContain(".local-plugins/marketplaces/mymkt/nover");
   });
 
   it("splits `enabled` on the LAST @ so an embedded @ in the plugin name survives", () => {
@@ -197,7 +194,7 @@ describe("buildLaunchPlan", () => {
     );
     writeFileSync(join(mk, "st", ".claude-plugin", "plugin.json"), JSON.stringify({ name: "scope@thing", version: "2.0.0" }));
     const { plan: p } = plan({ plugins: { local_marketplaces: [mk], enabled: ["scope@thing@mymkt"] } });
-    expect(p.pluginDirs).toContain(".local-plugins/cache/mymkt/scope@thing/2.0.0");
+    expect(p.pluginDirs).toContain(".local-plugins/marketplaces/mymkt/scope@thing");
   });
 
   it("dedupes a BARE enabled name defined in multiple marketplaces to a single mount", () => {
@@ -213,7 +210,7 @@ describe("buildLaunchPlan", () => {
       return mk;
     };
     const { plan: p } = plan({ plugins: { local_marketplaces: [mkOne("mktA"), mkOne("mktB")], enabled: ["dup"] } });
-    const dupMounts = p.pluginDirs.filter((d) => d.includes("/dup/"));
+    const dupMounts = p.pluginDirs.filter((d) => d.endsWith("/dup"));
     expect(dupMounts).toHaveLength(1); // bare name mounts once, not once-per-marketplace
   });
 
@@ -342,7 +339,7 @@ describe("buildLaunchPlan", () => {
 
 describe("effort — per-model validation (reasoning-config fidelity, Phase 1)", () => {
   // The 1.19367.0 baseline carries the full four-class spawn.effortByModel/effortRegexDefault map
-  // (Phase 0); the default test baseline (1.11847.5) predates it and is used for the class-4 checks.
+  // (Phase 0); the default test baseline (1.14271.0) predates it and is used for the class-4 checks.
   const modern = loadBaseline("desktop-1.19367.0");
   function modernPlan(sessionObj: unknown) {
     const out = mkdtempSync(join(tmpdir(), "cowork-effort-test-"));
@@ -445,10 +442,6 @@ describe("fail-loud declared-source staging", () => {
     expect(() => plan({ uploads: ["./examples/data/project"] })).toThrow(/is a directory/);
   });
 
-  it("a default folder id whose basename is '..' is rejected (would clobber the workspace root)", () => {
-    expect(() => plan({ folders: [{ from: ".." }] })).toThrow(/unsafe folder default id/);
-  });
-
   it("a missing or unparsable marketplace manifest throws", () => {
     expect(() => plan({ plugins: { local_marketplaces: [mktDir({ noManifest: true })] } })).toThrow(/manifest not found/);
     expect(() => plan({ plugins: { local_marketplaces: [mktDir({ badJson: true })] } })).toThrow(/not valid JSON/);
@@ -492,8 +485,8 @@ describe("fail-loud declared-source staging", () => {
   });
 
   it("rejects ':' in marketplace metadata (it would break the docker -v overlay)", () => {
-    const mk = mktDir({ name: "mymkt", withPlugin: true, pluginVersion: "1.0:evil" });
-    expect(() => plan({ plugins: { local_marketplaces: [mk], enabled: ["p@mymkt"] } })).toThrow(/unsafe plugin version/);
+    const mk = mktDir({ name: "my:mkt", withPlugin: true });
+    expect(() => plan({ plugins: { local_marketplaces: [mk], enabled: ["p@my:mkt"] } })).toThrow(/unsafe/);
   });
 
   it("version with unsafe chars does NOT throw on modern baseline (>= 1.14271.0) — version is not computed", () => {
@@ -604,37 +597,11 @@ describe("fail-loud declared-source staging", () => {
     writeFileSync(join(mk, "p", ".claude-plugin", "plugin.json"), JSON.stringify({ name: "p", version: "1.0.0" }));
     // qualifier matches the derived name → resolves and mounts.
     const { plan: ok } = plan({ plugins: { local_marketplaces: [mk], enabled: [`p@${derived}`] } });
-    expect(ok.pluginDirs).toContain(`.local-plugins/cache/${derived}/p/1.0.0`);
+    expect(ok.pluginDirs).toContain(`.local-plugins/marketplaces/${derived}/p`);
     // a plugin-name typo qualified against the derived name is now CAUGHT (was silently ignored).
     expect(() => plan({ plugins: { local_marketplaces: [mk], enabled: [`typo@${derived}`] } })).toThrow(
       new RegExp(`names local marketplace "${derived}"`),
     );
-  });
-
-  it("a present-but-CORRUPT plugin.json throws (no silent 0.0.0 default)", () => {
-    const mk = mkdtempSync(join(tmpdir(), "cowork-corrupt-pj-"));
-    mkdirSync(join(mk, ".claude-plugin"), { recursive: true });
-    mkdirSync(join(mk, "p", ".claude-plugin"), { recursive: true });
-    writeFileSync(
-      join(mk, ".claude-plugin", "marketplace.json"),
-      JSON.stringify({ name: "mymkt", plugins: [{ name: "p", source: "./p" }] }),
-    );
-    writeFileSync(join(mk, "p", ".claude-plugin", "plugin.json"), "{ not valid json"); // corrupt
-    expect(() => plan({ plugins: { local_marketplaces: [mk], enabled: ["p@mymkt"] } })).toThrow(/plugin manifest is not valid JSON/);
-  });
-
-  it("a genuinely-VERSIONLESS plugin (absent/empty version) still falls back to 0.0.0", () => {
-    // absent manifest version and no entry.version → readPluginVersion returns null → caller default 0.0.0.
-    const mk = mkdtempSync(join(tmpdir(), "cowork-noversion-pj-"));
-    mkdirSync(join(mk, ".claude-plugin"), { recursive: true });
-    mkdirSync(join(mk, "p", ".claude-plugin"), { recursive: true });
-    writeFileSync(
-      join(mk, ".claude-plugin", "marketplace.json"),
-      JSON.stringify({ name: "mymkt", plugins: [{ name: "p", source: "./p" }] }),
-    );
-    writeFileSync(join(mk, "p", ".claude-plugin", "plugin.json"), JSON.stringify({ name: "p" })); // valid, no version
-    const { plan: p } = plan({ plugins: { local_marketplaces: [mk], enabled: ["p@mymkt"] } });
-    expect(p.pluginDirs).toContain(".local-plugins/cache/mymkt/p/0.0.0");
   });
 });
 

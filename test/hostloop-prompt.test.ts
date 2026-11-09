@@ -4,7 +4,7 @@ import { generateHostLoopShellSection } from "../src/runtime/hostloop-prompt.js"
 /**
  * Byte-exact fidelity tests for the dynamic host-loop "## Shell access" generator (Desktop
  * >= 1.14271.0). Fixtures are reproduced from the binary-verified asar render (function Lxr,
- * block host_loop_shell), adjusted for the harness's REAL mount layout (mnt/.projects/<id>).
+ * block host_loop_shell), adjusted for the harness's REAL mount layout (mnt/<folder-name>).
  */
 describe("generateHostLoopShellSection (1.14271.0 dynamic table)", () => {
   const SESSION = "/sessions/abc";
@@ -16,7 +16,7 @@ describe("generateHostLoopShellSection (1.14271.0 dynamic table)", () => {
     const out = generateHostLoopShellSection({
       sessionRoot: SESSION,
       mntRoot: MNT,
-      folders: [{ hostPath: "/Users/me/proj", mountPath: ".projects/proj" }],
+      folders: [{ hostPath: "/Users/me/proj", mountPath: "proj" }],
       uploads: [{ hostPath: "/Users/me/attachments/foo.txt", mountPath: "uploads/foo.txt" }],
       skillsConfigDir: "/work/.claude",
       hostOutputsDir: OUT,
@@ -28,12 +28,12 @@ describe("generateHostLoopShellSection (1.14271.0 dynamic table)", () => {
 Shell commands use \`mcp__workspace__bash\` and run in an isolated Linux environment. Each call is independent — no cwd or env carryover between calls. Use absolute paths.
 
 Paths in bash differ from what file tools (Read/Write/Edit) see:
-- /Users/me/proj → /sessions/abc/mnt/.projects/proj/
+- /Users/me/proj → /sessions/abc/mnt/proj/
 - ${OUT} → /sessions/abc/mnt/outputs/  (your outputs directory — cwd)
 - /work/.claude/skills → /sessions/abc/mnt/.claude/skills/ (read-only)
 - ${UP} → /sessions/abc/mnt/uploads/ (read-only, attached files)
 
-So a file you Read at /Users/me/proj/foo.txt is reached in bash at /sessions/abc/mnt/.projects/proj/foo.txt — use the mapping above to translate. Skill scripts can be run via bash using the VM path above.
+So a file you Read at /Users/me/proj/foo.txt is reached in bash at /sessions/abc/mnt/proj/foo.txt — use the mapping above to translate. Skill scripts can be run via bash using the VM path above.
 
 The Linux environment boots in the background. If bash returns "Workspace still starting", wait a few seconds and retry.`,
     );
@@ -69,16 +69,16 @@ The Linux environment boots in the background. If bash returns "Workspace still 
       sessionRoot: SESSION,
       mntRoot: MNT,
       folders: [
-        { hostPath: "/w/alpha", mountPath: ".projects/alpha" },
-        { hostPath: "/w/beta", mountPath: ".projects/beta" },
+        { hostPath: "/w/alpha", mountPath: "alpha" },
+        { hostPath: "/w/beta", mountPath: "beta" },
       ],
       uploads: [],
       hostOutputsDir: OUT,
       hostUploadsDir: UP,
     });
-    expect(out).toContain("- /w/alpha → /sessions/abc/mnt/.projects/alpha/\n- /w/beta → /sessions/abc/mnt/.projects/beta/");
+    expect(out).toContain("- /w/alpha → /sessions/abc/mnt/alpha/\n- /w/beta → /sessions/abc/mnt/beta/");
     // example line anchored to the FIRST folder
-    expect(out).toContain("So a file you Read at /w/alpha/foo.txt is reached in bash at /sessions/abc/mnt/.projects/alpha/foo.txt");
+    expect(out).toContain("So a file you Read at /w/alpha/foo.txt is reached in bash at /sessions/abc/mnt/alpha/foo.txt");
     // no skills → no skills bullet and no "Skill scripts" suffix; folders present → no "No user folders" branch
     expect(out).not.toContain(".claude/skills");
     expect(out).not.toContain("Skill scripts can be run");
@@ -89,7 +89,7 @@ The Linux environment boots in the background. If bash returns "Workspace still 
     const out = generateHostLoopShellSection({
       sessionRoot: SESSION,
       mntRoot: MNT,
-      folders: [{ hostPath: "/w/p", mountPath: ".projects/p" }],
+      folders: [{ hostPath: "/w/p", mountPath: "p" }],
       uploads: [],
       hostOutputsDir: OUT,
       hostUploadsDir: UP,

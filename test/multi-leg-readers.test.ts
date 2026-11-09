@@ -8,7 +8,6 @@ import { runLabelOf } from "../src/run/run-labels.js";
 import { reindexFromRunsTree, type RunIndexRow } from "../src/run/run-index.js";
 import { findLatestRunForScenario, findLatestRunUnderRoot } from "../src/run/latest-run.js";
 import { resolveEventsFile } from "../src/run/trace-view.js";
-import { assessRunDir } from "../src/run/migrate-run-dir.js";
 import { legTreeRoot } from "../src/run/turn-layout.js";
 import { assertContextFromRunDir } from "../src/run/verify-context.js";
 import { exportFixture } from "../src/fixture/export.js";
@@ -197,13 +196,7 @@ describe("resolveEventsFile: a multi-leg candidate is refused, never skipped", (
   });
 });
 
-describe("migrate-run-dir and the tree-reading readers", () => {
-  it("migrate is a no-op on a multi-leg root and on an action leg", () => {
-    const dir = legsRun("s", "local_1");
-    expect(assessRunDir(dir)).toMatchObject({ kind: "noop" });
-    expect(assessRunDir(join(dir, "legs", "apply"))).toMatchObject({ kind: "noop" });
-  });
-
+describe("the tree-reading readers", () => {
   it("legTreeRoot: persistent last leg → the scenario root's tree; earlier persistent leg → refused; cowork-task → its own", () => {
     const p = legsRun("s", "local_1");
     expect(legTreeRoot(join(p, "legs", "resume"), "x")).toEqual({ root: join(p, "legs", "resume", "..", "..") });

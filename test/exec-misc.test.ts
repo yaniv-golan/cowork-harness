@@ -220,7 +220,7 @@ describe("boundary — isHostFsSealed split-probe AND-semantics", () => {
 });
 
 describe("boundary — boundaryAllowList folds in session egress", () => {
-  const baseline = loadBaseline("desktop-1.12603.1");
+  const baseline = loadBaseline("desktop-1.14271.0");
   it("baseline-only when no session is given", () => {
     expect(boundaryAllowList(baseline)).toEqual(baseline.network.allowDomains);
   });

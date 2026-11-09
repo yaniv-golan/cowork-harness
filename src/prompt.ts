@@ -152,8 +152,8 @@ export function renderPrompts(
   session: SessionConfig,
   sessionId: string,
   /**
-   * The mnt-relative mount path of the first connected work folder (from `plan.mounts`), e.g. `project`
-   * (gated, >=1.14271.0) or `.projects/project` (legacy). Passed by the caller so `{{workspaceFolder}}`
+   * The mnt-relative mount path of the first connected work folder (from `plan.mounts`), e.g. `project`.
+   * Passed by the caller so `{{workspaceFolder}}`
    * uses the ACTUAL resolved+gated mount name and can never drift from where the folder is really mounted.
    * Undefined when no folder is connected.
    */

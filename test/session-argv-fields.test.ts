@@ -10,7 +10,7 @@ import { baseAgentArgs } from "../src/runtime/argv.js";
 import { protocolAgentArgs } from "../src/runtime/protocol.js";
 import { SESSION_ARGV_FIELDS, renderSessionArgvTable, type SessionArgvDisposition } from "../src/runtime/session-argv-fields.js";
 
-const baseline = loadBaseline("desktop-1.12603.1");
+const baseline = loadBaseline("desktop-1.14271.0");
 const plan = (over: Partial<LaunchPlan> = {}): LaunchPlan => ({
   configDir: "/HOST/CFG",
   mcpConfig: null,

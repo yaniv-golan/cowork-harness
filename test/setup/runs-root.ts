@@ -11,7 +11,7 @@ import { afterAll } from "vitest";
 // on this machine holds 122k files of history. Measured: a full suite run deposited two run dirs there,
 // every time.
 //
-// That is worse than untidy. The migrator (`migrate-run-dir`) walks that same root, and `prune` deletes
+// That is worse than untidy. The stats index walks that same root, and `prune` deletes
 // from it by a keep-count; a test suite writing into it means the population under test changes while it
 // is being measured. It also silently invalidates any backup taken before the run.
 //

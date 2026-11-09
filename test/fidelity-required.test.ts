@@ -107,7 +107,7 @@ describe("executeScenario refuses a scenario object without `fidelity`", () => {
   const noTier = {
     name: "no-tier",
     prompt: "hi",
-    baseline: "desktop-0.0.0-does-not-exist",
+    baseline: "desktop-999.0.0-does-not-exist",
     session: "(inline)",
     assert: [{ result: "success" }],
   } as unknown as Parameters<typeof executeScenario>[0];

@@ -14,17 +14,23 @@ import type { PlatformBaseline } from "../src/types.js";
 
 // The plan MUST carry `baseEnv`: buildProtocolEnv builds from it, so an absence assertion over an empty one is vacuous.
 const protoPlan = (baseEnv: NodeJS.ProcessEnv = { ...process.env }): LaunchPlan => ({ baseEnv, agentEnv: {} }) as unknown as LaunchPlan;
-const KEYLESS = "desktop-1.11847.5";
+const KEYLESS = "a baseline file that pins no switch";
+function baselineFor(name: string): PlatformBaseline {
+  if (name !== KEYLESS) return loadBaseline(name);
+  const b = structuredClone(loadBaseline("latest"));
+  delete b.spawn!.env![KEY];
+  return b;
+}
 
 describe("protocol applies the background-tasks switch from the baseline", () => {
   it('latest: "1"', () => {
     expect(buildProtocolEnv(protoPlan(), loadBaseline("latest"))[KEY]).toBe("1");
   });
 
-  // A literal keyless list and a fixed value, not "equals the baseline's value" (which the helper reads, so it could not
+  // A fixed value, not "equals the baseline's value" (which the helper reads, so it could not
   // fail): a new baseline that pins another value, or stops pinning it, turns this red. The pinned count is derived, so
   // a new baseline that pins "1" needs no edit.
-  it(`every committed baseline pins "1", except only ${KEYLESS}, which pins none`, () => {
+  it(`every committed baseline pins "1"`, () => {
     const dir = join(import.meta.dirname, "..", "baselines");
     let pinned = 0;
     const absent: string[] = [];
@@ -37,17 +43,17 @@ describe("protocol applies the background-tasks switch from the baseline", () =>
       else throw new Error(`${f}: unexpected value ${v}`);
     }
     expect(names.length).toBeGreaterThan(40); // the directory read is not vacuous
-    expect({ pinned, absent }).toEqual({ pinned: names.length - 1, absent: [KEYLESS] });
+    expect({ pinned, absent }).toEqual({ pinned: names.length, absent: [] });
   });
 
   it("a baseline with no spawn block does not throw and yields no key", () => {
     expect(backgroundTasksEnv({} as PlatformBaseline)).toEqual({});
-    expect(backgroundTasksEnv(loadBaseline(KEYLESS))).toEqual({});
+    expect(backgroundTasksEnv(baselineFor(KEYLESS))).toEqual({});
   });
 
   it("matches container on the same baseline, the keyless one included", () => {
     for (const name of ["latest", KEYLESS]) {
-      const b = loadBaseline(name);
+      const b = baselineFor(name);
       expect(buildProtocolEnv(protoPlan({}), b)[KEY], name).toBe(spawnEnv(b, { configGuest: "/mnt/.claude", proxyHost: "http://p" })[KEY]);
     }
   });
@@ -58,7 +64,7 @@ describe("the operator's export of the key never reaches the agent", () => {
     ["latest", "1"],
     [KEYLESS, undefined],
   ] as const)("protocol, %s", (name, want) => {
-    const env = buildProtocolEnv(protoPlan({ [KEY]: "0", PATH: "/usr/bin" }), loadBaseline(name));
+    const env = buildProtocolEnv(protoPlan({ [KEY]: "0", PATH: "/usr/bin" }), baselineFor(name));
     expect(env.PATH).toBe("/usr/bin"); // the operator layer is there: the key's absence is not vacuous
     expect(env[KEY]).toBe(want);
   });
@@ -66,7 +72,7 @@ describe("the operator's export of the key never reaches the agent", () => {
     ["latest", "1"],
     [KEYLESS, undefined],
   ] as const)("hostloop, %s", (name, want) => {
-    const env = buildHostLoopNativeEnv(loadBaseline(name), { configDir: "/tmp/cfg", operatorEnv: { [KEY]: "0", PATH: "/usr/bin" } });
+    const env = buildHostLoopNativeEnv(baselineFor(name), { configDir: "/tmp/cfg", operatorEnv: { [KEY]: "0", PATH: "/usr/bin" } });
     expect(env.PATH).toBe("/usr/bin");
     expect(env[KEY]).toBe(want);
   });

@@ -298,11 +298,10 @@ export function selectHostInputs(fromHost: FromHost, configDir: string, warn: (l
   return { configDir, plugins, skills, skipped };
 }
 
-/** The leaf a host plugin mounts at: `.local-plugins/marketplaces/<marketplace>/<name>` (the real Cowork shape), or
- *  `.local-plugins/cache/<marketplace>/<name>` below the bare-name baseline. Each segment already went through
- *  `safePathSegment` at the caller. */
-export function hostPluginMountPath(marketplace: string, name: string, bareNames: boolean): string {
-  return bareNames ? `.local-plugins/marketplaces/${marketplace}/${name}` : `.local-plugins/cache/${marketplace}/${name}`;
+/** The leaf a host plugin mounts at: `.local-plugins/marketplaces/<marketplace>/<name>` (the real Cowork shape). Each
+ *  segment already went through `safePathSegment` at the caller. */
+export function hostPluginMountPath(marketplace: string, name: string): string {
+  return `.local-plugins/marketplaces/${marketplace}/${name}`;
 }
 
 /** sha256 over the delivered entries, sorted by (kind, key). */

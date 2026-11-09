@@ -632,7 +632,7 @@ export function reindexFromRunsTree(runsRoot: string): {
         // reads anymore. Skipping it quietly while printing a confident "reindexed N run(s)" is the
         // failure this command exists to prevent — `--reindex` is documented as the one-time migration
         // for pre-index runs, i.e. aimed squarely at exactly this population. The caller names
-        // `migrate-run-dir` as the remedy.
+        // the 4.x `migrate-run-dir` as the remedy.
         const shape = classifyRunDir(outDir);
         if (shape.kind === "legacy" || shape.kind === "mixed") {
           skippedLegacy++;

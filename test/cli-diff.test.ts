@@ -24,8 +24,8 @@ describe.skipIf(!can)("cli: diff (baseline mode, E7)", () => {
     const r = run(["diff", FIXTURE_A, FIXTURE_B]);
     expect(r.code).toBe(1);
     expect(r.stdout).toContain("appVersion");
-    expect(r.stdout).toContain("1.0.0-fixture-a");
-    expect(r.stdout).toContain("1.0.0-fixture-b");
+    expect(r.stdout).toContain("99.0.0-fixture-a");
+    expect(r.stdout).toContain("99.0.0-fixture-b");
   });
 
   it("exits 0 and prints 'No differences.' for a baseline diffed against itself", () => {

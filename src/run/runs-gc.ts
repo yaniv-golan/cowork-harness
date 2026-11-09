@@ -4,8 +4,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "../cli-args.js";
 import { defaultRunsHome, runsWriteRoot } from "./trace-view.js";
 import { MANIFEST_FILE } from "../eval/manifest.js";
-import { classifyRunDir } from "./turn-layout.js";
-import { MIGRATION_JOURNAL_DIR } from "./migrate-run-dir.js";
+import { classifyRunDir, MIGRATION_JOURNAL_DIR } from "./turn-layout.js";
 import { evalIdOfLabel, isHillclimbLabel, isSymlink, readSmallJson, runLabelOf } from "./run-labels.js";
 import { isStatusStale, isValidRunStatus } from "./run-status.js";
 
@@ -152,7 +151,7 @@ export function runDirEvidence(dir: string): RunDirEvidence {
  *  The legacy arm: this predicate reasons about the RANKING population, which is history, not about what
  *  current writers produce. Without it an unmigrated legacy dir (root result.json, no events.jsonl) dropped into
  *  the junk tier and prune deleted it ahead of an empty scaffold: silent destruction of exactly the history
- *  `migrate-run-dir` exists to preserve. */
+ *  a 4.x `migrate-run-dir` can still convert. */
 const isRealRunFrom = (e: RunDirEvidence): boolean => e.turns || e.events || e.legacy.length > 0 || e.legs;
 export const isRealRun = (dir: string): boolean => isRealRunFrom(runDirEvidence(dir));
 const looksLikeRunDirFrom = (e: RunDirEvidence): boolean => e.status || e.origin || isRealRunFrom(e);
@@ -560,7 +559,9 @@ export function cmdRunsGc(args: string[]): void {
     // getting it wrong deletes a run outright — the most expensive failure in this feature.
     const live = liveJournalsFor(runsRoot, scenarioSlug);
     if (live > 0) {
-      log(`↷ skipped ${scenarioSlug}: ${live} migration journal(s) in flight — run \`migrate-run-dir\` to finish, then prune`);
+      log(
+        `↷ skipped ${scenarioSlug}: ${live} migration journal(s) in flight — run \`npx cowork-harness@4 migrate-run-dir\` to finish, then prune`,
+      );
       continue;
     }
 

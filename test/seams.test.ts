@@ -2007,7 +2007,7 @@ describe("thinkingArgs — Cowork's boolean extended-thinking resolver (binary-v
 // non-empty value FIRST — an absence check against an already-clean env would false-green even if the
 // strip were missing entirely.
 describe("B2 — MAX_THINKING_TOKENS is absent from every runtime env, even with a stray host var set", () => {
-  const baseline = loadBaseline("desktop-1.12603.1");
+  const baseline = loadBaseline("desktop-1.14271.0");
   const prevVal = process.env.MAX_THINKING_TOKENS;
 
   beforeEach(() => {

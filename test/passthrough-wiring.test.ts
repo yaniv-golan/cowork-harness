@@ -46,10 +46,12 @@ const sessionWith = (names: string[]) => write("s.yaml", `agent_env:\n  passthro
 
 describe("the derived refusal set covers the Desktop-version-gated key", () => {
   it("a baseline below the gate still refuses the key the gate sets", () => {
-    const old = loadBaseline("desktop-1.11847.5");
+    const old = loadBaseline("desktop-1.14271.0");
     expect(passthroughRefusalSet(old).has("CLAUDE_CODE_DESKTOP_APP_VERSION")).toBe(true);
-    // That baseline pins no background-tasks value, so the builder emits none: the set still refuses the key it owns.
-    expect(passthroughRefusalSet(old).has(BACKGROUND_TASKS_ENV_KEY)).toBe(true);
+    // A baseline that pins no background-tasks value makes the builder emit none: the set still refuses the key it owns.
+    const keyless = structuredClone(old);
+    delete keyless.spawn!.env![BACKGROUND_TASKS_ENV_KEY];
+    expect(passthroughRefusalSet(keyless).has(BACKGROUND_TASKS_ENV_KEY)).toBe(true);
   });
 });
 

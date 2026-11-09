@@ -115,17 +115,6 @@ export function rootfsManifestDesktopVersion(): string | undefined {
   }
 }
 
-/**
- * The Desktop release boundary at which Cowork's runtime switched to BOTH bare-name work-folder mounts
- * (`mnt/<name>` instead of `mnt/.projects/<id>`) AND the dynamically-generated host-loop "## Shell access"
- * prompt. These are the same binary's behavior, so they share ONE constant — host-loop prompt gating
- * (`hostloop.ts`) and mount-path gating (`session.ts`) both import this. Homed here in `baseline.ts` (a
- * near-leaf everyone imports) to stay cycle-free. For appVersion >= this, use the bare-name scheme + the
- * generated prompt; below it, the legacy `.projects/<id>` + static prompt. Bump only when a new Desktop
- * release changes that contract.
- */
-export const MOUNT_BARE_NAME_MIN_VERSION = "1.14271.0";
-
 /** First Desktop that constructs CLAUDE_CODE_DESKTOP_APP_VERSION in the spawn env (W2, unconditional on
  *  first-party). Verified ABSENT from 1.46388.4, 1.46388.3, 1.44121.1, 1.40609.1 and 1.32885.1, and
  *  present in 2.2553.1 — so injecting it on an older baseline would hand the agent a key that baseline's
@@ -897,10 +886,10 @@ export function loadBaseline(name: string): PlatformBaseline {
     } catch (e) {
       throw unknownBaseline(name, (e as Error).message);
     }
-    if (!existsSync(file)) throw unknownBaseline(name);
+    if (!existsSync(file)) throw belowFloorName(name) ?? unknownBaseline(name);
     // An absolute path is a file the USER supplied: every way it fails to load is their input error, stated
     // in one line. A committed NAME that fails to load is a packaging bug and keeps failing as one (below).
-    if (isAbsolute(name)) return loadBaselineFile(file);
+    if (isAbsolute(name)) return refuseBelowFloor(loadBaselineFile(file), file);
   }
   const raw = JSON.parse(readFileSync(file, "utf8"));
   return PlatformBaseline.parse(raw);
@@ -935,18 +924,54 @@ function loadBaselineFile(file: string): PlatformBaseline {
   }
 }
 
-function unknownBaseline(name: string, reason?: string): UnknownBaselineError {
-  let names: string[] = [];
+function committedBaselineNames(): string[] {
   try {
-    names = listBaselineNames();
+    return listBaselineNames();
   } catch {
-    /* no baselines dir: the hint says so */
+    return []; // no baselines dir: the hint says so
   }
+}
+
+function validBaselinesHint(names: string[]): string {
+  return names.length ? `valid baselines (newest first): ${names.join(", ")}` : `no committed baselines in ${BASELINES_DIR}`;
+}
+
+const versionOfBaselineName = (name: string) => name.replace(/^desktop-/, "");
+
+/** The refusal of a `desktop-<version>` name older than the oldest committed baseline, which the floor is read from. */
+function belowFloorName(name: string): UnknownBaselineError | undefined {
+  const version = /^desktop-(\d+(?:\.\d+)*)(?:\.json)?$/.exec(name)?.[1];
+  const names = committedBaselineNames();
+  const floor = names.at(-1);
+  if (version === undefined || floor === undefined || cmpVersionStrings(version, versionOfBaselineName(floor)) >= 0) return undefined;
+  return new UnknownBaselineError(
+    name,
+    `no baseline named "${name}": it is older than ${floor}, the oldest baseline this version supports — use ${floor} or newer`,
+    validBaselinesHint(names),
+  );
+}
+
+/** An out-of-tree file is held to the same floor: the mount layouts and prompt of anything older are gone, so it would
+ *  otherwise run silently as a release it does not describe. */
+function refuseBelowFloor(baseline: PlatformBaseline, file: string): PlatformBaseline {
+  const names = committedBaselineNames();
+  const floor = names.at(-1);
+  if (floor !== undefined && cmpVersionStrings(baseline.appVersion, versionOfBaselineName(floor)) < 0)
+    throw new UnknownBaselineError(
+      file,
+      `baseline file at "${file}" is for Desktop ${baseline.appVersion || "(no version)"}, older than ${floor}, the oldest baseline this version supports — use ${floor} or newer`,
+      validBaselinesHint(names),
+    );
+  return baseline;
+}
+
+function unknownBaseline(name: string, reason?: string): UnknownBaselineError {
+  const names = committedBaselineNames();
   const what = isAbsolute(name) ? `no baseline file at "${name}"` : `no baseline named "${name}"`;
   return new UnknownBaselineError(
     name,
     `${what}${reason ? ` (${reason})` : ""} — a baseline is \`latest\`, a committed name like desktop-<version>, or an absolute path to a baseline file`,
-    names.length ? `valid baselines (newest first): ${names.join(", ")}` : `no committed baselines in ${BASELINES_DIR}`,
+    validBaselinesHint(names),
   );
 }
 
