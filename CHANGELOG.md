@@ -129,6 +129,10 @@ All notable changes to this project are documented here. The format is based on
 
 ### Fixed
 
+- **`schema/run-result.json` accepts what a run writes.** `modelUsage` entries carry `thinkingTokens`, `canonicalModel`,
+  `provider`, `costBasis` and the two `cacheCreationEphemeral` counts, which the schema rejected, so a consumer validating
+  with it failed on nearly every real run. `metrics[].command.scriptSha256` may be empty for a metric whose script was
+  never resolved.
 - **A relative symlink inside a connected folder, project or scenario plugin stays relative when staged.** On `container`, `microvm`, `hostloop` and
   `protocol` it was rewritten to an absolute host path, which dangles in the sandbox.
 - **`record --rerecord-stale` no longer overwrites a cassette written by a newer cowork-harness.** Such a cassette

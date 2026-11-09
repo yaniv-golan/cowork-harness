@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import Ajv from "ajv";
 import { METRIC_UNAVAILABLE, type RunResult } from "../src/types.js";
 
@@ -333,6 +335,47 @@ describe("schema/run-result.json", () => {
 // Pins the two hand-written PROSE descriptions of the verdict shape (SPEC.md §11, docs/cli.md's
 // --output-format json row) against the schema's `verdict.required` — a doc that drops or adds a
 // field fails loud instead of silently rotting.
+describe("a real result against schema/run-result.json", () => {
+  const AGENT_USAGE_KEYS = [
+    "thinkingTokens",
+    "cacheCreationEphemeral5mInputTokens",
+    "cacheCreationEphemeral1hInputTokens",
+    "canonicalModel",
+    "provider",
+    "costBasis",
+  ];
+
+  it("a replayed hostloop cassette validates whole, with the per-model usage fields the agent reports", () => {
+    const r = spawnSync(
+      "node",
+      [resolve("dist/cli.js"), "replay", resolve("examples/replays/hostloop-computer-links.cassette.json"), "--output-format", "json"],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          COWORK_HARNESS_RUNS_DIR: mkdtempSync(join(tmpdir(), "cwh-schema-replay-")),
+          COWORK_HARNESS_FORBID_SPAWN: "1",
+        },
+      },
+    );
+    expect(r.status, r.stderr).toBe(0);
+    const result = JSON.parse(r.stdout).results[0];
+    const [usage] = Object.values(result.modelUsage as Record<string, Record<string, unknown>>);
+    for (const key of AGENT_USAGE_KEYS) expect(usage, key).toHaveProperty(key);
+    const check = new Ajv({ allErrors: true, strict: false }).compile(schema);
+    expect(check(result), JSON.stringify(check.errors)).toBe(true);
+  });
+
+  it("a metric whose script was never resolved records an empty hash, and only an empty one or a real one", () => {
+    const check = new Ajv({ allErrors: true, strict: false }).compile(
+      schema.properties.metrics.items.properties.command.properties.scriptSha256,
+    );
+    expect(check("")).toBe(true);
+    expect(check("a".repeat(64))).toBe(true);
+    expect(check("not-a-hash")).toBe(false);
+  });
+});
+
 describe("docs ↔ schema/run-result.json verdict-shape sync", () => {
   const verdictRequired = new Set<string>((schema as { properties: { verdict: { required: string[] } } }).properties.verdict.required);
 
