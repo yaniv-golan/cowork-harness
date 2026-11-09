@@ -293,7 +293,7 @@ All notable changes to this project are documented here. The format is based on
 
 - **Breaking: the `migrate-run-dir` command.** A run dir from before the per-turn `turns/<N>/` layout is still refused
   by name, and `trace` still reads it. Convert one with `npx cowork-harness@4 migrate-run-dir`: a dry run by default,
-  `--write` to apply.
+  `--write` to apply. Running `migrate-run-dir` on this version exits 2 and names that command.
 - **Breaking: baselines `desktop-1.11847.5`, `desktop-1.12603.1` and `desktop-1.13576.1`, and the layouts only they
   used.** The oldest supported baseline is `desktop-1.14271.0`. A scenario naming one of these or any older version, or
   an absolute-path baseline file for an older Desktop, is refused (exit 2) naming that baseline. A cassette recorded

@@ -85,9 +85,8 @@ describe("mount / path safety", () => {
 });
 
 describe("session-id / resume argv (persistence — leverages the agent's native --resume)", () => {
-  // A SPAWNABLE baseline: these assert argv the sandbox tiers emit, and `baseAgentArgs` refuses a
-  // baseline with no `spawn` block (its toolset/pre-approvals/config-dir would all be empty). The
-  // module-level legacy baseline above is exactly that case, so it cannot stand in here.
+  // A baseline with a `spawn` block: these assert argv the sandbox tiers emit, and `baseAgentArgs` refuses a
+  // baseline without one (its toolset/pre-approvals/config-dir would all be empty).
   const spawnable = loadBaseline("desktop-1.19367.0");
   const M = { mntRoot: "/sessions/x/mnt" };
   it("emits NO session flag by default (goldens unchanged)", () => {
