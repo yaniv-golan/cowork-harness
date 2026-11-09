@@ -994,8 +994,8 @@ destination, a `plugins.config_dir` that is not a directory, an unsafe mount-nam
 upload's file name), a session `effort:` the schema rejects or the model does not offer, and a
 `--session-id` with characters outside `[A-Za-z0-9_-]` are refused as category `usage` (exit `2` on `run`/`skill`; `record` keeps its `1` for a
 refused recording), before the run directory is created, so a refused run leaves no run dir; `chat`
-makes the same check before it creates its run dir. `run <dir/>` (without `--repeat`, whose rollup reports
-such a scenario) checks every scenario's input paths and baseline name before the first one runs, and one
+makes the same check before it creates its run dir. `run <dir/>`, with or without `--repeat`, checks every
+scenario's input paths and baseline name before the first one runs, and one
 refusal names every offender (a single file keeps the unprefixed message and hint). `skill
 --dry-run` makes the same check, so its preview of such a path exits `2` — `--ablate-skill` included, since
 ablation drops the plugin from the run but the path is still the caller's input; an unresolved model is not
