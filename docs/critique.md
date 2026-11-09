@@ -900,7 +900,7 @@ reach into `turns/1/` yourself:
   a user `maxEffortLevel` (which lowers the effort when below it), and
   `strictMcp: false` when it left out `--strict-mcp-config` for an enterprise MCP config, and the credential the
   evaluator got by name — `credential`, or `credentialKeys` under `COWORK_HARNESS_GRADER_AUTH=inherit` with several keys,
-  and `graderAuth: "inherit"`; never a value, and absent from a report written before 4.15.0), present
+  and `graderAuth: "inherit"`; never a value, and absent from a report written before 5.0.0), present
   with `evaluatorModel`, so two critiques' evaluator verdicts can be compared knowing both ran under the same
   conditions;
 - the graded turn's **`outcome` and `skillHash` are in the report itself** (`gradedOutcome` /

@@ -40,7 +40,7 @@ The fastest path to CI: a composite action wrapping the token-free lane, with a 
 > `latest`. The two move independently — so a workflow whose `uses:` ref has not changed in months still
 > picks up a CLI **major** the moment one is promoted to `latest`. That is not hypothetical: `@v1` points
 > at 1.25.0, the last 1.x release, yet an `@v1` workflow without a `version:` input installs whichever major is `latest` today.
-> **To hold a major, pin the input** — `version: "^4"` for the current major, `"^3"`/`"^2"`/`"^1"` to stay on an
+> **To hold a major, pin the input** — `version: "^5"` for the current major, `"^4"`/`"^3"`/`"^2"`/`"^1"` to stay on an
 > older one — not the `uses:` ref.
 >
 > Upgrading to 5.x this way means the v12 read floor: a cassette recorded before format v12 is refused until
@@ -48,11 +48,11 @@ The fastest path to CI: a composite action wrapping the token-free lane, with a 
 > [CHANGELOG.md](../CHANGELOG.md).
 
 ```yaml
-- uses: yaniv-golan/cowork-harness@v4
+- uses: yaniv-golan/cowork-harness@v5
   with:
     command: replay              # replay | lint | lint-skill | analyze-skill | verify-cassettes | run
     path: cassettes/my-skill.cassette.json
-    version: "^4"                # hold the CLI major; the input defaults to `latest`
+    version: "^5"                # hold the CLI major; the input defaults to `latest`
     summary: true                # already the default — shown so the CI self-test twin matches verbatim
 ```
 
@@ -138,16 +138,16 @@ jobs:
           echo "$EXPECTED  $RUNNER_TEMP/claude-$V" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/claude-$V"
           echo "COWORK_AGENT_BINARY=$RUNNER_TEMP/claude-$V" >> "$GITHUB_ENV"
-      - uses: yaniv-golan/cowork-harness@v4
+      - uses: yaniv-golan/cowork-harness@v5
         with:
           command: run
           path: scenarios/
-          version: "^4"
+          version: "^5"
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           model: claude-sonnet-5 # used only where a scenario's session sets no `model:`
 ```
 
-Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest` — the recipes above pin `^4` instead, because leaving it at `latest` takes a CLI major the moment it is promoted even though your `uses:` ref never changed; pin an exact version for byte-reproducible CI. The companion skill's `cowork-harness@^4.15.0` floor guidance applies to ad-hoc CLI installs, not this input), `strict` (applies to `replay` (staleness findings), `lint`/`lint-skill` (WARN; INFO never gates unless `lint` gets `--min-severity INFO` via `extra-args`; a reviewed `lint-skill` finding you accept is suppressed with `extra-args: --suppressions <file> --strict-ignores` (one entry per accepted site, in a JSON file kept outside the plugin; a stale entry fails too) or `--ignore-rule <rule>[=<glob>]`, either of which keeps every other WARN gating — see [cli.md](./cli.md#flags-worth-knowing)), and `analyze-skill` (any **`error`**-severity finding — advisory findings are precisely the class that does NOT gate); IGNORED — not forwarded — for `verify-cassettes`/`run`, which don't accept the flag), `fail-on-skill-drift` (**`replay`-only** — never forwarded to the analyzers), `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only), `model` (live lane only: exported as `COWORK_HARNESS_MODEL`, which fills in where a session sets no `model:` and no `--model` is passed; a `run` that resolves no model is refused with exit 2). Outputs: `ok` (`"true"`/`"false"`, mirrors the exit code), `envelope-path` (path to the raw JSON envelope, for post-processing), `summary-md` (the rendered verdict table, exposed as an output — not just written to `$GITHUB_STEP_SUMMARY` — because that file is scoped to this action's own invocation and a caller's later step gets a fresh, empty one). See [`action.yml`](https://github.com/yaniv-golan/cowork-harness/blob/main/action.yml) for the full input/output reference.
+Every run writes a Markdown verdict table (scenario, pass/fail, signals, cost/turns when available, staleness findings, and the replay-skipped-assertions honesty line) to the job summary. Inputs: `command`, `path` (required), `version` (npm dist-tag/version, default `latest` — the recipes above pin `^5` instead, because leaving it at `latest` takes a CLI major the moment it is promoted even though your `uses:` ref never changed; pin an exact version for byte-reproducible CI. The companion skill's `cowork-harness@^5.0.0` floor guidance applies to ad-hoc CLI installs, not this input), `strict` (applies to `replay` (staleness findings), `lint`/`lint-skill` (WARN; INFO never gates unless `lint` gets `--min-severity INFO` via `extra-args`; a reviewed `lint-skill` finding you accept is suppressed with `extra-args: --suppressions <file> --strict-ignores` (one entry per accepted site, in a JSON file kept outside the plugin; a stale entry fails too) or `--ignore-rule <rule>[=<glob>]`, either of which keeps every other WARN gating — see [cli.md](./cli.md#flags-worth-knowing)), and `analyze-skill` (any **`error`**-severity finding — advisory findings are precisely the class that does NOT gate); IGNORED — not forwarded — for `verify-cassettes`/`run`, which don't accept the flag), `fail-on-skill-drift` (**`replay`-only** — never forwarded to the analyzers), `extra-args`, `summary` (default `true`), `anthropic-api-key` (live lane only), `model` (live lane only: exported as `COWORK_HARNESS_MODEL`, which fills in where a session sets no `model:` and no `--model` is passed; a `run` that resolves no model is refused with exit 2). Outputs: `ok` (`"true"`/`"false"`, mirrors the exit code), `envelope-path` (path to the raw JSON envelope, for post-processing), `summary-md` (the rendered verdict table, exposed as an output — not just written to `$GITHUB_STEP_SUMMARY` — because that file is scoped to this action's own invocation and a caller's later step gets a fresh, empty one). See [`action.yml`](https://github.com/yaniv-golan/cowork-harness/blob/main/action.yml) for the full input/output reference.
 
 CI uses `ANTHROPIC_API_KEY` specifically because there's no interactive browser available to run
 `claude setup-token`'s OAuth flow in a GitHub Actions runner; locally, the OAuth token is preferred because
@@ -190,16 +190,16 @@ A CI job that uses this Action pins **two different things**, and confusing them
 
 | Pin | What it selects | Recommended |
 |---|---|---|
-| the `uses:` ref — `@v4` | which **Action** runs (this repo's composite action + its reporter) | `@v4` — a floating major alias, moved to each release, so you get fixes without editing your workflow |
-| the `version:` input | which **CLI** the Action installs from npm | `"^4"` — holds the major. The input's own default is `latest`, which takes a new CLI major the moment it is promoted, even though your `uses:` ref never changed |
+| the `uses:` ref — `@v5` | which **Action** runs (this repo's composite action + its reporter) | `@v5` — a floating major alias, moved to each release, so you get fixes without editing your workflow |
+| the `version:` input | which **CLI** the Action installs from npm | `"^5"` — holds the major. The input's own default is `latest`, which takes a new CLI major the moment it is promoted, even though your `uses:` ref never changed |
 
-`@v4.0` exists too (floating minor), and an exact `@v4.0.0` is the maximally reproducible choice. The
-same spectrum applies to `version:`: `"^4"` for fixes, an exact `"4.0.0"` for byte-reproducible CI.
+`@v5.0` exists too (floating minor), and an exact `@v5.0.0` is the maximally reproducible choice. The
+same spectrum applies to `version:`: `"^5"` for fixes, an exact `"5.0.0"` for byte-reproducible CI.
 
 > **The Marketplace install box says something different, and both are correct.** GitHub's Marketplace
 > listing renders its own auto-generated snippet pinned to the latest *exact release tag* (e.g.
-> `@v4.0.0`), shown beside this page's `@v4` guidance. They are not in conflict — they are two points on
-> the same pinning spectrum. `@v4` auto-adopts patch and minor fixes and is right for most consumers;
+> `@v5.0.0`), shown beside this page's `@v5` guidance. They are not in conflict — they are two points on
+> the same pinning spectrum. `@v5` auto-adopts patch and minor fixes and is right for most consumers;
 > the exact tag never moves and is right for security-sensitive or audit-bound pipelines.
 
 The Action's inputs and outputs are a semver-covered surface — see [SPEC.md](https://github.com/yaniv-golan/cowork-harness/blob/main/SPEC.md) §12.

@@ -396,7 +396,7 @@ export interface TransportIdentity {
   strictMcp?: false;
   /** The one credential key the call carried, by name (`graderCredential`), or `host-login` when it carried none
    *  (the host CLI then used an `apiKeyHelper`, its Keychain login or its config dir). Absent on a grade recorded
-   *  before 4.15.0, and when several keys were passed (see `credentialKeys`). */
+   *  before 5.0.0, and when several keys were passed (see `credentialKeys`). */
   credential?: GraderCredentialKey | "host-login";
   /** Under `COWORK_HARNESS_GRADER_AUTH=inherit` with several credential keys set: every key passed. The harness does
    *  not know which one the host CLI picked, so it records the set rather than guess. */
@@ -411,7 +411,7 @@ const LATER_IDENTITY_FIELDS = ["credential", "credentialKeys", "graderAuth"] as 
 
 /** A comparable key for a transport identity. Two identities are the same transport when their keys are equal.
  *  A field that `peers` (the identities this one is compared with) do not all record is left out, so a grade
- *  recorded before 4.15.0 (no credential fields) and one recorded after count as one transport, while a default
+ *  recorded before 5.0.0 (no credential fields) and one recorded after count as one transport, while a default
  *  grade and an `inherit` grade, both recorded after, count as two. */
 type IdentityLike = { credential?: unknown; credentialKeys?: unknown; graderAuth?: unknown };
 export function transportKey<T extends IdentityLike>(t: T, peers: readonly T[]): string {

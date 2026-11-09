@@ -5660,14 +5660,26 @@
         "type": "object",
         "closed": true
       },
+      ".modelUsage{}.cacheCreationEphemeral1hInputTokens": {
+        "type": "number"
+      },
+      ".modelUsage{}.cacheCreationEphemeral5mInputTokens": {
+        "type": "number"
+      },
       ".modelUsage{}.cacheCreationInputTokens": {
         "type": "number"
       },
       ".modelUsage{}.cacheReadInputTokens": {
         "type": "number"
       },
+      ".modelUsage{}.canonicalModel": {
+        "type": "string"
+      },
       ".modelUsage{}.contextWindow": {
         "type": "number"
+      },
+      ".modelUsage{}.costBasis": {
+        "type": "string"
       },
       ".modelUsage{}.costUSD": {
         "type": "number"
@@ -5679,6 +5691,12 @@
         "type": "number"
       },
       ".modelUsage{}.outputTokens": {
+        "type": "number"
+      },
+      ".modelUsage{}.provider": {
+        "type": "string"
+      },
+      ".modelUsage{}.thinkingTokens": {
         "type": "number"
       },
       ".modelUsage{}.webSearchRequests": {
