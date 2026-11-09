@@ -92,6 +92,19 @@ const CASES: Array<[string, () => string[], ManifestProbeOutcome]> = [
     "vm-path refused",
   ],
   [
+    "a refused /sessions/ Write followed by a good host-path Write is still the refusal",
+    () => {
+      const l = frames();
+      writeTo(l, VM_NOTE);
+      const retry = l.slice(WRITE_USE, WRITE_RESULT + 1).map((f) => f.replaceAll("toolu_0176Eg3XKaFQXtt6ryDahg2e", "toolu_later"));
+      l.splice(WRITE_RESULT + 1, 0, ...retry);
+      edit(l, WRITE_RESULT + 1, (b) => ((b.input as Record<string, unknown>).file_path = HOST_NOTE));
+      edit(l, WRITE_RESULT + 2, (b) => delete b.is_error);
+      return l;
+    },
+    "vm-path refused",
+  ],
+  [
     "every delivery attempt removed",
     () => without(frames(), [WRITE_USE, WRITE_RESULT, ...FAILED_SHELL, ...OUTPUTS_SHELL]),
     "no sub-agent write",

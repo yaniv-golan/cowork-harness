@@ -66,14 +66,13 @@ const grant = async (folder: string) => {
 };
 const auditLines = () => readDeviceAudit(outDir).lines;
 // The deep test's tree is longer than PATH_MAX, so a removal that names it from the top fails with ENAMETOOLONG on
-// macOS. It is removed from the host, one relative level at a time: inside the container the shim refuses the delete.
+// macOS. `rm` walks it one relative level at a time. It runs on the host: inside the container the shim refuses it.
 const DEEP_SEGMENT = "x".repeat(100);
 function removeDeepTree(top: string): void {
-  if (!existsSync(top)) return;
-  const walk = `n=0; while [ -d ${DEEP_SEGMENT} ]; do cd -P ${DEEP_SEGMENT} || exit 9; n=$((n+1)); done
-while [ "$n" -gt 0 ]; do cd -P .. || exit 9; rm -rf ./${DEEP_SEGMENT} || exit 9; n=$((n-1)); done`;
-  const r = spawnSync("bash", ["-c", walk], { cwd: top, encoding: "utf8", timeout: 60_000 });
-  if (r.status !== 0) throw new Error(`could not remove the deep tree under ${top}: ${r.stderr}`);
+  if (!existsSync(join(top, DEEP_SEGMENT))) return;
+  const r = spawnSync("rm", ["-rf", DEEP_SEGMENT], { cwd: top, encoding: "utf8", timeout: 60_000 });
+  if (r.status !== 0)
+    throw new Error(`could not remove the deep tree under ${top} (status ${r.status}, ${r.signal ?? r.error ?? "no signal"}): ${r.stderr}`);
 }
 
 const mount = (name: string, mode: Mount["mode"]): Mount => {

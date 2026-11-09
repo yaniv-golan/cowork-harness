@@ -3,7 +3,7 @@ import type { AgentEvent, AgentSession, DecisionRequest, DecisionResponse } from
 import { ABSTAIN, type Decider } from "../src/decide/decider.js";
 import { replayCassette } from "../src/run/cassette.js";
 import { makeRenderer, renderFooter, type RenderPlan } from "../src/run/renderer.js";
-import { Run } from "../src/run/run.js";
+import { decisionRows, Run } from "../src/run/run.js";
 import type { RunResult } from "../src/types.js";
 import { withReplayContract } from "./helpers/minimal-cassette.js";
 
@@ -107,6 +107,25 @@ describe("toolCalls[].denied and the summary's denied count", () => {
     const r = await drive(new MockSession(stream(write("tu-1"))), decider({ kind: "permission", behavior: "allow", updatedInput: {} }));
     expect(r.toolCalls[0]!.denied).toBeUndefined();
     expect(footer(r)).not.toContain("denied:");
+  });
+
+  it("a fail-closed answer to a request that is not a permission is not counted", async () => {
+    const dialog: DecisionRequest = { id: "req-2", kind: "dialog", dialogKind: "x", payload: {} };
+    const r = await drive(
+      new MockSession([
+        { type: "decision", request: dialog },
+        { type: "result", isError: false },
+      ]),
+      decider(ABSTAIN),
+    );
+    expect(r.decisions[0]!.decision).toBe("abstain→deny");
+    expect(footer(r)).not.toContain("denied:");
+  });
+
+  it("the rows a result carries keep the tool id", () => {
+    expect(decisionRows([{ kind: "tool", name: "Write", decision: "deny", by: "scripted", toolUseId: "tu-1" }])[0]).toMatchObject({
+      toolUseId: "tu-1",
+    });
   });
 
   it("the replay lane marks and counts the same deny", async () => {
