@@ -20,7 +20,9 @@ import { resolveCommandMetrics, resolvedCommand } from "../metric-command/resolv
 import { resolvePython } from "../metric-command/interpreters.js";
 import { asOutcomes, commandMetricNotice, measureCommandMetrics } from "../metric-command/live.js";
 import {
+  BaselineFileError,
   BoundaryError,
+  UnknownBaselineError,
   UsageError,
   LegacyRunDirError,
   MultiLegRunDirError,
@@ -170,7 +172,15 @@ import { captureSubagentReasoning } from "./subagent-reasoning.js";
 import { buildDecider, Chain, ExternalDecider, LlmDecider, type Decider, type OnUnanswered, UnansweredError } from "../decide/decider.js";
 import { type DecisionChannel } from "../decide/external-channel.js";
 import { claudeCliCompleteDecider, isolationRefusal, transportIdentity } from "../decide/llm-transport.js";
-import { Run, infraErrorsForResult, evidenceErrorsForResult, type RunRecord, type RunHooks, unionReferenceAccesses } from "./run.js";
+import {
+  Run,
+  decisionRows,
+  infraErrorsForResult,
+  evidenceErrorsForResult,
+  type RunRecord,
+  type RunHooks,
+  unionReferenceAccesses,
+} from "./run.js";
 import { runsWriteRoot } from "./trace-view.js";
 import { summarizeGateProvenance } from "./gate-provenance.js";
 import { collectSecrets, scrub } from "../secrets.js";
@@ -2538,18 +2548,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       resultSubtype: record.resultSubtype, // SDK result subtype pass-through (error_max_turns / …)
       stderrLogPath: join(outDir, "agent.stderr.log"), // always written by the live agent process
       stalledOnQuestion: record.stalledOnQuestion, // run ended on an unanswered plain-text question
-      decisions: record.decisions.map((d) => ({
-        kind: d.kind,
-        name: d.name,
-        decision: d.decision,
-        by: d.by,
-        requestId: d.requestId,
-        model: d.model,
-        ...(d.effort !== undefined ? { effort: d.effort } : {}),
-        detail: d.detail,
-        rationale: d.rationale,
-        questions: d.questions,
-      })),
+      decisions: decisionRows(record.decisions),
       toolCounts: record.toolCounts,
       webSearches: record.webSearches.length ? record.webSearches : undefined,
       infraErrors: infraErrorsForResult(record),
@@ -3237,6 +3236,22 @@ export function scenarioInputRefusal(
   return f.session ?? f.vacuity ?? f.inputs;
 }
 
+/** A baseline NAME that resolves nowhere, the one input a usage mistake rather than a refusal of a scenario that
+ *  loaded. A baseline file that exists but does not load is not one. */
+export function isUnknownBaselineName(e: unknown): e is UnknownBaselineError {
+  return e instanceof UnknownBaselineError && !(e instanceof BaselineFileError);
+}
+
+/** The refusal of a scenario whose baseline name resolves nowhere, without resolving the rest of its inputs. */
+export function unknownBaselineRefusal(scenario: Scenario): UnknownBaselineError | undefined {
+  try {
+    loadBaseline(scenario.baseline);
+    return undefined;
+  } catch (e) {
+    return isUnknownBaselineName(e) ? e : undefined;
+  }
+}
+
 export type ScenarioInputCheckOptions = {
   quiet?: boolean;
   ablateSkill?: boolean;
@@ -3771,18 +3786,7 @@ export function buildPartialResult(args: {
     result: "error",
     partial: true,
     unansweredGate: { message: args.unanswered.message, ...(args.unanswered.hint ? { hint: args.unanswered.hint } : {}) },
-    decisions: record.decisions.map((d) => ({
-      kind: d.kind,
-      name: d.name,
-      decision: d.decision,
-      by: d.by,
-      requestId: d.requestId,
-      model: d.model,
-      ...(d.effort !== undefined ? { effort: d.effort } : {}),
-      detail: d.detail,
-      rationale: d.rationale,
-      questions: d.questions,
-    })),
+    decisions: decisionRows(record.decisions),
     toolCounts: record.toolCounts,
     webSearches: record.webSearches.length ? record.webSearches : undefined,
     infraErrors: infraErrorsForResult(record),
@@ -5195,7 +5199,9 @@ export function readSessionManifest(path: string, sessionId: string, expectedFid
 
 export {
   UnansweredError,
+  BaselineFileError,
   BoundaryError,
+  UnknownBaselineError,
   UsageError,
   LegacyRunDirError,
   MultiLegRunDirError,

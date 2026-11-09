@@ -2269,30 +2269,26 @@ async function cmdRun(rawArgs: string[]) {
   // — after the earlier ones had been paid for, and with their results lost to the refusal. After the model
   // refusal, which this resolution needs (an `effort:` is checked against the model). The pre-check is
   // quiet: the run resolves again and prints any warning (a COWORK_HARNESS_SOFT_MISSING exclusion) itself.
-  // Not under --repeat: there a scenario that throws is reported in its rollup (`stoppedEarly: "error"`),
-  // and that envelope and exit code are the invocation's contract.
-  if (repeatN === undefined) {
-    const badInputs: { file: string; message: string; hint?: string }[] = [];
-    for (let i = 0; i < files.length; i++) {
-      const refusal = scenarioInputRefusal(loaded[i], modelFlag, {
-        quiet: true,
-        ablateSkill: flags.ablateSkill,
-        unloadableBaseline: "skip",
-        searchCorpus: flags.searchCorpus !== undefined,
-      });
-      if (refusal) badInputs.push({ file: files[i], message: refusal.message, hint: refusal.hint });
-    }
-    // One file keeps the message (and hint) executeScenario would have thrown, unprefixed; a batch names
-    // every offender, one per line, without hints.
-    if (badInputs.length)
-      fail(
-        "run",
-        "usage",
-        files.length === 1 ? badInputs[0].message : badInputs.map((b) => `${b.file}: ${b.message}`).join("\n"),
-        files.length === 1 ? badInputs[0].hint : undefined,
-        o.json,
-      );
+  const badInputs: { file: string; message: string; hint?: string }[] = [];
+  for (let i = 0; i < files.length; i++) {
+    const refusal = scenarioInputRefusal(loaded[i], modelFlag, {
+      quiet: true,
+      ablateSkill: flags.ablateSkill,
+      unloadableBaseline: "skip",
+      searchCorpus: flags.searchCorpus !== undefined,
+    });
+    if (refusal) badInputs.push({ file: files[i], message: refusal.message, hint: refusal.hint });
   }
+  // One file keeps the message (and hint) executeScenario would have thrown, unprefixed; a batch names
+  // every offender, one per line, without hints.
+  if (badInputs.length)
+    fail(
+      "run",
+      "usage",
+      files.length === 1 ? badInputs[0].message : badInputs.map((b) => `${b.file}: ${b.message}`).join("\n"),
+      files.length === 1 ? badInputs[0].hint : undefined,
+      o.json,
+    );
   // A pinned config_dir belongs to one run: --repeat would spend run 1 and have the marker refuse run 2.
   if (repeatN !== undefined && repeatN > 1)
     for (const scenario of loaded) {

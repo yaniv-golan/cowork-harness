@@ -3,7 +3,7 @@ import { isUsageLimit, matchesTerminalUsageLimitText, SUBAGENT_USAGE_LIMIT } fro
 import { randomUUID, createHash } from "node:crypto";
 import type { AgentSession, AgentEvent, DecisionRequest, DecisionResponse, QSpec } from "../agent/session.js";
 import type { UsageInfo, CostInfo, RunResult, InfraErrorSource, ToolCallRecord } from "../types.js";
-import { SKILL_RESULT_ASSERT_CAP } from "../types.js";
+import { isDeliveredDeny, SKILL_RESULT_ASSERT_CAP } from "../types.js";
 
 /** A frozen cassette row's `source` is untrusted text — narrow it before it reaches the typed record,
  *  so an unrecognized value falls back to the fatal class rather than silently minting a new severity. */
@@ -427,6 +427,8 @@ interface DecisionRecord {
   name: string;
   decision: string;
   by: string;
+  /** The `tool_use` a permission decision answered, when the request named one. */
+  toolUseId?: string;
   // The gate's request_id (UUID), set on every decision recordDecision() pushes (question/permission/
   // dialog/elicit). Originally added so `trace --view questions` can pair a persisted decision to its
   // events.jsonl row BY ID rather than positionally — a retried/duplicated gate event would otherwise
@@ -1418,6 +1420,11 @@ export class Run {
         d.decision = "undelivered";
       }
     }
+    // After the reconciliation above, so a deny whose frame never reached the agent leaves no mark on its call.
+    const deniedToolUseIds = new Set(this.rec.decisions.filter(isDeliveredDeny).map((d) => d.toolUseId));
+    for (const call of this.rec.toolCalls) {
+      if (call.toolUseId !== undefined && deniedToolUseIds.has(call.toolUseId)) call.denied = true;
+    }
     // Wall-clock timeout override: the kill above surfaces as an "exit" error (or ends the stream), but the
     // authoritative reason is the timeout. Set it here so it wins over the exit/no_result labeling below.
     if (timedOut) {
@@ -1712,13 +1719,21 @@ export class Run {
           decision: "undelivered",
           by: "none",
           requestId: req.id,
+          toolUseId: toolUseIdOf(req),
           rationale: `fail-closed deny not delivered (${delivery.reason ?? "unknown"})`,
         });
       } else {
         // Carry requestId so the post-loop EPIPE reconciliation (which only flips decisions carrying a
         // requestId) can downgrade this to "undelivered" if the queued frame later fails its async stdin
         // write — the same ground-truth path the normal decisions already get, previously skipped here.
-        this.rec.decisions.push({ kind: kindOf(req), name: nameOf(req), decision: "abstain→deny", by: "none", requestId: req.id });
+        this.rec.decisions.push({
+          kind: kindOf(req),
+          name: nameOf(req),
+          decision: "abstain→deny",
+          by: "none",
+          requestId: req.id,
+          toolUseId: toolUseIdOf(req),
+        });
       }
       return;
     }
@@ -1732,6 +1747,8 @@ export class Run {
         name: nameOf(req),
         decision: "undelivered",
         by: decided.by,
+        requestId: req.id,
+        toolUseId: toolUseIdOf(req),
         rationale: `answer not delivered (${delivery.reason ?? "unknown"})`,
       });
     } else if (isDecisionKindMismatch(req, decided.response, "permission")) {
@@ -1744,6 +1761,8 @@ export class Run {
         name: nameOf(req),
         decision: "mismatch→deny",
         by: decided.by,
+        requestId: req.id,
+        toolUseId: toolUseIdOf(req),
         rationale: "decider returned a mismatched response kind",
       });
     } else if (!skipRecord) {
@@ -1810,6 +1829,7 @@ export class Run {
         decision: behavior ?? "?",
         by,
         requestId: req.id,
+        toolUseId: req.toolUseId,
         // The LLM decider's model and effort, as on a question gate (absent for every other source).
         ...(model !== undefined ? { model } : {}),
         ...(effort !== undefined ? { effort } : {}),
@@ -2002,8 +2022,27 @@ function isDecisionKindMismatch(req: DecisionRequest, resp: DecisionResponse, co
   return true;
 }
 
+/** The `decisions[]` rows a RunResult carries. One projection, so a new row field cannot reach only some lanes. */
+export function decisionRows(decisions: DecisionRecord[]): RunResult["decisions"] {
+  return decisions.map((d) => ({
+    kind: d.kind,
+    name: d.name,
+    decision: d.decision,
+    by: d.by,
+    requestId: d.requestId,
+    ...(d.toolUseId !== undefined ? { toolUseId: d.toolUseId } : {}),
+    model: d.model,
+    ...(d.effort !== undefined ? { effort: d.effort } : {}),
+    detail: d.detail,
+    rationale: d.rationale,
+    questions: d.questions,
+  }));
+}
 function kindOf(req: DecisionRequest): DecisionRecord["kind"] {
   return req.kind === "permission" ? "tool" : (req.kind as DecisionRecord["kind"]);
+}
+function toolUseIdOf(req: DecisionRequest): string | undefined {
+  return req.kind === "permission" ? req.toolUseId : undefined;
 }
 function nameOf(req: DecisionRequest): string {
   return req.kind === "permission" ? req.tool : req.kind === "question" ? "AskUserQuestion" : req.kind;

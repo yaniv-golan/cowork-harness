@@ -195,7 +195,7 @@ export type ErrCode =
 /** Additive extras for the error envelope. `error` fields merge into the `error` object beside the
  *  covered `category`/`message`/`hint` (typed so they cannot collide with them); `payload` keys sit at the top level
  *  beside `results`, so a refusal that REPLACES a payload envelope can keep the findings that payload would
- *  have carried (a directory `record --dry-run`'s `broken[]` / `inputErrors[]` / `refusals[]`). */
+ *  have carried (a directory `record --dry-run`'s `broken[]` / `refusals[]`). */
 export interface JsonErrorExtras {
   error?: { code?: ErrCode; budget?: BudgetStatus };
   payload?: Record<string, unknown>;

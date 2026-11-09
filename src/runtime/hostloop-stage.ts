@@ -54,12 +54,12 @@ export function stageHostLoopWorkspace(plan: LaunchPlan, mntHost: string, fixtur
         throw new BoundaryError(`cowork-harness: staged mount path "${mt.mountPath}" resolves outside the session tree (symlink escape)`);
       if (existsSync(mt.hostPath)) {
         const f = mt.stageFilter ?? null; // uploads are single files; plugins carry stageFilter from plan-build
-        // A host input keeps its symlinks as written (a relative in-tree link stays relative), exactly as the hashed
-        // snapshot holds them; without this Node rewrites each link to an absolute pointer into the snapshot.
+        // Every mount keeps its symlinks as written: a relative in-tree link stays relative, as a host input's hashed
+        // snapshot holds it. Without this Node rewrites each link to an absolute host pointer that dangles in the sandbox.
         cpSync(mt.hostPath, dest, {
           recursive: true,
           dereference: false,
-          ...(mt.hostInputKey ? { verbatimSymlinks: true } : {}),
+          verbatimSymlinks: true,
           ...(f ? { filter: f } : {}),
         });
       } else {

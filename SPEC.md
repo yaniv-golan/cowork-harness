@@ -511,9 +511,8 @@ nothing to verify — and keeps replaying green.
   hostloop-only so a wrong tier fails both too — no combination produces a both-pass.
 - **A `tool_not_called` / `subagent_tool_absent` (or `tool_called` with `count: {max: 0}`, the same negative) naming a tool the tier does not serve is REFUSED**, by
   `run` / `skill` / `record`, before spawning and before the run directory is created (exit 2 on
-  `run`/`skill`; `run <dir/>` without `--repeat` checks every scenario before the first one runs). The
-  `record --dry-run` previews REPORT it under `inputErrors[]` rather than refusing it (exit code and `ok`
-  unchanged, §11). `hostloop` replaces `Bash` and
+  `run`/`skill`, `--repeat` included; `run <dir/>` and `record <dir/>` check every scenario before the first one
+  runs). The `record --dry-run` previews refuse it too, with exit 1 (§11). `hostloop` replaces `Bash` and
   `WebFetch` with `mcp__workspace__*` and removes `NotebookEdit`; `container` and `microvm` serve no
   workspace shell. A negative assertion naming one of those can never be violated, so it passes vacuously
   and verifies nothing. Like the contradiction refusals above this is a **command-level** refusal, not a
@@ -843,8 +842,7 @@ category and never replaces one; it is **absent** on every other error, so `erro
 **`error.code: "budget_stopped"`** and the payload's `stopped.reason: "budget"`, never `budget_exceeded`.
 When the refusal replaces a payload envelope, that payload's findings stay on the error envelope as the
 same top-level keys: a `record <dir/> --dry-run` refusal carries `dryRun`, `target`, `scenarios`,
-`skipped`, `broken[]`, `refusals[]` and `inputErrors[]`; a `record <file> --dry-run` refusal carries
-`inputErrors[]`; a real `record <dir/>` refusal carries `target`, `broken[]` and `skipped`; both `record <dir/>`
+`skipped`, `broken[]` and `refusals[]`; a real `record <dir/>` refusal carries `target`, `broken[]` and `skipped`; both `record <dir/>`
 refusals also carry `cases` under `--case`; an `eval` refusal
 carries the `plan` when one was computed before it (on a dry run, or a real eval with `--max-budget-usd`, whose
 plan is cost-only), and a dry run's refusal always carries `dryRun: true`. (Through 4.2.1
@@ -996,8 +994,8 @@ destination, a `plugins.config_dir` that is not a directory, an unsafe mount-nam
 upload's file name), a session `effort:` the schema rejects or the model does not offer, and a
 `--session-id` with characters outside `[A-Za-z0-9_-]` are refused as category `usage` (exit `2` on `run`/`skill`; `record` keeps its `1` for a
 refused recording), before the run directory is created, so a refused run leaves no run dir; `chat`
-makes the same check before it creates its run dir. `run <dir/>` (without `--repeat`, whose rollup reports
-such a scenario) checks every scenario's input paths and baseline name before the first one runs, and one
+makes the same check before it creates its run dir. `run <dir/>`, with or without `--repeat`, checks every
+scenario's input paths and baseline name before the first one runs, and one
 refusal names every offender (a single file keeps the unprefixed message and hint). `skill
 --dry-run` makes the same check, so its preview of such a path exits `2` — `--ablate-skill` included, since
 ablation drops the plugin from the run but the path is still the caller's input; an unresolved model is not
@@ -1006,11 +1004,12 @@ over its scenario's session, so both previews surface a bad input path; there it
 that loaded, so it exits `1` (and when the scenario also has a tier-vacuous assertion, the refusal names
 the vacuity, as the real `record` does). `record <dir/> --dry-run` makes the same check per scenario and
 lists each input the real record would refuse (a session file, an input path, effort or baseline name, a
-baseline file that does not load, or a tier-vacuous negative tool assertion) under `inputErrors[]` (`{file,
-message, hint?}`) in its payload, with a `⚠ input error:` stderr line that survives `--quiet`; `record <file>
---dry-run` reports a session file that cannot be read, and a tier-vacuous assertion alone, the same way. It is additive, so `ok` and the exit code
-do not change (such a scenario is a `failed` item on the real `record <dir/>`); a gate that wants it
-checks `.ok and (.inputErrors == [])`. The previews check existence and kind, not the git tracked-set
+baseline file that does not load, or a tier-vacuous negative tool assertion) under `refusals[]` (`{file,
+message, hint?}`), each with a `✗ refused:` stderr line that survives `--quiet`. Both forms, and the real
+`record`, name a session file that cannot be read before a tier-vacuous assertion. An unknown baseline name is a
+usage mistake: `record <file> --dry-run` and `record <dir/>`, real or dry run, exit `2` on one, before any spend.
+A directory's exit is `2` if any item names an unknown baseline, else `1` if any item is broken or refused, else
+`0`, and the real `record <dir/>` makes the same checks before its first spawn. The previews check existence and kind, not the git tracked-set
 filter, which only a real run applies. Under `COWORK_HARNESS_SOFT_MISSING` a missing source is
 excluded instead, and the preview
 prints the same exclusion warning the run prints. `verify-run` follows the same rule: a run dir that does
@@ -1045,8 +1044,8 @@ BEFORE the credential guard, so "does this file load" never depends on holding a
 record" reads a second file: to answer the model refusal, `--dry-run` also opens the scenario's session
 (the model resolves from `--model`, the session's `model:`, then `COWORK_HARNESS_MODEL`). A session that
 does not load is skipped by the model check, not refused by it; the input check answers it instead: a
-session file that cannot be read is reported under `inputErrors[]` (exit and `ok` unchanged), a session the
-schema rejects is refused like a bad input path, and the real record refuses both. On the real
+session file that cannot be read, and a session the schema rejects, are refused like a bad input path, as the
+real record refuses them. On the real
 `record <file>` the credential guard still comes first: with no credentials, `record` exits `2` (`runtime`,
 "no model credentials") before the model refusal can answer.
 A `record <dir/>` target keeps the same 1-vs-2 meaning at batch scale: a directory whose files all fail
@@ -1062,7 +1061,7 @@ batch-wide, so this arm knows it exactly) join `broken[]` in exiting `1`; the pa
 code, because a dir target takes no `--out` and the preview would be guessing the destination. Inputs the
 real record would refuse (a session file that cannot be read, an input path, effort or baseline name, a
 baseline file that does not load, a tier-vacuous assertion) are listed
-under `inputErrors[]`, which also leaves the exit code at `0` (see the input-path rule above).
+under `refusals[]` and exit `1`, or `2` when any item names an unknown baseline (see the input-path rule above).
 **`verify-cassettes` uses its OWN three-way split, not the `run`/`skill` meanings above:** `0` clean ·
 `1` verification RAN and found a real problem (any PII finding, any staleness finding whose
 `StalenessFinding.class` is NOT `unverifiable-*`, or scenario-prompt drift) · `2` usage · `3`

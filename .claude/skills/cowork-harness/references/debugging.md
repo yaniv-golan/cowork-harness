@@ -28,6 +28,7 @@ Docker, no re-record.
 |---|---|---|
 | **The skill misbehaved** | wrong output, an unexpected gate, a denied tool, an opaque crash | `inspect` — what did it produce? · `trace <run-dir> --view <view>` — what did it actually do (tools; gates are the questions view, as there is no gates view; the sub-agent tree is the dispatches view)? · `verify-run` — re-assert cheaply when only an assertion is wrong · `diff <old-run> <new-run>` — what changed since it worked · `chat` — reproduce it by hand |
 | **A green you don't trust** | an assert that may have tested nothing, a stale cassette, an auto-answered or decided gate | `replay --explain` — the evidence trail behind each *passing* assert · `replay --mutate` — perturbs a CAPPED SAMPLE of recorded JSON values (10/file, 50 total) and reports which perturbations NOTHING caught; the report names the sample size, so read it as a sample not a total (reporting only; never moves the verdict/exit code) · `lint` — assertions on the wrong CI lane / mixed-class keys · `verify-cassettes` — privacy + staleness over committed cassettes · the Gotchas landmine catalog — how a check passes vacuously · `run --repeat N` / `skill --repeat N` — did it pass, or pass once? · `stats` — flaky or expensive over time |
+| **A judge or grader call failed** | an assert reads `judge call FAILED (API 401, …)`, or `eval` stops at its credential check; often a stale key, such as an old one in `.env` | `cowork-harness doctor` — which credential the graders and the agent each use · the graders get `CLAUDE_CODE_OAUTH_TOKEN` alone when it is set, so a stale token fails even with a good API key · `COWORK_HARNESS_GRADER_AUTH=inherit` passes every key |
 
 A failed run also records `errorSource` (where the failure originated) and `stderrLogPath` (the captured
 agent stderr) — read those before re-running (`answer_channel_violation` means a run under `answer_channel: none`
@@ -141,7 +142,7 @@ decide which assertions from *Assertions: two orthogonal axes* in `assertions-gu
   `modelUsage[].costUSD`, which is what `trace --view usage` reports, so the two can differ),
   `usage` (`input_tokens`/`output_tokens`/`turns`), `toolDurations` (with `toolDurationsBasis`), `models`,
   `toolCalls` (every tool call in stream order: `name`, top-level `input` fields each capped at 10 KB, and
-  `origin` `main`/`subagent`/`unknown` — what the object form of `tool_called`/`tool_not_called` reads), `toolErrors`,
+  `origin` `main`/`subagent`/`unknown` — what the object form of `tool_called`/`tool_not_called` reads; `denied: true` means the agent received a deny answer to that call's permission request, which a hook block never sets; the footer's `denied: N` counts those answers), `toolErrors`,
   `redundantToolCalls`, `modelUsage`, `thinking`, `skillActivity`, `subagents[]` (prompt/`dispatchModel`/
   `resolvedModel`/output/`attributedSkillId`, `outputTruncated`, `referencesRead`, `reasoning`/`reasoningElided`),
   `context` (tools/mcpServers/availableSkills), `tasks`,
@@ -183,6 +184,8 @@ decide which assertions from *Assertions: two orthogonal axes* in `assertions-gu
   collection) is evidence **UNAVAILABLE**, not an empty run — `trace --view files` reports a loud
   UNAVAILABLE marker (`workspaceFilesRecorded: false` in JSON, and no phantom "removed" diff rows) and
   `inspect` prints `artifacts: UNAVAILABLE` (`artifactsRecorded: false`) instead of `artifacts (0):`.
+
+To grade `assertions[]` by hand, see [docs/debugging.md → Reading a run's assertions by hand](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/debugging.md#reading-a-runs-assertions-by-hand).
 
 ### Debugging with `chat`
 

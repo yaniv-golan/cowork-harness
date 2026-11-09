@@ -274,7 +274,7 @@ agent_max_turns: 500              # optional turn ceiling -> agent --max-turns; 
                                   # (distinct from the max_turns ASSERTION). Capped ⇒ result: error; see
                                   # allow_max_turns. Cap N: `max_turns: N` fits, `max_turns: N-1` fails a capped run.
 permission_mode: default         # default | acceptEdits | plan | bypassPermissions; omitted -> default (acceptEdits under device_bridge)
-permission_parity: cowork        # cowork (unscripted tool calls allowed) | strict (deny unscripted)
+permission_parity: cowork        # cowork (unscripted asks allowed) | strict (deny unscripted asks except Read/Glob/Grep, before the LLM/prompt decider)
 # answer_channel: none           # NOT Cowork: nobody answers the agent (--permission-prompts none; the agent then
                                   # offers no AskUserQuestion/EnterPlanMode/ExitPlanMode). Needs bypassPermissions +
                                   # a positive file assertion (file_absent doesn't count) + a

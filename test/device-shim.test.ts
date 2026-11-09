@@ -65,6 +65,15 @@ const grant = async (folder: string) => {
   await grantVisible("docker", name, [folder]);
 };
 const auditLines = () => readDeviceAudit(outDir).lines;
+// The deep test's tree is longer than PATH_MAX, so a removal that names it from the top fails with ENAMETOOLONG on
+// macOS. `rm` walks it one relative level at a time. It runs on the host: inside the container the shim refuses it.
+const DEEP_SEGMENT = "x".repeat(100);
+function removeDeepTree(top: string): void {
+  if (!existsSync(join(top, DEEP_SEGMENT))) return;
+  const r = spawnSync("rm", ["-rf", DEEP_SEGMENT], { cwd: top, encoding: "utf8", timeout: 60_000 });
+  if (r.status !== 0)
+    throw new Error(`could not remove the deep tree under ${top} (status ${r.status}, ${r.signal ?? r.error ?? "no signal"}): ${r.stderr}`);
+}
 
 const mount = (name: string, mode: Mount["mode"]): Mount => {
   const hostPath = join(root, "user", name);
@@ -112,7 +121,11 @@ describe.skipIf(!CAN)("the device image's delete refusal", () => {
   }, 600_000);
   afterAll(() => {
     if (name) spawnSync("docker", ["rm", "-f", name], { stdio: "ignore" });
-    if (root) rmSync(root, { recursive: true, force: true });
+    try {
+      if (host) removeDeepTree(join(host, "mnt", "proj"));
+    } finally {
+      if (root) rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("refuses rm of a staged file in a connected folder, keeps it, and logs the refusal", () => {
@@ -175,13 +188,13 @@ describe.skipIf(!CAN)("the device image's delete refusal", () => {
 
   it("a path too deep to name is placed by its directory: refused in a folder, allowed in /tmp", () => {
     const deep = (root: string) =>
-      `cd ${root} && for i in $(seq 1 45); do mkdir -p ${"x".repeat(100)} && cd ${"x".repeat(100)} || exit 9; done && touch f && rm f; echo rc=$?`;
+      `cd ${root} && for i in $(seq 1 45); do mkdir -p ${DEEP_SEGMENT} && cd ${DEEP_SEGMENT} || exit 9; done && touch f && rm f; echo rc=$?`;
     expect(sh(deep("/tmp")).out).toMatch(/rc=0/);
     const inFolder = sh(deep(`${HOME}/mnt/proj`)).out;
     expect(inFolder).toMatch(/rc=1/);
     expect(inFolder).toMatch(/Operation not permitted/);
     // Down there too, a missing file is missing and a directory is not unlinked as a file.
-    const down = `cd ${HOME}/mnt/proj && for i in $(seq 1 45); do cd ${"x".repeat(100)}; done`;
+    const down = `cd ${HOME}/mnt/proj && for i in $(seq 1 45); do cd ${DEEP_SEGMENT}; done`;
     expect(sh(`${down} && rm -f missing; echo rc=$?`).out).toMatch(/rc=0/);
     expect(sh(`${down} && mkdir -p dd && python3 -c 'import os; os.unlink("dd")' 2>&1`).out).toMatch(/IsADirectoryError/);
     expect(auditLines()).toContainEqual(

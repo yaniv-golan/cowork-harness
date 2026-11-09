@@ -526,8 +526,8 @@ describe.skipIf(!can)("cli --output-format json envelope + exit codes", () => {
   it("record --dry-run: single scenario prints plan and exits 0", () => {
     const cwd = mkdtempSync(join(tmpdir(), "cc-dryrun-"));
     // Include session: to avoid a parse error if parseScenarioFile has no default for that field.
-    writeIn(cwd, "s.yaml", "prompt: hi\nfidelity: container\nbaseline: latest\nsession: inline\n");
-    const r = spawnSync("node", [CLI, "record", "--dry-run", "s.yaml"], { encoding: "utf8", cwd });
+    writeIn(cwd, "s.yaml", 'prompt: hi\nfidelity: container\nbaseline: latest\nsession: "(inline)"\n');
+    const r = spawnSync("node", [CLI, "record", "--dry-run", "s.yaml", "--model", "claude-sonnet-5"], { encoding: "utf8", cwd });
     expect(r.status).toBe(0);
     expect(r.stderr).toMatch(/dry.run/i);
     expect(r.stderr).toMatch(/s\.yaml/);

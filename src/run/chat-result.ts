@@ -3,7 +3,7 @@ import type { HookFailureBlocks } from "./hook-failure-blocks.js";
 import { deriveModelProvenance } from "./model-provenance.js";
 import { join } from "node:path";
 import type { RunResult } from "../types.js";
-import { infraErrorsForResult, evidenceErrorsForResult, type RunRecord } from "./run.js";
+import { decisionRows, infraErrorsForResult, evidenceErrorsForResult, type RunRecord } from "./run.js";
 import { assembleRunResult } from "./assemble-run-result.js";
 import { apiRetriesFrom } from "./api-retries.js";
 import { classifyWorkspaceFilesWithHealth, deliverableArtifacts, trustedWorkspaceFiles } from "./artifacts.js";
@@ -105,18 +105,7 @@ export function buildChatResult(record: RunRecord, opts: ChatResultOpts): RunRes
     result: record.result,
     assertions: [],
     // ── informational (populated) ──
-    decisions: record.decisions.map((d) => ({
-      kind: d.kind,
-      name: d.name,
-      decision: d.decision,
-      by: d.by,
-      requestId: d.requestId,
-      model: d.model,
-      ...(d.effort !== undefined ? { effort: d.effort } : {}),
-      detail: d.detail,
-      rationale: d.rationale,
-      questions: d.questions,
-    })),
+    decisions: decisionRows(record.decisions),
     toolCounts: record.toolCounts,
     webSearches: record.webSearches.length ? record.webSearches : undefined,
     infraErrors: infraErrorsForResult(record),

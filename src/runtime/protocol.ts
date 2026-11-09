@@ -88,12 +88,12 @@ export function stageProtocolMounts(plan: LaunchPlan, work: string, workReal = r
     // counts ⇒ delivered == counted). Fall back to a fresh gitCpFilter for non-plugin mounts.
     if (existsSync(m.hostPath)) {
       const f = m.stageFilter ?? (gitModeEnabled() ? gitCpFilter(m.hostPath) : null);
-      // A host input keeps its symlinks as written (a relative in-tree link stays relative), exactly as the hashed
-      // snapshot holds them; without this Node rewrites each link to an absolute pointer into the snapshot.
+      // Every mount keeps its symlinks as written: a relative in-tree link stays relative, as a host input's hashed
+      // snapshot holds it. Without this Node rewrites each link to an absolute host pointer that dangles in the sandbox.
       cpSync(m.hostPath, dest, {
         recursive: true,
         dereference: false,
-        ...(m.hostInputKey ? { verbatimSymlinks: true } : {}),
+        verbatimSymlinks: true,
         ...(f ? { filter: f } : {}),
       });
     } else if ((process.env.COWORK_HARNESS_SOFT_MISSING ?? "") === "") {

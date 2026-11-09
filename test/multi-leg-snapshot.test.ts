@@ -258,7 +258,7 @@ describe.skipIf(!onMac)(`leg snapshot on macOS volumes${onMac ? "" : " (SKIPPED:
   };
   afterEach(() => {
     for (const m of images.splice(0)) execFileSync("/usr/bin/hdiutil", ["detach", "-force", m], { stdio: "ignore" });
-  });
+  }, 60_000);
   const treeAt = (base: string) => {
     const work = join(base, "work");
     mkdirSync(join(work, "outputs", "runs"), { recursive: true });
