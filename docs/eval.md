@@ -237,7 +237,7 @@ The header states what every number depends on:
 - **per arm, the invalid judge grades by cause** (`report.json`: `arms[].judgeInvalidCauses`): `call failed: API
   401` (by status; `no API status` for a timeout or a CLI that could not run) when the judge could not be called,
   `malformed` when it answered without a usable grade, and `cause not recorded` for a `runs.jsonl` written before
-  4.15.0, which kept no cause. When an assertion's every scored rep is a failed call, the summary says
+  5.0.0, which kept no cause. When an assertion's every scored rep is a failed call, the summary says
   `No assertion graded: the judge could not be called (…)`. After any failed call it prints the recovery: fix the
   graders' credential (`cowork-harness doctor`), then re-judge the kept runs (no agent run; it re-judges every judged assert of each listed run, the ones that
   graded fine included, at judge cost) with the

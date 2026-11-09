@@ -2492,7 +2492,7 @@ describe("eval: the served model", () => {
       writeEvalReport(out.evalDir);
       return readFileSync(join(out.evalDir, "report.md"), "utf8");
     };
-    const before = stampedBy("4.15.0");
+    const before = stampedBy("4.14.0");
     expect(before).toContain("pinned claude-sonnet-5 · served claude-sonnet-5-20251001 — the served id matches the pin");
     expect(before).toContain("by an earlier version");
     expect(before).not.toContain("pin the id the agent reports");

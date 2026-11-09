@@ -1813,7 +1813,7 @@ function recordedBuiltinPlugins(events: readonly string[]): Set<string> {
  *   - `agents[]`: no marker exists (rows are `{name, description, model}`), but every plugin agent is namespaced
  *     `<plugin>:<agent>`, so a bare name is never the plugin under test's. It is the agent's own, or a USER agent
  *     from the config dir: a session's pinned `plugins.config_dir` (its `agents/` load bare under
- *     `settingSources: ["user"]`), or the operator's own at a host-inheriting tier. Those are withheld too — a
+ *     `settingSources: ["user"]`). Those are withheld too — a
  *     deliberate over-reach on text that is not the plugin under test's and that no verdict reads.
  *   - either list: a `<plugin>:<name>` whose plugin the recording marks built-in (see recordedBuiltinPlugins).
  *  So the plugin under test's own agents, commands and skills (`<plugin>:<name>`, unmarked) and a scenario's

@@ -449,6 +449,10 @@ describe("scanHostInventory — skills[]", () => {
     expect(scanHostInventory(init({ skills: [...KNOWN_BUILTIN_SKILLS] }), "events[0]", [])).toEqual([]);
   });
 
+  it("does NOT flag the two built-ins host claude 2.1.319 lists", () => {
+    expect(scanHostInventory(init({ skills: ["schedule", "send-to-project"] }), "events[0]", [])).toEqual([]);
+  });
+
   it("flags a bare skill outside the built-in roster — a personal skill from the operator's config dir", () => {
     const f = scanHostInventory(init({ skills: ["deep-research", "my-private-notes"] }), "events[0]", []);
     expect(f.map((x) => x.sample)).toEqual(["my-private-notes"]);

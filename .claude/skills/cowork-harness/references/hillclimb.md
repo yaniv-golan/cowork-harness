@@ -1,6 +1,6 @@
 # `hillclimb` — the runner for a `/claude-api hillclimb` loop
 
-Tracks `cowork-harness 4.15.0` (baseline `desktop-4.23118.0`). It needs a `cowork-harness` whose
+Tracks `cowork-harness 5.0.0` (baseline `desktop-4.23118.0`). It needs a `cowork-harness` whose
 `hillclimb --help` lists `--skill` (help goes to stderr). The command reference is
 [docs/cli.md](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/cli.md); this is the part a loop needs
 while it runs. It covers `run`, `check`, `state-template`, `freeze-ref` and `regrade`.
@@ -164,7 +164,7 @@ one real call that checks the graders' credential before the first agent run), `
   `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_REMOTE`, `CLAUDE_CODE_HOST_AUTH_ENV_VAR`, else `ambiguous` — no tier
   reaches this through the environment: at container, microvm and hostloop the agent gets the token alone when it is
   set (`subscription`), and at protocol, with a key set, the key and not the token (`api_key`); hostloop rows from
-  before 4.15.0 with both set say `ambiguous`, and a managed `settings.json` key can reach it at any tier); the key is absent when the run recorded no credential frames. Summary:
+  before 5.0.0 with both set say `ambiguous`, and a managed `settings.json` key can reach it at any tier); the key is absent when the run recorded no credential frames. Summary:
   `billing_basis` is always present: the single recorded value, `"mixed"` when rows differ, or `"unrecorded"`
   when no row records one, beside `billing_rows_unrecorded`. Names only, never an account's identity. On
   `subscription`, `cost_usd` is a list-price estimate, not a charge.

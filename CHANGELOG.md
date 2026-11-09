@@ -6,10 +6,166 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-11-09
+
+### Breaking changes
+
+- **An input a run would refuse is now refused before any spend, on `run --repeat` and on `record`.** On `record`, a baseline
+  file that exists but does not load is a refusal of a scenario that loaded (exit 1 on every form), not an unknown
+  baseline name (exit 2); `run` exits 2 for both. To keep recording the rest of a directory past a bad item, fix or move that item.
+
+  | Form | Input | Before | Now |
+  |---|---|---|---|
+  | `run <file or dir/> --repeat N` | unknown baseline name, missing input path, tier-vacuous assertion | exit 1, `stoppedEarly: "error"` in the rollup | exit 2 before the first run, no run dir |
+  | `record <file> --dry-run` | unknown baseline name | exit 1 | exit 2 |
+  | `record <file> --dry-run` | unreadable `session:` file, tier-vacuous assertion | exit 0, reported | exit 1 |
+  | `record <file> --max-budget-usd` | unknown baseline name with cost history over the cap | exit 1, `budget_exceeded` | exit 2 |
+  | `record <file>`, real or `--dry-run` | unknown baseline name with no model pinned | exit 1, no model pinned | exit 2 |
+  | `record <dir/> --dry-run` | unknown baseline name | exit 0, reported | exit 2 |
+  | `record <dir/> --dry-run` | unreadable `session:` file, missing input path, tier-vacuous assertion | exit 0, reported | exit 1, in `refusals[]` |
+  | `record <dir/> --dry-run` | baseline file that does not load | exit 0, reported | exit 1, in `refusals[]` |
+  | `record <dir/>` | unknown baseline name | exit 1 for that item, after earlier items were paid for | exit 2 before the first spawn |
+  | `record <dir/>` | unreadable `session:` file, missing input path, tier-vacuous assertion | exit 1 for that item, after earlier items were paid for | exit 1 before the first spawn |
+  | `record <dir/>` | baseline file that does not load | exit 1 for that item, after earlier items were paid for | exit 1 before the first spawn |
+
+  Over the cap or with no model pinned, a known baseline still exits 1. On a directory, any unknown baseline name gives exit 2, else any broken or refused item gives exit 1, else exit 0. A
+  script reading `stoppedEarly` for one of the `run --repeat` inputs above now gets the usage error envelope;
+  `stoppedEarly: "error"` remains for an error mid-loop. `record --rerecord-stale` keeps its own pre-flight (model,
+  credential, shared `config_dir`, budget); any other bad item is reported when its turn comes.
+- **Eight environment variables moved into the `COWORK_HARNESS_` namespace:** `COWORK_LOCKDOWN`,
+  `COWORK_LIMA_INSTANCE`, `COWORK_LIMACTL`, `COWORK_VM_PROVISION_TIMEOUT_S`, `COWORK_VM_PROXY_PORT`, `COWORK_VM_GATEWAY`,
+  `COWORK_CONTAINER_RUNTIME` and `COWORK_SKIP_CAPABILITY_PROBE` are now `COWORK_HARNESS_LOCKDOWN` and so on. Setting
+  an old name to a non-empty value refuses every command except `--version` and help at startup (exit 2), naming the new one. The bare names that
+  stay are the agent and proxy overrides (`COWORK_AGENT_BINARY`, `COWORK_AGENT_IMAGE`, `COWORK_HOST_AGENT_BINARY`,
+  `COWORK_PROXY_IMAGE`), now all covered by the compatibility contract, and `COWORK_ARTIFACTS_ROOT`, which Desktop
+  sets.
+- **The `hostloop` agent no longer inherits your shell.** Like Desktop, it gets `PATH`, `HOME`, `LOGNAME`,
+  `SHELL`, `USER`, `TERM` and `CLAUDE_CODE_TMPDIR` from it, plus the names a session lists in `agent_env.passthrough`.
+  A plugin MCP server or hook that relied on another variable at `hostloop` needs it listed there. The API key and the OAuth
+  token never reach the agent together on any tier; at `protocol` an inherited `ANTHROPIC_AUTH_TOKEN` can sit beside
+  either.
+- **`ANTHROPIC_AUTH_TOKEN` works at `protocol` only.** A `run`, `skill`, `probe-dispatch`, `record`, `chat`
+  or multi-leg run at another tier with only it set is refused before it starts, and `doctor` reports it as a failure there. A
+  gateway that takes `ANTHROPIC_AUTH_TOKEN` runs at `protocol`; one that takes an API key also runs at `hostloop` with
+  `agent_env.passthrough: [ANTHROPIC_BASE_URL]`.
+- **`replay` grades every gate key against the recorded `controlOut`.** `question_*`, `gate_*`,
+  `hook_blocked`/`no_hook_blocked` and the path-denial keys are always content assertions now; before, a cassette
+  without `controlOut` dropped them with a warning. A decision in the events with no recorded answer (an unpaired
+  `hook_callback`, or a question or permission with no response) fails the replay as a truncated cassette.
+- **`rehash` no longer migrates; it checks each cassette's format is current.** It reports each one as current or
+  as needing a re-record, with the read refusal and its remedy, and rewrites nothing. It exits `0` (all current) or
+  `1`; the partial-migration `4` is gone. `--dry-run` and `--session` are still accepted and change nothing; the JSON
+  payload keeps `migrated` (always `0`).
+- **`fidelity: protocol` always gives the agent the run's own config dir, and needs a credential in the
+  environment.** The agent never reads your `~/.claude` any more, so your installed plugins, skills, hooks and MCP
+  servers can no longer answer in place of the one under test, and its session transcripts stay in the run dir. A
+  fresh config dir holds no login, so a run needs `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`),
+  `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` in the environment or a `.env`; a Keychain or `/login` session is not
+  used. Without one, `run` (a file, a directory, a `--matrix` or a `legs:` file), `eval` and `hillclimb run` refuse
+  before any run starts (`run` exits 2, naming every such scenario), `skill` and `chat` refuse before the agent
+  starts, and `doctor --tier protocol` reports the token as missing (`✗`) instead of the former warning. `critique`
+  (which runs at `container` or `hostloop`) now runs doctor's credential check for its tier before its task turn,
+  where a run with no usable credential used to reach the agent and end at "Not logged in".
+  `record`'s existing refusal without a credential in the environment (at every tier) now also covers a `legs:`
+  file, which used to reach its first leg. Machine-level managed settings are outside any config dir and still reach the
+  agent.
+- **A pinned `plugins.config_dir` is single-run.** The harness creates it (the path must not exist yet),
+  marks it, and reuses it only for the same run's later legs. An existing directory the harness
+  did not create for this run is refused, so a real Claude config is never written to. `run --repeat` (above 1),
+  `run --matrix` (more than one cell), `eval` and `hillclimb` refuse a pinned `config_dir` before the first run, and so do `run <dir/>`,
+  `record <dir/>` and `record --rerecord-stale` when two of their scenarios pin the same dir.
+- **`--resume` refuses a session manifest without its identity stamps** (`sessionId` and `fidelity`), where
+  it used to let one through with a warning. Start a fresh session, or delete the run dir and re-run with
+  `--session-id`.
+- **A rolling model alias is not a concrete pin.** An id ending in `-latest` or `-0` can roll to a new
+  snapshot mid-run, so `eval`, `hillclimb run` and `regrade` (including `--judge-model`) now refuse it before spending,
+  as they refuse `opus` or `best`. Pin the dated id: the agent reports it as `models[0]` in a run's `result.json`. On
+  `run`, which still accepts such a pin, a run whose main loop reports no live model now leaves `modelPinHonored`
+  unset instead of reading the usage key as the pin served.
+- **`eval` exits 1 on more outcomes.** A scheduled job with no record (the eval was interrupted, killed,
+  ended on a requested exit, or stopped on a grader failure) and an agent served more than one model across a
+  scenario's scored reps now exit 1, on `eval` and on `eval report`. An (arm, scenario) all of whose reps were
+  excluded for any reason (a skill that changed mid-eval, a pin the agent was not served, another judge prompt, as well
+  as infrastructure, a refused search or a pool mismatch) now exits 1 too, and so does one every rep of which has an
+  invalid judge grade on some assertion (`judge_invalid`: a server error, a timeout or a malformed reply): it compares
+  nothing.
+- **`hillclimb run` exits 1 when it stops on a grader failure or a variant is served two models for one pin**
+  (see Added). A later pass of such a variant is refused (exit 2) unless `--allow-model-split`.
+- **`--dry-run` cost estimates survive a baseline change.** A scenario with no priced run on its own
+  baseline is now priced from the nearest older baseline with priced runs (else the nearest newer one), labelled
+  `priced from baseline <b>` (`pricedFromBaseline` in JSON). This changes the basis of the covered `plan.cost` keys
+  for such a scenario (`meanUsd`, `p50Usd`, `p95Usd`, `worstObservedUsd`, `pricedRuns`, `lowerBound`, `unpriced[]`):
+  it is priced where it used to be unpriced, and the total is a LOWER BOUND only when a scenario has no priced run
+  on any baseline.
+- **Removed: the `migrate-run-dir` command.** A run dir from before the per-turn `turns/<N>/` layout is still refused
+  by name, and `trace` still reads it. Convert one with `npx cowork-harness@4 migrate-run-dir`: a dry run by default,
+  `--write` to apply. Running `migrate-run-dir` on this version exits 2 and names that command.
+- **Removed: baselines `desktop-1.11847.5`, `desktop-1.12603.1` and `desktop-1.13576.1`, and the layouts only they
+  used.** The oldest supported baseline is `desktop-1.14271.0`. A scenario naming one of these or any older version, or
+  an absolute-path baseline file for an older Desktop, is refused (exit 2) naming that baseline. A cassette recorded
+  against one still replays, with a staleness warning, and `verify-cassettes` fails it as stale (exit 1); re-record
+  it. The `mnt/.projects/<name>` folder mounts, `.local-plugins/cache/` plugin mounts and the static host-loop prompt are gone.
+- **`inputErrors[]` is gone from `record --dry-run`.** Its findings are refusals now: `refusals[]` on a
+  directory, the error envelope on a single file. A gate written as `jq -e '.ok and (.inputErrors == [])'` fails on every
+  dry run, passing ones included; it becomes `jq -e '.ok'`, or the exit code.
+- **Cassettes below v12, or without `controlOut` or `userVisibleRoots`, are no longer read.** `replay`
+  refuses one (exit 2) and `verify-cassettes` reports it as could-not-verify (exit 3), naming the remedy:
+  for v10/v11, run `npx cowork-harness@4 rehash <dir/>` on it, or re-record it; for v9 and below, or a missing
+  field, re-record it. `record <dir/> --rerecord-stale` picks up every such cassette and re-records it from the
+  scenario file it names; with no scenario file on disk it fails naming the `record <scenario.yaml> --out <path>`
+  to run, since there is no readable embedded snapshot to fall back on.
+- **Removed: the pre-v12 skill-hash algorithm.** Digests are computed only the jcs1 way. No cassette this build reads
+  carries the older ones; a kept run dir that does is reported as not comparable (re-record), as before.
+- **Removed: `schema/cassette.v9.json`, `cassette.v10.json` and `cassette.v11.json`.** A cassette whose `$schema` names one
+  of them is below the read floor; its `$schema` URL now returns 404.
+- **Removed: `COWORK_MANAGED_CONFIG` and `COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE`.** Each is refused at startup
+  (exit 2) when set to a non-empty value, naming what replaced it: `protocol` is always sealed, and a pinned
+  `plugins.config_dir` is single-run.
+- **Removed: the `allow_l0_host_config_contamination` modifier, the `l0_host_config_contamination` verdict signal and
+  the `RunResult.l0HostConfigContamination` field.** A `protocol` run can no longer read your config dir, so there is
+  nothing left to signal. To test against your installed set, use `plugins.from_host`. A scenario that still uses the
+  modifier is refused at load, naming it; a cassette that
+  froze it is refused as re-recordable, so `record <dir/> --rerecord-stale` re-records it once the line is deleted
+  from the scenario.
+
+### Upgrade notes
+
+- **Cassettes: re-record — the spawn path moved.** Re-record every cassette on this major, as `docs/cassette.md` asks.
+  `protocol` now runs on the run's own config dir and sends the session's flags, and `hostloop` builds its environment from
+  named keys. `verify-cassettes` cannot see either, because a cassette does not record its spawn. `latest` moves to
+  `desktop-4.23118.0`, so a cassette recorded through it reports `[stale] baseline moved 4.16336.0 → 4.23118.0 since
+  record — re-record`. A cassette below v12, or without `controlOut` or `userVisibleRoots`, is refused (see Breaking
+  changes). `record <dir/> --rerecord-stale` handles these. A recording using `allow_max_turns` stamps format 19; every
+  other recording stamps what it did. The example and test-fixture cassettes in this repository are re-recorded.
+- **`protocol` runs change on an unchanged scenario.** The session's `agent_max_turns`, thinking, `--thinking-display`
+  and `--session-id`/`--resume` now reach the agent. A protocol scenario whose session sets `agent_max_turns` can now end
+  `error_max_turns`; add `allow_max_turns: true` if the cap is intended. A protocol `--resume` now resumes. Protocol runs
+  now carry a fixed thinking budget (`--max-thinking-tokens 31999`, or `--thinking disabled`), so a `stats` or `hillclimb`
+  history of protocol runs from before this version is not comparable. `eval` is unaffected: it compares arms inside
+  one version. `hillclimb` rows from protocol runs on `ANTHROPIC_AUTH_TOKEN` now record `meta.billing.basis` `ambiguous`
+  where they recorded `subscription`, so `billing_basis` can read `"mixed"` across the upgrade.
+- **The packaged Action follows `latest`.** `uses: yaniv-golan/cowork-harness@v4` with `version: latest`, or no
+  `version:` input, installs CLI 5.0.0 once it is promoted. To stay on 4.x, set `version: "^4"`.
+- **The graders now use the agent's credential when `CLAUDE_CODE_OAUTH_TOKEN` is set.** The judges, the LLM decider
+  and the critique evaluator no longer receive `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` alongside the token. If
+  you had both set, grading moves off the API key to the token's billing. `COWORK_HARNESS_GRADER_AUTH=inherit`
+  restores the previous behaviour. Without the token nothing changes.
+- **With `CLAUDE_CODE_OAUTH_TOKEN` set, the hostloop agent no longer gets `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or
+  `ANTHROPIC_CUSTOM_HEADERS`.** It already authenticated with the token, so where a run is billed does not change. Only the environment is covered: a managed `settings.json` (an `env` entry or
+  `apiKeyHelper`) can still hand the agent a key. The message `hillclimb run` prints after a run at hostloop could not
+  authenticate says which credential the agent is given. Two things you may see:
+  - hillclimb rows from hostloop runs with both the token and the key set now record `meta.billing.basis`
+    `subscription` where they recorded `ambiguous`, so a variant's `summary.json` `billing_basis` can read `"mixed"`
+    across runs from before and after the upgrade;
+  - a setup that sends the token through a proxy needs `ANTHROPIC_BASE_URL` listed in `agent_env.passthrough`, and a proxy
+    that needs a header from `ANTHROPIC_CUSTOM_HEADERS` stops working at hostloop: that name cannot be listed while the
+    agent is given the token. Without the token the API key is still given, and `ANTHROPIC_BASE_URL` and
+    `ANTHROPIC_CUSTOM_HEADERS` each need listing in `agent_env.passthrough` (see Breaking changes).
+
 ### Added
 
 - **Baseline for Claude Desktop 4.23118.0 (agent 2.1.317, unchanged).** `desktop-4.23118.0` is the new newest baseline.
-  It has not had a live pass. It was observed from one scheduled task and no ordinary session, so what only an
+  It was observed from one scheduled task and no ordinary session, so what only an
   ordinary session shows (`send_user_message`, `AskUserQuestion`, the role picker, the typed-artifact tools) is read
   from Desktop's code, not observed; `npm run preflight` prints this. The spawn environment, the egress allowlist, the
   sub-agent append fingerprints and every pinned gate are the same as `desktop-4.16336.0`. The one change that reaches
@@ -21,17 +177,12 @@ All notable changes to this project are documented here. The format is based on
 - **Two tool descriptions on Desktop's remote-devices server moved.** `device_commit_files` changes a size unit's
   spelling on two branches. `device_request_folder_access` keeps its texts, but account type now picks among them where
   a gate did. The harness serves neither tool; the baseline records both.
-- **Cassettes: re-stamp or re-record.** `latest` moves to `desktop-4.23118.0`, so a cassette recorded through
-  `baseline: latest` reports `[stale] baseline moved 4.16336.0 → 4.23118.0 since record — re-record`; re-stamping
-  `fingerprint.baseline` clears that. The agent is unchanged, so this move adds no `agent-version:` note, and the served
-  prompt assets are unchanged, so `promptAssetsHash` is the same. The bundled cassettes are re-stamped.
 - **`sync` reads the shapes Desktop 4.23118.0 moved.** Six refusals were `sync`'s own extractors meeting refactored code:
   the Artifact predicates and the verdict check are read from the shared chunk they moved to; the auto-memory resolver
   is read through its new wrapper, where a scheduled task on a deployment that cannot sync memory remotely gets a
   marker the wrapper reads as the same null, and only Desktop's memory-tools gate sees it; the spawn call may hold back
   its first turn while a plugin's MCP reconnect is pending; and the VM agent staging step may turn a failed staging
   into a not-ready result, in the one handler shape `sync` admits. Each form is pinned, so a real change still refuses.
-
 - **`toolCalls[].denied` and a `denied: N` footer count show which calls the agent was refused.** `denied: true` means
   the agent received a deny answer to that call's permission request. `decisions[].toolUseId` names the call a
   permission decision answered. A hook block and the agent's own `permission_denied` event never set it; see
@@ -57,7 +208,6 @@ All notable changes to this project are documented here. The format is based on
 - **`lint` on a session file** reports it once, as INFO `not-a-scenario`, and checks nothing else, so
   `lint examples/sessions/` exits 0. Before, it reported every session key as an unknown scenario key, and the
   loader check rejected the file.
-- **`docs/session.md` lists which session keys reach the agent as flags, per tier.**
 - **`plugins.from_host`** runs a session against the plugins and skills installed on your machine. `true` takes
   every user-scope plugin enabled in your Claude config dir (`CLAUDE_CONFIG_DIR`, else `~/.claude`) and every skill in
   its `skills/`; `{plugins: [name@marketplace], skills: [name]}` takes only those. Each input is copied into the run
@@ -66,8 +216,8 @@ All notable changes to this project are documented here. The format is based on
   the run starts, as is `from_host` together with `plugins.config_dir` or with `--resume`. `result.json` records what
   was taken as `hostInputs` (keys, versions and hashes, never contents); `hillclimb` rows carry its set hash as
   `meta.host_inputs`, and `eval`'s `runs.jsonl` as `hostInputs`. A cassette recorded with it freezes the same field.
-  Its names are your installed inventory, so `record` refuses to write such a cassette into a repo-visible path at
-  any tier, and `verify-cassettes` reports each name as a host-inventory finding.
+  Its names are your installed inventory, so at any tier `record` refuses to write such a cassette to a new repo-visible path
+  (re-recording an existing one only warns, and `--allow-host-inventory-fixture` overrides the refusal), and `verify-cassettes` reports each name as a host-inventory finding.
 - **`verify-cassettes --host-inputs`** compares a `from_host` cassette's recorded `hostInputs` with this machine's
   installed set and reports a difference as a note. **`--strict`**, valid only with `--host-inputs`, makes that
   difference a failure (exit 1); it does not escalate any other note, and together with `--skip-staleness` it is a
@@ -75,10 +225,9 @@ All notable changes to this project are documented here. The format is based on
   `--host-inputs`, the installed names a cassette carries only as its recorded inputs are one note rather than
   privacy findings, so the check can pass on the machine they come from; every other finding still fails, and a plain
   `verify-cassettes` still fails on those names.
-
 - **`eval` and `hillclimb run` stop when a grader fails the way every later grade would.** A judge or LLM decider
-  call refused for its credential (401 or 403), for an unknown model (404), or for a spent quota (a 429 the API marks
-  not retryable) would fail every remaining job the same way, so no further job starts. Jobs already running finish and
+  call refused for its credential (401 or 403), for an unknown model (404), or for a spent quota (a 429 the harness
+  reads as not retryable) would fail every remaining job the same way, so no further job starts. Jobs already running finish and
   keep their records. A server error, a timeout or an ordinary rate limit never stops a run. `eval` records why in
   `<evalDir>/stopped.json`, reports it as `stoppedEarly` (`{reason: "grader_credential", source, status?, atJob}`,
   else `null`), names it in `report.md`, and exits 1; `eval report` reads the same file. `hillclimb run` keeps the rows
@@ -110,8 +259,8 @@ All notable changes to this project are documented here. The format is based on
   variant's plugin snapshot (`sh -c`, on this host with your full environment, plus `COWORK_HARNESS_VARIANT_DIR`
   and `COWORK_HARNESS_VARIANT_ID`). A
   non-zero exit, a signal or `--gate-timeout` (default 600 s) writes a `gate_failed` errors row per open slot at no
-  agent cost and exits 1. The command's text joins the harness sha, so it needs `--approve-harness`; only its hash
-  is recorded.
+  agent cost and exits 1. The command's hash joins the harness sha, so it needs `--approve-harness`; only the hash is
+  recorded (`harness_gate_sha` in `_state.json`).
 - **`hillclimb run --max-budget-usd <x>`** caps one pass: no slot starts whose estimate would take the pass's spend,
   plus the slots in flight, past `x`. A stop exits 1 with `stopped.reason: "budget"` and `error.code:
   "budget_stopped"`, and keeps the rows already written; a cap below every open slot's estimate is refused before
@@ -126,227 +275,6 @@ All notable changes to this project are documented here. The format is based on
   for one pin.
 - **`eval report --headroom [--arm <label>]`** lists the rows an arm passed on some reps but not all, most headroom
   first, and any row with fewer than 4 reps. It never changes the exit code.
-
-### Fixed
-
-- **A relative symlink inside a connected folder, project or scenario plugin stays relative when staged.** On `container`, `microvm`, `hostloop` and
-  `protocol` it was rewritten to an absolute host path, which dangles in the sandbox.
-- **`record --rerecord-stale` no longer overwrites a cassette written by a newer cowork-harness.** Such a cassette
-  can read as stale (its baseline moved), and the re-record then replaced it with this build's recording. It is now
-  reported as failed (`stamped vN, newer than this build (vM) — upgrade cowork-harness to re-record`) and left
-  untouched, and the batch does not exit 0; the same holds for a multi-leg cassette with such a leg.
-- **At `protocol`, the session's agent flags now reach the agent.** The protocol tier built its own command line and
-  dropped `--max-turns`, the thinking flags, `--thinking-display`, and `--session-id`/`--resume`. So
-  `agent_max_turns` was recorded but never applied, and `skill --session-id … --resume` at protocol started a new
-  conversation. Every tier now builds these flags from one place. The host CLI accepts each of them. Protocol runs
-  now also pass `--max-thinking-tokens 31999` (or `--thinking disabled`), as the other tiers and Cowork do.
-- **A rare hang at exit on Node 24 and later.** Commands no longer end the process with `process.exit` from inside
-  their own code, which on some Node 24+ builds could deadlock inside the exit itself. A command now sets its exit
-  code and the process ends once its work is done. If something still holds the process 5 seconds after the command
-  finished, it exits anyway with the same code and names what was holding it on stderr
-  (`::warning:: [exit] the event loop was still busy …`). Exit codes and output are unchanged, for
-  `cowork-harness` and for critique's module run directly (`node dist/critique/command.js`).
-- **`prune` reports every usage error as a JSON envelope under `COWORK_HARNESS_OUTPUT_FORMAT=json`**, as other
-  commands do. Before, each printed only the plain message. prune has no `--output-format` flag. The text form is
-  unchanged.
-
-- **An undated model pin is honored when the agent is served its dated snapshot.** The agent keys its usage by the id
-  it was asked for and reports the dated id it was served, so a run pinned to `claude-haiku-4-5` and served
-  `claude-haiku-4-5-20251001` was read as not honoring its pin. `eval` excluded such reps, its history counted a
-  judge pinned and served the same way as another model, and `hillclimb` wrote them as `serving_substitution` errors and counted the main
-  model's own spend as another model's. One matcher now decides every pin comparison: a dated id matches only itself,
-  and an undated id also matches its dated snapshots. An eval rep's verdict is recorded when it runs, so an eval
-  recorded before this version keeps its `model_mismatch` reps: re-run it. Its `report.md` says so when the served id
-  matches the pin; on an eval run by this version, the same case points at `modelFallbacks` instead. `hillclimb` recovers on its next pass.
-- **A `semantic_pairwise` assert makes no further judge call in a run once one has failed the way every later call
-  would.** A later metric-only comparison is recorded `invalid` ("judge not called: an earlier comparison's call
-  failed …"), and a gating one makes the assert judge-invalid, with the same `judgeError`.
-
-### Changed
-
-- **Breaking: an input a run would refuse is now refused before any spend, on every form.** On `record`, a baseline
-  file that exists but does not load is a refusal of a scenario that loaded (exit 1 on every form), not an unknown
-  baseline name (exit 2); `run` exits 2 for both. To keep recording the rest of a directory past a bad item, fix or move that item.
-
-  | Form | Input | Before | Now |
-  |---|---|---|---|
-  | `run <file or dir/> --repeat N` | unknown baseline name, missing input path, tier-vacuous assertion | exit 1, `stoppedEarly: "error"` in the rollup | exit 2 before the first run, no run dir |
-  | `record <file> --dry-run` | unknown baseline name | exit 1 | exit 2 |
-  | `record <file> --dry-run` | unreadable `session:` file, tier-vacuous assertion | exit 0, reported | exit 1 |
-  | `record <file> --max-budget-usd` | unknown baseline name, cost history over the cap | exit 1, `budget_exceeded` | exit 2 |
-  | `record <file>`, real or `--dry-run` | unknown baseline name, no model pinned | exit 1, no model pinned | exit 2 |
-  | `record <dir/> --dry-run` | unknown baseline name | exit 0, reported | exit 2 |
-  | `record <dir/> --dry-run` | unreadable `session:` file, missing input path, tier-vacuous assertion | exit 0, reported | exit 1, in `refusals[]` |
-  | `record <dir/> --dry-run` | baseline file that does not load | exit 0, reported | exit 1, in `refusals[]` |
-  | `record <dir/>` | unknown baseline name | exit 1 for that item, after earlier items were paid for | exit 2 before the first spawn |
-  | `record <dir/>` | unreadable `session:` file, missing input path, tier-vacuous assertion | exit 1 for that item, after earlier items were paid for | exit 1 before the first spawn |
-  | `record <dir/>` | baseline file that does not load | exit 1 for that item, after earlier items were paid for | exit 1 before the first spawn |
-
-  On a directory, any unknown baseline name gives exit 2, else any broken or refused item gives exit 1, else exit 0.
-- **Breaking: eight environment variables moved into the `COWORK_HARNESS_` namespace:** `COWORK_LOCKDOWN`,
-  `COWORK_LIMA_INSTANCE`, `COWORK_LIMACTL`, `COWORK_VM_PROVISION_TIMEOUT_S`, `COWORK_VM_PROXY_PORT`, `COWORK_VM_GATEWAY`,
-  `COWORK_CONTAINER_RUNTIME` and `COWORK_SKIP_CAPABILITY_PROBE` are now `COWORK_HARNESS_LOCKDOWN` and so on. Setting
-  an old name to a non-empty value refuses every command at startup (exit 2), naming the new one. The bare names that
-  stay are the agent and proxy overrides (`COWORK_AGENT_BINARY`, `COWORK_AGENT_IMAGE`, `COWORK_HOST_AGENT_BINARY`,
-  `COWORK_PROXY_IMAGE`), now all covered by the compatibility contract, and `COWORK_ARTIFACTS_ROOT`, which Desktop
-  sets.
-- **Breaking: the `hostloop` agent no longer inherits your shell.** Like Desktop, it gets `PATH`, `HOME`, `LOGNAME`,
-  `SHELL`, `USER`, `TERM` and `CLAUDE_CODE_TMPDIR` from it, plus the names a session lists in `agent_env.passthrough`.
-  A plugin MCP server or hook that relied on another variable at `hostloop` needs it listed there. The API key and the OAuth
-  token never reach the agent together on any tier; at `protocol` an inherited `ANTHROPIC_AUTH_TOKEN` can sit beside
-  either.
-- **Breaking: `ANTHROPIC_AUTH_TOKEN` works at `protocol` only.** A `run`, `skill`, `probe-dispatch`, `record`, `chat`
-  or multi-leg run at another tier with only it set is refused before it starts, and `doctor` reports it as a failure there. A
-  gateway that takes `ANTHROPIC_AUTH_TOKEN` runs at `protocol`; one that takes an API key also runs at `hostloop` with
-  `agent_env.passthrough: [ANTHROPIC_BASE_URL]`.
-- **`record`, `chat` and `probe-dispatch` check for a credential before they start,** as `run` does, each scenario at
-  its own tier, and every tier's agent spawn checks it again.
-- **The `protocol` agent no longer receives `CLAUDE_CODE_SESSIONS_OAUTH_TOKEN`** from your environment.
-- **The cassette privacy scan no longer reports the scenario's own plugin's MCP servers as `host-inventory`.** This
-  applies to every cassette, not only `plugins.from_host` ones: a server named `plugin:<name>:<server>` is part of the
-  fixture when `<name>` is a plugin the recording declares (or a `from_host` input). Any other plugin's server is still
-  a finding.
-- **Cassette format 19.** A recording whose `assert:` uses `allow_max_turns` stamps 19; every other recording stamps
-  what it did before. A cassette also freezes `turnCap` and `timeout`. An older harness refuses a v19 cassette.
-- **`hillclimb` passes its `--timeout-s` ceiling to the run as its budget** (`timeout.source: runner`) instead of
-  lowering the scenario's `timeout_ms`, so an attempt's scenario is the one the loop was given.
-- **`skill --dry-run` previews `--timeout` as `timeout: {ms, source: "flag"}`**, the shape `record --dry-run` and
-  `result.json` use, instead of a scenario `timeout_ms`.
-- **`run` names the scenario key or session field for a `skill`-only flag it rejects** (for example
-  `--allow-stall → assert: - allow_stall: true`).
-- **The `search_corpus_*` record refusal no longer names a cassette version.**
-- **The test suite's stub agent runs on the sealed config directory.** It now carries a fixed fake token, the
-  credential that selects the protocol tier's managed config directory every real run uses, instead of forcing the
-  unsealed branch.
-- **The live test lane looks up its token once, for every live suite**: the exported variable, then
-  `COWORK_LIVE_DOTENV`, then `~/.cowork-harness-token`, then the repository's `.env`. Before, two suites read the
-  `.env` and only one read `COWORK_LIVE_DOTENV`, so the others could skip on a machine that had a token.
-- **CI's Node 22 floor job names what keeps the test runner alive after the run, and logs per-file test times.**
-- **Breaking: `replay` grades every gate key against the recorded `controlOut`.** `question_*`, `gate_*`,
-  `hook_blocked`/`no_hook_blocked` and the path-denial keys are always content assertions now; before, a cassette
-  without `controlOut` dropped them with a warning. A decision in the events with no recorded answer (an unpaired
-  `hook_callback`, or a question or permission with no response) fails the replay as a truncated cassette.
-- **Breaking: `rehash` no longer migrates; it checks each cassette is current.** It reports each one as current or
-  as needing a re-record, with the read refusal and its remedy, and rewrites nothing. It exits `0` (all current) or
-  `1`; the partial-migration `4` is gone. `--dry-run` and `--session` are still accepted and change nothing; the JSON
-  payload keeps `migrated` (always `0`).
-- **`lint` no longer reports `gate-needs-controlout`**: every cassette this build reads carries `controlOut`.
-- **`verify-cassettes --json` no longer lists `controlout-missing` in `uncheckable[]`**: a gate key is always
-  checkable on a cassette this build reads.
-- **`record` refuses to write a cassette when the run's `control-out.jsonl` is missing or empty** (a post-run
-  refusal: the run's verdict and cost are still reported). Every driven session writes at least its `initialize`
-  request there, so an empty file means the control responses were not captured, and a cassette frozen from it
-  could not grade its decisions on replay.
-- **`verify-cassettes --margins` reports `questions_count_max` as not derivable (`null`) whenever the replay failed
-  as a truncated cassette**, instead of only when `controlOut` was absent or empty, so an unanswered decision never
-  reads as an infinite margin.
-- **Breaking: `fidelity: protocol` always gives the agent the run's own config dir, and needs a credential in the
-  environment.** The agent never reads your `~/.claude` any more, so your installed plugins, skills, hooks and MCP
-  servers can no longer answer in place of the one under test, and its session transcripts stay in the run dir. A
-  fresh config dir holds no login, so a run needs `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`),
-  `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` in the environment or a `.env`; a Keychain or `/login` session is not
-  used. Without one, `run` (a file, a directory, a `--matrix` or a `legs:` file), `eval` and `hillclimb run` refuse
-  before any run starts (`run` exits 2, naming every such scenario), `skill` and `chat` refuse before the agent
-  starts, and `doctor --tier protocol` reports the token as missing (`✗`) instead of the former warning. `critique`
-  (which runs at `container` or `hostloop`) now runs doctor's credential check for its tier before its task turn,
-  where a run with no usable credential used to reach the agent and end at "Not logged in".
-  `record`'s existing refusal without a credential in the environment (at every tier) now also covers a `legs:`
-  file, which used to reach its first leg. Machine-level managed settings are outside any config dir and still reach the
-  agent.
-- **`ANTHROPIC_AUTH_TOKEN` reaches the protocol agent under its own name only.** It was also copied into
-  `CLAUDE_CODE_OAUTH_TOKEN`; the agent sent the original anyway, so what the agent sends is unchanged. A rejected
-  `ANTHROPIC_AUTH_TOKEN` is not reported as an auth error at `protocol`: the agent retries it until the run's timeout,
-  so the run ends as a timeout. `hostloop`, whose agent gets the token the same way, is expected to behave alike (not
-  measured). `doctor` says so when it is your only credential.
-- **Breaking: a pinned `plugins.config_dir` is single-run.** The harness creates it (the path must not exist yet),
-  marks it, and reuses it only for the same run's later legs. An existing directory the harness
-  did not create for this run is refused, so a real Claude config is never written to. `run --repeat` (above 1),
-  `run --matrix`, `eval` and `hillclimb` refuse a pinned `config_dir` before the first run, and so do `run <dir/>`,
-  `record <dir/>` and `record --rerecord-stale` when two of their scenarios pin the same dir.
-- **Breaking: `--resume` refuses a session manifest without its identity stamps** (`sessionId` and `fidelity`), where
-  it used to let one through with a warning. Start a fresh session, or delete the run dir and re-run with
-  `--session-id`.
-
-- **Breaking: a rolling model alias is not a concrete pin.** An id ending in `-latest` or `-0` can roll to a new
-  snapshot mid-run, so `eval`, `hillclimb run` and `regrade` (including `--judge-model`) now refuse it before spending,
-  as they refuse `opus` or `best`. Pin the dated id: the agent reports it as `models[0]` in a run's `result.json`. On
-  `run`, which still accepts such a pin, a run whose main loop reports no live model now leaves `modelPinHonored`
-  unset instead of reading the usage key as the pin served.
-- **Breaking: `eval` exits 1 on more outcomes.** A scheduled job with no record (the eval was interrupted, killed,
-  ended on a requested exit, or stopped on a grader failure) and an agent served more than one model across a
-  scenario's scored reps now exit 1, on `eval` and on `eval report`. An (arm, scenario) all of whose reps were
-  excluded for any reason (a skill that changed mid-eval, a pin the agent was not served, another judge prompt, as well
-  as infrastructure, a refused search or a pool mismatch) now exits 1 too, and so does one every rep of which has an
-  invalid judge grade on some assertion (`judge_invalid`: a server error, a timeout or a malformed reply): it compares
-  nothing.
-- **Breaking: `hillclimb run` exits 1 when it stops on a grader failure or a variant is served two models for one pin**
-  (see Added). A later pass of such a variant is refused (exit 2) unless `--allow-model-split`.
-- **Breaking: `--dry-run` cost estimates survive a baseline change.** A scenario with no priced run on its own
-  baseline is now priced from the nearest older baseline with priced runs (else the nearest newer one), labelled
-  `priced from baseline <b>` (`pricedFromBaseline` in JSON). This changes the basis of the covered `plan.cost` keys
-  for such a scenario (`meanUsd`, `p50Usd`, `p95Usd`, `worstObservedUsd`, `pricedRuns`, `lowerBound`, `unpriced[]`):
-  it is priced where it used to be unpriced, and the total is a LOWER BOUND only when a scenario has no priced run
-  on any baseline.
-- **`hillclimb check` no longer notes `judge_invalid` or `gate_failed` rows** as an unknown failure class.
-
-### Removed
-
-- **Breaking: the `migrate-run-dir` command.** A run dir from before the per-turn `turns/<N>/` layout is still refused
-  by name, and `trace` still reads it. Convert one with `npx cowork-harness@4 migrate-run-dir`: a dry run by default,
-  `--write` to apply. Running `migrate-run-dir` on this version exits 2 and names that command.
-- **Breaking: baselines `desktop-1.11847.5`, `desktop-1.12603.1` and `desktop-1.13576.1`, and the layouts only they
-  used.** The oldest supported baseline is `desktop-1.14271.0`. A scenario naming one of these or any older version, or
-  an absolute-path baseline file for an older Desktop, is refused (exit 2) naming that baseline. A cassette recorded
-  against one still replays, with a staleness warning, and `verify-cassettes` fails it as stale (exit 1); re-record
-  it. The `mnt/.projects/<name>` folder mounts, `.local-plugins/cache/` plugin mounts and the static host-loop prompt are gone.
-- **Breaking: `inputErrors[]` is gone from `record --dry-run`.** Its findings are refusals now: `refusals[]` on a
-  directory, the error envelope on a single file. A gate written as `jq -e '.ok and (.inputErrors == [])'` becomes
-  `jq -e '.ok'`, or the exit code.
-- **Breaking: cassettes below v12, or without `controlOut` or `userVisibleRoots`, are no longer read.** `replay`
-  refuses one (exit 2) and `verify-cassettes` reports it as could-not-verify (exit 3), naming the remedy:
-  for v10/v11, run `npx cowork-harness@4 rehash <dir/>` on it, or re-record it; for v9 and below, or a missing
-  field, re-record it. `record <dir/> --rerecord-stale` picks up every such cassette and re-records it from the
-  scenario file it names; with no scenario file on disk it fails naming the `record <scenario.yaml> --out <path>`
-  to run, since there is no readable embedded snapshot to fall back on.
-- **The pre-v12 skill-hash algorithm.** Digests are computed only the jcs1 way. No cassette this build reads
-  carries the older ones; a kept run dir that does is reported as not comparable (re-record), as before.
-- **`schema/cassette.v9.json`, `cassette.v10.json` and `cassette.v11.json`.** A cassette whose `$schema` names one
-  of them is below the read floor; its `$schema` URL now returns 404.
-- **Breaking: `COWORK_MANAGED_CONFIG` and `COWORK_HARNESS_ALLOW_CONFIG_DIR_WRITE`.** Each is refused at startup
-  (exit 2) when set to a non-empty value, naming what replaced it: `protocol` is always sealed, and a pinned
-  `plugins.config_dir` is single-run.
-- **Breaking: the `allow_l0_host_config_contamination` modifier, the `l0_host_config_contamination` verdict signal and
-  the `RunResult.l0HostConfigContamination` field.** A `protocol` run can no longer read your config dir, so there is
-  nothing left to signal. To test against your installed set, use `plugins.from_host`. A scenario that still uses the
-  modifier is refused at load, naming it; a cassette that
-  froze it is refused as re-recordable, so `record <dir/> --rerecord-stale` re-records it once the line is deleted
-  from the scenario.
-
-## [4.15.0] - 2026-11-06
-
-### Upgrade notes
-
-- **Cassettes: no re-record needed.** Nothing a cassette records or hashes moved: `baselines/`, the cassette code
-  and schema, `src/session.ts`, `src/staging` and `src/hostloop` are unchanged since 4.14.0, and `verify-cassettes`
-  reports every committed cassette current (no stale, unverifiable or drifted entry). The one spawn change, the
-  hostloop agent no longer inheriting the three credential keys beside the token, changes no recorded frame: a
-  cassette records no credential source.
-- **The graders now use the agent's credential when `CLAUDE_CODE_OAUTH_TOKEN` is set.** The judges, the LLM decider
-  and the critique evaluator no longer receive `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` alongside the token. If
-  you had both set, grading moves off the API key to the token's billing. `COWORK_HARNESS_GRADER_AUTH=inherit`
-  restores the previous behaviour. Without the token nothing changes.
-- **The hostloop agent no longer inherits `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_CUSTOM_HEADERS`
-  when `CLAUDE_CODE_OAUTH_TOKEN` is set.** It already authenticated with the token, so where a run is billed does not
-  change. Two things you may see:
-  - hillclimb rows from hostloop runs with both the token and the key set now record `meta.billing.basis`
-    `subscription` where they recorded `ambiguous`, so a variant's `summary.json` `billing_basis` can read `"mixed"`
-    across runs from before and after the upgrade;
-  - a setup that sends the token through a proxy (`ANTHROPIC_BASE_URL`) which needs a header from
-    `ANTHROPIC_CUSTOM_HEADERS` stops working at hostloop: the header is no longer passed, while the proxy URL still
-    is. Without the token nothing changes.
-
-### Added
-
 - **`judgeError` on an assertion result** (`{kind: "call", status?, origin?, message}`), set with `judgeInvalid` when
   the judge's call failed; also in `regrade` files and eval `runs.jsonl` lines. A malformed grade carries none.
 - **A pre-spend grader credential check on `eval` and `hillclimb run`.** Before the first agent run, one tiny real
@@ -370,12 +298,44 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
-- **The hostloop agent gets the OAuth token alone when it is set.** The hostloop agent inherits your shell; it now
-  no longer carries `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_CUSTOM_HEADERS` beside the token, as in
-  Desktop and as at container and microvm. The rest of your shell, `ANTHROPIC_BASE_URL` included, is still
-  inherited. Only the environment is covered: a managed `settings.json` (an `env` entry or `apiKeyHelper`) can still
-  hand the agent a key. Without the token nothing changes. The message `hillclimb run` prints after a run at hostloop
-  could not authenticate says which credential the agent is given.
+- **`record`, `chat` and `probe-dispatch` check for a credential before they start,** as `run` does, each scenario at
+  its own tier, and every tier's agent spawn checks it again.
+- **The `protocol` agent no longer receives `CLAUDE_CODE_SESSIONS_OAUTH_TOKEN`** from your environment.
+- **The cassette privacy scan no longer reports the scenario's own plugin's MCP servers as `host-inventory`.** This
+  applies to every cassette, not only `plugins.from_host` ones: a server named `plugin:<name>:<server>` is part of the
+  fixture when `<name>` is a plugin the recording declares (or a `from_host` input). Any other plugin's server is still
+  a finding.
+- **Cassette format 19.** A recording whose `assert:` uses `allow_max_turns` stamps 19; every other recording stamps
+  what it did before. A cassette also freezes `turnCap` and `timeout`. An older harness refuses a v19 cassette.
+- **`hillclimb` passes its `--timeout-s` ceiling to the run as its budget** (`timeout.source: runner`) instead of
+  lowering the scenario's `timeout_ms`, so an attempt's scenario is the one the loop was given.
+- **`skill --dry-run` previews `--timeout` as `timeout: {ms, source: "flag"}`**, the shape `record --dry-run` and
+  `result.json` use, instead of a scenario `timeout_ms`.
+- **`run` names the scenario key or session field for a `skill`-only flag it rejects** (for example
+  `--allow-stall → assert: - allow_stall: true`).
+- **The `search_corpus_*` record refusal no longer names a cassette version.**
+- **The test suite's stub agent runs on the sealed config directory.** It now carries a fixed fake token, the
+  credential that selects the protocol tier's managed config directory every real run uses, instead of forcing the
+  unsealed branch.
+- **The live test lane looks up its token once, for every live suite**: the exported variable, then
+  `COWORK_LIVE_DOTENV`, then `~/.cowork-harness-token`, then the repository's `.env`. Before, two suites read the
+  `.env` and only one read `COWORK_LIVE_DOTENV`, so the others could skip on a machine that had a token.
+- **CI's Node 22 floor job names what keeps the test runner alive after the run, and logs per-file test times.**
+- **`lint` no longer reports `gate-needs-controlout`**: every cassette this build reads carries `controlOut`.
+- **`verify-cassettes --json` no longer lists `controlout-missing` in `uncheckable[]`**: a gate key is always
+  checkable on a cassette this build reads.
+- **`record` refuses to write a cassette when the run's `control-out.jsonl` is missing or empty** (a post-run
+  refusal: the run's verdict and cost are still reported). Every driven session writes at least its `initialize`
+  request there, so an empty file means the control responses were not captured, and a cassette frozen from it
+  could not grade its decisions on replay.
+- **`verify-cassettes --margins` reports `questions_count_max` as not derivable (`null`) whenever the replay failed
+  as a truncated cassette**, instead of only when `controlOut` was absent or empty, so an unanswered decision never
+  reads as an infinite margin.
+- **`ANTHROPIC_AUTH_TOKEN` reaches the protocol agent under its own name only.** It was also copied into
+  `CLAUDE_CODE_OAUTH_TOKEN`; the agent sent the original anyway, so what the agent sends is unchanged. A rejected
+  `ANTHROPIC_AUTH_TOKEN` is not reported as an auth error at `protocol`: the agent retries it until the run's timeout,
+  so the run ends as a timeout. `doctor` says so when it is your only credential.
+- **`hillclimb check` no longer notes `judge_invalid` or `gate_failed` rows** as an unknown failure class.
 - **Which credential the graders get.** With `CLAUDE_CODE_OAUTH_TOKEN` set, the graders get the token alone, which is
   the credential the agent authenticates with at the container, hostloop and microvm tiers. On protocol, with
   `ANTHROPIC_API_KEY` set, the agent gets the key and not the token (the harness passes the token there only when no
@@ -385,9 +345,51 @@ All notable changes to this project are documented here. The format is based on
 - **An API error that fails the same way every time is no longer retried** by the judges, the LLM decider or the
   critique evaluator: status 400, 401, 403, 404, 413 or 422. A refused judge credential used to cost six calls per
   assert before giving up; it now costs one.
+- **`critique --fidelity protocol` gives its real reason.** The refusal stays. The protocol tier runs the host `claude`,
+  not the agent Cowork runs, so a critique there would grade the skill under a runtime Cowork never uses.
+- **New lines and fields a script may see.** `[budget] timeout <ms> ms (flag)` on stderr when `--timeout` sets the budget;
+  `turnCap` and `grades[].judgeErrorsRecorded` in `eval`'s `runs.jsonl`; `harness_gate_sha` in hillclimb's `_state.json`;
+  a `.cowork-harness-config-dir` marker in a pinned config dir; and `doctor`'s `grader-credential` row, which can now fail
+  (it stays non-blocking).
 
 ### Fixed
 
+- **`schema/run-result.json` accepts what a run writes.** `modelUsage` entries carry `thinkingTokens`, `canonicalModel`,
+  `provider`, `costBasis` and the two `cacheCreationEphemeral` counts, which the schema rejected, so a consumer validating
+  with it failed on nearly every real run. `metrics[].command.scriptSha256` may be empty for a metric whose script was
+  never resolved.
+- **A relative symlink inside a connected folder, project or scenario plugin stays relative when staged.** On `container`, `microvm`, `hostloop` and
+  `protocol` it was rewritten to an absolute host path, which dangles in the sandbox.
+- **`record --rerecord-stale` no longer overwrites a cassette written by a newer cowork-harness.** Such a cassette
+  can read as stale (its baseline moved), and the re-record then replaced it with this build's recording. It is now
+  reported as failed (`stamped vN, newer than this build (vM) — upgrade cowork-harness to re-record`) and left
+  untouched, and the batch does not exit 0; the same holds for a multi-leg cassette with such a leg.
+- **At `protocol`, the session's agent flags now reach the agent.** The protocol tier built its own command line and
+  dropped `--max-turns`, the thinking flags, `--thinking-display`, and `--session-id`/`--resume`. So
+  `agent_max_turns` was recorded but never applied, and `skill --session-id … --resume` at protocol started a new
+  conversation. Every tier now builds these flags from one place. The host CLI accepts each of them. Protocol runs
+  now also pass `--max-thinking-tokens 31999` (or `--thinking disabled`), as the other tiers and Cowork do.
+- **A rare hang at exit on Node 24 and later.** Commands no longer end the process with `process.exit` from inside
+  their own code, which on some Node 24+ builds could deadlock inside the exit itself. A command now sets its exit
+  code and the process ends once its work is done. If something still holds the process 5 seconds after the command
+  finished, it exits anyway with the same code and names what was holding it on stderr
+  (`::warning:: [exit] the event loop was still busy …`). Exit codes are unchanged, for
+  `cowork-harness` and for critique's module run directly (`node dist/critique/command.js`). When a pool of jobs stops, it
+  now waits for the jobs in flight, and `eval` prints `stopping: waiting for N in-flight job(s)`.
+- **`prune` reports every usage error as a JSON envelope under `COWORK_HARNESS_OUTPUT_FORMAT=json`**, as other
+  commands do. Before, each printed only the plain message. prune has no `--output-format` flag. The text form is
+  unchanged.
+- **An undated model pin is honored when the agent is served its dated snapshot.** The agent keys its usage by the id
+  it was asked for and reports the dated id it was served, so a run pinned to `claude-haiku-4-5` and served
+  `claude-haiku-4-5-20251001` was read as not honoring its pin. `eval` excluded such reps, its history counted a
+  judge pinned and served the same way as another model, and `hillclimb` wrote them as `serving_substitution` errors and counted the main
+  model's own spend as another model's. One matcher now decides every pin comparison: a dated id matches only itself,
+  and an undated id also matches its dated snapshots. An eval rep's verdict is recorded when it runs, so an eval
+  recorded before this version keeps its `model_mismatch` reps: re-run it. Its `report.md` says so when the served id
+  matches the pin; on an eval run by this version, the same case points at `modelFallbacks` instead. `hillclimb` recovers on its next pass.
+- **A `semantic_pairwise` assert makes no further judge call in a run once one has failed the way every later call
+  would.** A later metric-only comparison is recorded `invalid` ("judge not called: an earlier comparison's call
+  failed …"), and a gating one makes the assert judge-invalid, with the same `judgeError`.
 - **A judge whose call failed is reported as a failed call, not as a malformed grade.** A 401 from the judge (an
   invalid credential, say) was reported as `judge grade INVALID (malformed/ambiguous after retry)`. The check message
   now reads `judge call FAILED (API 401, first_party: Invalid API key) — no grade was made`, the rep still counts as
@@ -396,11 +398,15 @@ All notable changes to this project are documented here. The format is based on
   A judge that hits the account's usage limit is a failed call with API status 429 (not retried), and a reply
   that records an API status on a successful exit is read as the grade it carries unless it is also marked as an
   error.
+- **A `protocol` recording on host `claude` 2.1.319 is no longer refused for that agent's built-in `schedule` and
+  `send-to-project` skills**, which the host-inventory scan read as your own.
 
-### Known limitations
+### Documentation
 
-- A credential that stops working during an eval still costs each remaining rep its agent run; each of those reps'
-  judge calls now fails at once instead of after six attempts. The eval does not stop early.
+- **`docs/session.md` lists which session keys reach the agent as flags, per tier.**
+- **`docs/debugging.md` shows how to read a run's assertions by hand** from `turns/<n>/result.json`.
+- **`docs/fidelity-gaps.md` states where the reconstructed prompt lags Desktop 4.23118.0 and later**, in its task-tracking
+  section.
 
 ## [4.14.0] - 2026-11-05
 

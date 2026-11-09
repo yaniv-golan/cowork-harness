@@ -981,6 +981,24 @@
           },
           "webSearchRequests": {
             "type": "number"
+          },
+          "thinkingTokens": {
+            "type": "number"
+          },
+          "cacheCreationEphemeral5mInputTokens": {
+            "type": "number"
+          },
+          "cacheCreationEphemeral1hInputTokens": {
+            "type": "number"
+          },
+          "canonicalModel": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "costBasis": {
+            "type": "string"
           }
         },
         "additionalProperties": false
@@ -1604,7 +1622,11 @@
             "properties": {
               "sig": { "type": "string" },
               "script": { "type": "string" },
-              "scriptSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "scriptSha256": {
+                "type": "string",
+                "pattern": "^([0-9a-f]{64})?$",
+                "description": "Empty when the unavailable reason is command_missing: the scenario was not loaded from a file, so no script was resolved."
+              },
               "eventsSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
               "interpreter": { "type": "string" },
               "durationMs": { "type": "number" },

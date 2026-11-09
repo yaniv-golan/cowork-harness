@@ -1,23 +1,23 @@
 # CI recipe — replay vs live lanes
 
-Self-contained reference. Tracks `cowork-harness 4.15.0` (baseline `desktop-4.23118.0`).
+Self-contained reference. Tracks `cowork-harness 5.0.0` (baseline `desktop-4.23118.0`).
 
 **Fastest path: the packaged Action.** One step gets you `replay`/`lint`/`verify-cassettes` plus a PR
 job-summary reporter (verdict table, staleness findings, cost/turns when available):
 
 ```yaml
-- uses: yaniv-golan/cowork-harness@v4
+- uses: yaniv-golan/cowork-harness@v5
   with:
     command: replay
     path: cassettes/
-    version: "^4"              # hold the major; see below
+    version: "^5"              # hold the major; see below
 ```
 
-**These recipes pin `version: "^4"`.** The Action's `version` input *defaults* to `latest`, which means a
+**These recipes pin `version: "^5"`.** The Action's `version` input *defaults* to `latest`, which means a
 CLI major reaches your workflow the moment it is promoted even though your `uses:` ref never changed — so a
-copy-pasted recipe that omits the input takes a major bump with no say in it. `^4` holds the major, needs no
+copy-pasted recipe that omits the input takes a major bump with no say in it. `^5` holds the major, needs no
 patch number to remember, and only wants a human decision at the next major. Pin an exact version
-(e.g. `version: "4.15.0"`) instead when you want byte-reproducible CI.
+(e.g. `version: "5.0.0"`) instead when you want byte-reproducible CI.
 
 Reach for the manual multi-step form below only when you need per-step control the Action's inputs don't
 cover (a custom flag combination, a different runner matrix per step, or `lint`/`verify-cassettes` gated
@@ -57,11 +57,11 @@ jobs:
           echo "COWORK_AGENT_BINARY=$RUNNER_TEMP/claude-$V" >> "$GITHUB_ENV"
           # Background on the provenance chain: the "Agent-binary provenance" section of
           # https://github.com/yaniv-golan/cowork-harness/blob/main/docs/maintenance.md
-      - uses: yaniv-golan/cowork-harness@v4
+      - uses: yaniv-golan/cowork-harness@v5
         with:
           command: run
           path: scenarios/
-          version: "^4"
+          version: "^5"
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           model: claude-sonnet-5 # used only where a scenario's session sets no `model:`
 ```
@@ -82,7 +82,7 @@ sha256-*checked* but not hard-blocking on mismatch — it's advisory for an inte
 GitHub-hosted runners, no token/Docker/agent:
 
 ```yaml
-- run: npm i -g "cowork-harness@^4.15.0"
+- run: npm i -g "cowork-harness@^5.0.0"
 - run: cowork-harness lint scenarios/*.yaml --strict --min-severity WARN
                                                     # no silent false-greens. WITHOUT --strict this
                                                     # step cannot fail on a WARN-class rule (e.g.
@@ -157,21 +157,21 @@ Action has no input for, and it creates a coupling nothing checks:
 you have a reason:
 
 ```yaml
-- uses: yaniv-golan/cowork-harness@v4
+- uses: yaniv-golan/cowork-harness@v5
   with:
     command: lint
     path: scenarios/
-    version: "^4"                       # holds the major
+    version: "^5"                       # holds the major
     strict: true                        # without it, only ERROR fails the step
-    extra-args: --min-severity WARN     # needs a CLI >= 1.11.0; any 4.x satisfies that
+    extra-args: --min-severity WARN     # needs a CLI >= 1.11.0; any 5.x satisfies that
 ```
 
 **If a flag you pass in `extra-args` landed in a specific release, bound the range — don't write a bare
 floor.** `>=1.11.0` reads as "at least 1.11.0" and silently means "and every future major too", so a
 recipe written that way hands a copy-paster the next major with no say in it. Anchor it at the current
-major instead — `version: "^4"`, which is what the steps above use — keeping the floor's intent while
+major instead — `version: "^5"`, which is what the steps above use — keeping the floor's intent while
 stopping at the major boundary. An exact
-pin (`version: "4.0.0"`) is the right choice when you want byte-reproducible CI, at the cost of rotting the
+pin (`version: "5.0.0"`) is the right choice when you want byte-reproducible CI, at the cost of rotting the
 moment a recipe adopts a newer flag.
 
 Without a satisfied floor, an older CLI fails the step with `unrecognized arguments: --min-severity WARN`
@@ -361,8 +361,8 @@ A typical skill repo runs four stages, fastest/cheapest first:
    offending file *and* the rejected key, one line per file, and the step still exits 1. An input the real record would refuse
    (an unreadable `session:` file, a missing path, a tier-vacuous negative tool check) exits 1 too, with a `✗ refused:`
    line and an entry in `refusals[]`; an unknown baseline name exits 2. The exit code is the gate. Point `lint`
-   at scenarios only: a session or matrix YAML in the linted set is reported as a file that does not
-   load.
+   at scenarios only: a session file in the linted set is one INFO, and a matrix YAML is reported as a file
+   that does not load.
 
    **If the repo pays for `critique`, gate the evidence corpus here first, for free:**
 
@@ -383,7 +383,7 @@ A typical skill repo runs four stages, fastest/cheapest first:
 
 ## GitHub Actions sketch
 
-The PR gate below is the manual, step-by-step version of what `uses: yaniv-golan/cowork-harness@v4` does
+The PR gate below is the manual, step-by-step version of what `uses: yaniv-golan/cowork-harness@v5` does
 in one step (see the top of this doc) — reach for this form when you need independent per-command
 gating/annotations rather than one action run per command. The nightly live job has no packaged-Action
 equivalent yet (the Action's `command: run` mode needs a self-hosted runner with Docker + the agent binary
@@ -403,7 +403,7 @@ jobs:
         with: { node-version: '24' }
       - uses: actions/setup-python@v5
         with: { python-version: '3.x' }                                       # python3 only — PyYAML is bundled with the linter
-      - run: npm i -g "cowork-harness@^4.15.0"
+      - run: npm i -g "cowork-harness@^5.0.0"
       - run: cowork-harness lint scenarios/*.yaml                              # no-silent-false-green (needs python3; PyYAML bundled)
       - run: cowork-harness verify-cassettes cassettes/ --output-format json   # privacy + staleness gate
       - run: cowork-harness replay cassettes/ --output-format json             # token-free content/structure
@@ -432,7 +432,7 @@ jobs:
             echo "live=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.guard.outputs.live == 'true'
-        run: npm i -g "cowork-harness@^4.15.0"
+        run: npm i -g "cowork-harness@^5.0.0"
       - if: steps.guard.outputs.live == 'true'
         run: cowork-harness run scenarios/ --output-format json
         env:

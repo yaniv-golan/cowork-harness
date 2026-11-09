@@ -836,9 +836,8 @@ the two cannot disagree.
 - **`[unverified]` The microvm tier is refused** — resume-continuity is unproven for the microVM guest (a
   different Apple-VZ guest and in-guest session store than the proven container/hostloop tiers). A live
   resume-continuity proof there would lift it.
-- **`[not-built]` The protocol tier is refused** — it never plumbs a session id or `--resume`, so
-  critique's two-turn resume protocol has nothing to resume. Adding session plumbing to the protocol tier
-  (which also runs with no sandbox) would be the work.
+- **`[deliberate]` The protocol tier is refused** — it runs the host `claude` from your `PATH`, with no sandbox,
+  not the agent Cowork runs, so a critique there would grade the skill under a runtime Cowork never uses.
 - **`[deliberate]` Skill-authored content ships WHOLE, not rationed** — of what the mount carries: SKILL.md,
   the skill's own `references/**`, and every dispatchable `agents/**.md` are packaged in full, up to a **512 KiB combined
   corpus ceiling** covering all three together. For a multi-skill plugin, a **fourth** class joins the
@@ -901,7 +900,7 @@ reach into `turns/1/` yourself:
   a user `maxEffortLevel` (which lowers the effort when below it), and
   `strictMcp: false` when it left out `--strict-mcp-config` for an enterprise MCP config, and the credential the
   evaluator got by name — `credential`, or `credentialKeys` under `COWORK_HARNESS_GRADER_AUTH=inherit` with several keys,
-  and `graderAuth: "inherit"`; never a value, and absent from a report written before 4.15.0), present
+  and `graderAuth: "inherit"`; never a value, and absent from a report written before 5.0.0), present
   with `evaluatorModel`, so two critiques' evaluator verdicts can be compared knowing both ran under the same
   conditions;
 - the graded turn's **`outcome` and `skillHash` are in the report itself** (`gradedOutcome` /

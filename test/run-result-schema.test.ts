@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import Ajv from "ajv";
 import { METRIC_UNAVAILABLE, type RunResult } from "../src/types.js";
 
@@ -125,7 +127,20 @@ const full: RunResult = {
   thinking: [{ text: "considering the approach" }, { text: "", redacted: true }],
   thinkingElided: 2,
   toolErrors: { Bash: { calls: 2, errors: 1 } },
-  modelUsage: { "claude-opus-4-8": { inputTokens: 100, outputTokens: 50, costUSD: 0.01, cacheReadInputTokens: 200 } },
+  modelUsage: {
+    "claude-opus-4-8": {
+      inputTokens: 100,
+      outputTokens: 50,
+      costUSD: 0.01,
+      cacheReadInputTokens: 200,
+      thinkingTokens: 5,
+      cacheCreationEphemeral5mInputTokens: 1,
+      cacheCreationEphemeral1hInputTokens: 2,
+      canonicalModel: "claude-opus-4-8",
+      provider: "firstParty",
+      costBasis: "api",
+    },
+  },
   redundantToolCalls: [{ name: "Bash", argHash: "a".repeat(16), count: 3 }],
   skillActivity: [
     { skillId: "my-plugin:my-skill", invocationSeq: 3, toolCounts: { Bash: 1 }, toolCallCount: 1, dispatchCount: 0, durationMs: 120 },
@@ -327,6 +342,47 @@ describe("schema/run-result.json", () => {
     expect(validateStrict(partial)).toBe(true);
     const unknownSource = { ...full, errorSource: "not_a_source" };
     expect(validatePublished(unknownSource)).toBe(false);
+  });
+});
+
+describe("a real result against schema/run-result.json", () => {
+  const AGENT_USAGE_KEYS = [
+    "thinkingTokens",
+    "cacheCreationEphemeral5mInputTokens",
+    "cacheCreationEphemeral1hInputTokens",
+    "canonicalModel",
+    "provider",
+    "costBasis",
+  ];
+
+  it("a replayed hostloop cassette validates whole, with the per-model usage fields the agent reports", () => {
+    const r = spawnSync(
+      "node",
+      [resolve("dist/cli.js"), "replay", resolve("examples/replays/hostloop-computer-links.cassette.json"), "--output-format", "json"],
+      {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          COWORK_HARNESS_RUNS_DIR: mkdtempSync(join(tmpdir(), "cwh-schema-replay-")),
+          COWORK_HARNESS_FORBID_SPAWN: "1",
+        },
+      },
+    );
+    expect(r.status, r.stderr).toBe(0);
+    const result = JSON.parse(r.stdout).results[0];
+    const [usage] = Object.values(result.modelUsage as Record<string, Record<string, unknown>>);
+    for (const key of AGENT_USAGE_KEYS) expect(usage, key).toHaveProperty(key);
+    const check = new Ajv({ allErrors: true, strict: false }).compile(schema);
+    expect(check(result), JSON.stringify(check.errors)).toBe(true);
+  });
+
+  it("a metric whose script was never resolved records an empty hash, and only an empty one or a real one", () => {
+    const check = new Ajv({ allErrors: true, strict: false }).compile(
+      schema.properties.metrics.items.properties.command.properties.scriptSha256,
+    );
+    expect(check("")).toBe(true);
+    expect(check("a".repeat(64))).toBe(true);
+    expect(check("not-a-hash")).toBe(false);
   });
 });
 

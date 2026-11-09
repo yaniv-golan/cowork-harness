@@ -32,7 +32,7 @@ inputs:
       copy-paste recipes track the current release; for reproducible CI, pin an exact version here.
       Any npm range works too (the value is interpolated into `npm install --global cowork-harness@<v>`).
       When a step's `extra-args` uses a flag added in a specific release, express that as a range ANCHORED
-      AT THE CURRENT MAJOR — `^4` — not as a bare floor: `>=1.11.0` reads as "at least 1.11.0" and silently
+      AT THE CURRENT MAJOR — `^5` — not as a bare floor: `>=1.11.0` reads as "at least 1.11.0" and silently
       means "and every future major too", so it hands you the next major with no say in it. An exact pin is
       reproducible but rots the moment a recipe adopts a newer flag.
       (This differs from the companion skill's pinned-floor guidance, which targets ad-hoc CLI
@@ -42,8 +42,8 @@ inputs:
       IMPORTANT — the ref on your `uses:` line (`@v1`, `@main`, a SHA) pins THE ACTION, never the CLI.
       The two move independently, so leaving this input at `latest` means a CLI MAJOR reaches your
       workflow the moment it is promoted, even though your `uses:` ref never changed. That is how a
-      workflow pinned to `@v1` began installing CLI 2.x. To hold a major, set this to its range: `^4`,
-      or `^3` to stay on the previous one.
+      workflow pinned to `@v1` began installing CLI 2.x. To hold a major, set this to its range: `^5`,
+      or `^4` to stay on the previous one.
     required: false
     default: "latest"
   strict:

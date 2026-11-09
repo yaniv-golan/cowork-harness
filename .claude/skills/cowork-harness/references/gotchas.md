@@ -1,6 +1,6 @@
 # Gotchas
 
-Tracks `cowork-harness 4.15.0` (baseline `desktop-4.23118.0`). The full "✓ passed ≠ correct" landmine catalog.
+Tracks `cowork-harness 5.0.0` (baseline `desktop-4.23118.0`). The full "✓ passed ≠ correct" landmine catalog.
 
 ## Gotchas — the "✓ passed ≠ correct" landmines
 
@@ -175,7 +175,7 @@ authorable). Reach for this list when debugging a run's behavior, that one while
     before a paid record.)
 16. **Batch record keeps going — you don't need a one-at-a-time wrapper.** `record <dir>` and `record <dir>
     --rerecord-stale` run **every** scenario, collect failures, and report them at the end (non-zero exit on
-    any failure) — a failing scenario does NOT abort the batch. So a single `cowork-harness record cassettes/
+    any failure) — a failing scenario does NOT abort the batch. Plain `record <dir>` first refuses, before any spawn, a bad input in any item (unknown baseline, unreadable session, missing path, tier-vacuous assertion). So a single `cowork-harness record cassettes/
     --rerecord-stale` surfaces ALL stale anchors in one pass (add `--concurrency <N>` to parallelize); a shell
     wrapper that loops one cassette at a time with `set -e` defeats this and rediscovers stale anchors serially.
     To re-record only a few scenarios of a directory, name them with `--case <stem>` (repeatable): the checks

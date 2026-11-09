@@ -135,7 +135,7 @@ reproduce. See [docs/scenario.md](./scenario.md#how-an-assertion-edit-reaches-ci
 ```jsonc
 {
   "generator": "cowork-harness",          // provenance: the tool that produced this file
-  "cassetteVersion": 12,                  // the MINIMUM format a reader needs for this cassette (see Cassette versioning below) — floored at the hash-format epoch, so cassettes stamp 12 (13–19 when a key or the run lifts it, see the table below; e.g. 13 when `assert:` uses the object form of tool_called/tool_not_called; a 3.10.0 `replay` crashes on those, so upgrade first). ABSENT reads as 0 and, like anything below the v9 read floor, is refused at load time with a re-record error; a FUTURE version hard-fails unless --best-effort-future-cassette
+  "cassetteVersion": 12,                  // the MINIMUM format a reader needs for this cassette (see Cassette versioning below) — floored at the hash-format epoch, so cassettes stamp 12 (13–19 when a key or the run lifts it, see the table below; e.g. 13 when `assert:` uses the object form of tool_called/tool_not_called; a 3.10.0 `replay` crashes on those, so upgrade first). ABSENT reads as 0 and, like anything below the v12 read floor, is refused at load time with a re-record error; a FUTURE version hard-fails unless --best-effort-future-cassette
   "scenarioSource": "scenarios/my-test.yaml", // the authored scenario SOURCE file this was recorded from, relative to the cassette dir (absent for an inline/in-memory scenario)
   "scenario": { /* Scenario object — same schema as the .yaml */ },
   "events": [ /* JSON lines from events.jsonl (child→driver stdout) */ ],
@@ -1353,8 +1353,7 @@ cowork-harness verify-cassettes cassettes/ --allow 'NVCA|Cooley GO|Acme'
 > names, so on such a recording a built-in command that is not a skill (`compact`, `init`, …) keeps its text.
 > **A bare-named agent is always withheld, and it is never the plugin under test's**: every plugin agent is named
 > `<plugin>:<agent>`. A bare name is the agent's own or a *user* agent from the config dir: the `agents/` of a
-> session's pinned `plugins.config_dir` (which load bare under `settingSources: ["user"]`), or, at a tier that
-> inherits the host's config dir (`protocol`/`hostloop`), the operator's own. Their descriptions are withheld too.
+> session's pinned `plugins.config_dir` (which load bare under `settingSources: ["user"]`). Their descriptions are withheld too.
 > No verdict reads a registry description, so this costs nothing but the text. (Project agents in a working
 > directory's `.claude/agents/` never load: `settingSources` is pinned to `user` by the baseline.)
 >

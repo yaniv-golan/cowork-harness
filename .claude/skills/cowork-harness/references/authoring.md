@@ -1,6 +1,6 @@
 # Authoring a scenario
 
-Tracks `cowork-harness 4.15.0` (baseline `desktop-4.23118.0`). Read it when composing a `scenarios/*.yaml`: session vs scenario, discovery, the fidelity tier, the answer path, `web_fetch`, and scaffold + lint.
+Tracks `cowork-harness 5.0.0` (baseline `desktop-4.23118.0`). Read it when composing a `scenarios/*.yaml`: session vs scenario, discovery, the fidelity tier, the answer path, `web_fetch`, and scaffold + lint.
 
 ## Part I — AUTHOR a scenario
 
@@ -370,13 +370,13 @@ a reserved value — is ✗ ERROR `scenario-invalid` (exit 1, with or without `-
 naming no baseline this installed CLI ships is ✗ ERROR `baseline-unknown` (`latest` always resolves). It
 does not check what depends on the machine the run happens on (the session file and its mounts, an
 absolute `baseline:` path that does not exist here — one that exists is checked (4.1.1 and later) —
-environment variables). A session or matrix YAML in a linted directory is not
-a scenario and is reported as one that does not load — keep those out of the linted set. `python3
+environment variables). A session file in a linted directory is one INFO `not-a-scenario`; a matrix YAML is
+reported as one that does not load — keep those out of the linted set. `python3
 scenario.py lint` run directly stays offline and lenient: there an unknown key is only a ⚠ WARN (exit 0).
 `cowork-harness record <file.yaml> --dry-run` also runs the loader and adds the pre-spend refusals (exit 2
 on a schema error; a directory reports each `✗ broken:` file and exits 1). **Read the exit code, not just
 its sign:** `record <file>` — with or without
-`--dry-run` — answers `2` for "did not load" and `1` for "loaded fine, but this record is refused" (a
+`--dry-run` — answers `2` for "did not load" or an unknown baseline name and `1` for "loaded fine, but this record is refused" (a
 pre-spend policy refusal, including `--max-budget-usd`, which exited 2 before 4.0.0; `skill`/`run` still
 exit 2 on it). Treating any non-zero
 as "scenario broken" mis-reports every refused-but-valid scenario. Corollary: **the loader** fails LOUD on an unknown key (never silently).

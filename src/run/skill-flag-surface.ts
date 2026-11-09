@@ -103,7 +103,7 @@ export const SKILL_FLAG_SURFACE: SkillFlagSpec[] = [
     critique: {
       kind: "reject",
       reason:
-        "protocol-only consent, and critique refuses protocol (resume continuity unproven there) — a staged plugin's hooks never run natively on this lane",
+        "protocol-only consent, and critique refuses protocol (it runs the host `claude`, not the agent Cowork runs) — a staged plugin's hooks never run natively on this lane",
     },
   },
   {
@@ -187,7 +187,7 @@ export const SKILL_FLAG_SURFACE: SkillFlagSpec[] = [
     arity: 1,
     critique: {
       kind: "owned",
-      note: "container (default), hostloop, or cowork — which resolves once via the baseline's loop gate and pins BOTH turns to the result; microvm/protocol refused (resume continuity unproven there)",
+      note: "container (default), hostloop, or cowork — which resolves once via the baseline's loop gate and pins BOTH turns to the result; microvm and protocol refused (see docs/critique.md)",
     },
   },
   {

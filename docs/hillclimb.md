@@ -547,7 +547,7 @@ levels:
      otherwise the row says `ambiguous`. No tier reaches this case through the environment: at container, microvm
      and hostloop the agent is given the token alone when it is set, so those rows say `subscription`; at protocol,
      with an API key set, the agent is given the key and not the token, so those rows say `api_key`. Hostloop rows
-     recorded before 4.15.0 with both set say `ambiguous`, and a managed `settings.json` that hands the agent a key
+     recorded before 5.0.0 with both set say `ambiguous`, and a managed `settings.json` that hands the agent a key
      can still reach this case at any tier.
    - `api_key`: an API key and no token (a token source of `none`, or `apiKeyHelper`, the key's own helper).
    - `ambiguous`: anything else (a bearer `ANTHROPIC_AUTH_TOKEN`, no credential recorded, account frames that

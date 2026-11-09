@@ -2349,6 +2349,12 @@ interface ModelUsageEntry {
   contextWindow?: number;
   maxOutputTokens?: number;
   webSearchRequests?: number;
+  thinkingTokens?: number;
+  cacheCreationEphemeral5mInputTokens?: number;
+  cacheCreationEphemeral1hInputTokens?: number;
+  canonicalModel?: string;
+  provider?: string;
+  costBasis?: string;
 }
 
 /** Token counters for a harness-side model call (the LLM decider, the semantic judge), in the snake_case
@@ -2895,7 +2901,7 @@ export interface RunResult {
       settingsMaxEffort?: string;
       strictMcp?: false;
       /** The one credential key the judge's call carried, by name, or `host-login` when it carried none. Absent on a
-       *  grade recorded before 4.15.0, and when several keys were passed (`credentialKeys`). */
+       *  grade recorded before 5.0.0, and when several keys were passed (`credentialKeys`). */
       credential?: string;
       /** Under `COWORK_HARNESS_GRADER_AUTH=inherit` with several credential keys set: every key passed (names only). */
       credentialKeys?: string[];
