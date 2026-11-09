@@ -12,7 +12,7 @@ import { ScriptedDecider, PermissionDefaultDecider, type Decision, type RunConte
 // Snapshots catch ANY change (review the diff); the inline invariant assertions catch the
 // specific SPEC §9 regressions even if a snapshot is blessed carelessly.
 
-const baseline = loadBaseline("desktop-1.12603.1");
+const baseline = loadBaseline("desktop-1.14271.0");
 const ID = "local_TEST";
 const mntRoot = `/sessions/${ID}/mnt`;
 const sessionRoot = `/sessions/${ID}`;
