@@ -315,7 +315,7 @@ describe("F18: an unreadable subtree yields walk incompleteness, distinct from a
 
 describe("#52: classifyWorkspaceFilesWithHealth distinguishes a MISSING workspace root from a genuinely-empty one", () => {
   it("a genuinely-empty root (exists, no files) → rootAbsent:false, files:[] (present-empty)", () => {
-    const root = mkdtempSync(join(tmpdir(), "cwh-52-empty-"));
+    const root = mkdtempSync(join(tmpdir(), "evidence-health-empty-"));
     mkdirSync(join(root, "outputs"), { recursive: true }); // outputs/ exists, no files
     const got = classifyWorkspaceFilesWithHealth(root, ["outputs"], []);
     expect(got.rootAbsent).toBe(false);
@@ -323,7 +323,7 @@ describe("#52: classifyWorkspaceFilesWithHealth distinguishes a MISSING workspac
   });
 
   it("a MISSING root (the microvm case: outputs staged into the VM work tree, not outDir) → rootAbsent:true", () => {
-    const missing = join(mkdtempSync(join(tmpdir(), "cwh-52-mv-")), "work", "session", "mnt"); // never created
+    const missing = join(mkdtempSync(join(tmpdir(), "evidence-health-mv-")), "work", "session", "mnt"); // never created
     const got = classifyWorkspaceFilesWithHealth(missing, ["outputs"], []);
     // The false-green this fixes: files is EMPTY for both cases, so files alone can't tell them apart —
     // rootAbsent is the discriminator a caller uses to persist UNAVAILABLE (undefined) not a false [].
@@ -332,14 +332,14 @@ describe("#52: classifyWorkspaceFilesWithHealth distinguishes a MISSING workspac
   });
 
   it("a MISSING prefix subdir under a PRESENT root is NOT rootAbsent (a normal empty run, not the #52 bug)", () => {
-    const root = mkdtempSync(join(tmpdir(), "cwh-52-noprefix-")); // root exists, but no outputs/ subdir
+    const root = mkdtempSync(join(tmpdir(), "evidence-health-noprefix-")); // root exists, but no outputs/ subdir
     const got = classifyWorkspaceFilesWithHealth(root, ["outputs"], []);
     expect(got.rootAbsent).toBe(false); // root WAS observable; a missing prefix pushes the prefix name, not ""
     expect(got.files).toEqual([]);
   });
 
   it("a populated root → rootAbsent:false with the file classified", () => {
-    const root = mkdtempSync(join(tmpdir(), "cwh-52-real-"));
+    const root = mkdtempSync(join(tmpdir(), "evidence-health-real-"));
     mkdirSync(join(root, "outputs"), { recursive: true });
     writeFileSync(join(root, "outputs", "report.md"), "# hi");
     const got = classifyWorkspaceFilesWithHealth(root, ["outputs"], []);
@@ -348,7 +348,7 @@ describe("#52: classifyWorkspaceFilesWithHealth distinguishes a MISSING workspac
   });
 
   it("classifyWorkspaceFiles (the thin wrapper) is behavior-preserving — still returns the files array", () => {
-    const root = mkdtempSync(join(tmpdir(), "cwh-52-wrap-"));
+    const root = mkdtempSync(join(tmpdir(), "evidence-health-wrap-"));
     mkdirSync(join(root, "outputs"), { recursive: true });
     writeFileSync(join(root, "outputs", "a.txt"), "x");
     expect(classifyWorkspaceFiles(root, ["outputs"], []).map((f) => f.path)).toEqual(["outputs/a.txt"]);

@@ -21,7 +21,7 @@ function mkSession(id: string): string {
   mkdirSync(join(root, "mnt", "outputs"), { recursive: true });
   return root;
 }
-const destDir = () => join(mkdtempSync(join(tmpdir(), "cwh-52-dest-")), "work", "session");
+const destDir = () => join(mkdtempSync(join(tmpdir(), "microvm-snapshot-dest-")), "work", "session");
 const uid = (t: string) => `test-52-${t}-${process.hrtime.bigint().toString(36)}`;
 
 describe("#52: snapshotMicroVmWorkspace stages the microvm SESSION ROOT into the run dir", () => {

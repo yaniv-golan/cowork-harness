@@ -44,7 +44,7 @@ describe("chatDriveOpts — the chat lane's drive() options (sub-agent append de
   });
 
   // `wiring` is REQUIRED (protocol has its own variant) so that forgetting a tier's bundle is a COMPILE
-  // error, not a silent no-op — the P2-1 container bug reverted cleanly past the whole unit suite, because
+  // error, not a silent no-op — an earlier container bug reverted cleanly past the whole unit suite, because
   // the bug was the CALL SITE and this function was never wrong. `npm run typecheck` (tsconfig.test.json)
   // covers this file, so a 1-arg call fails CI.
   it("protocol carries neither sdkMcp nor hooks nor toolAliases", () => {

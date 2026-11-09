@@ -1,0 +1,38 @@
+{
+  "register id": {
+    "positive": ["see R777 for the history", "R888"],
+    "negative": ["R2 is a unit", "R1000", "AR777", "r777", "R-777", "R777a"]
+  },
+  "review label": {
+    "positive": ["the P9-99 bug", "G9-98"],
+    "negative": ["P9.99", "XP9-99", "T9-99"]
+  },
+  "session name": {
+    "positive": ["cwh-77 said so", "cwh-88", "cwh-9.9-sample"],
+    "negative": ["cwh-device", "cwh-verify-cassettes", "xcwh-77"]
+  },
+  "co-author trailer": {
+    "positive": ["Co-Authored-By: Claude Opus <noreply@anthropic.com>", "Co-authored-by: claude"],
+    "negative": ["Co-authored-by: A Person <a@example.com>"]
+  },
+  "session trailer": {
+    "positive": ["Claude-Session: https://example.com/x", "claude-session: y"],
+    "negative": ["Claude session notes"]
+  },
+  "session url": {
+    "positive": ["https://claude.ai/code/session_0123"],
+    "negative": ["https://claude.ai/code"]
+  },
+  "generated footer": {
+    "positive": ["🤖 Generated with [Claude Code](https://claude.com/claude-code)", "generated with claude code"],
+    "negative": ["generated with vitest"]
+  },
+  "internal doc citation": {
+    "positive": ["docs/internal/2026-plan.md", "see docs/internal/reviews/x"],
+    "negative": ["docs/internal/", "docs/internal/**", "docs/internal"]
+  },
+  "internal docs directory": {
+    "positive": ["the docs/internal folder", "docs/internal/", "docs/internal/**"],
+    "negative": ["docs/internal/plan.md", "docs/public"]
+  }
+}

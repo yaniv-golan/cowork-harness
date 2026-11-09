@@ -14,6 +14,7 @@ npm run typecheck     # tsc --noEmit
 npm test              # vitest
 npm run build         # -> dist/
 npm run ci            # typecheck + build + test — the core TS gate (CI's `build` + `test` jobs run more; see below)
+npm run test:linux    # changed and CLI-spawning tests in node:22, non-root, empty HOME (needs Docker; -- --all for the unit lane)
 ```
 
 Before pushing: `npm run format:check` and `npm run ci` (see RELEASING.md's release checklist for the full pre-tag list).
@@ -122,6 +123,7 @@ When a Desktop release moves something `sync` doesn't read, it reports an `unkno
   bypasses it — if you need that for anything other than a broken hook, say so in the PR.
 - Conventional, imperative commit subjects (`add …`, `fix …`, `parity: sync to <ver>`).
 - Open PRs against `main`. CI runs the pipeline tabled under [This repo's own CI pipeline](#this-repos-own-ci-pipeline) on every PR, forks included (no secrets needed), except `live-key` and `scenarios`, which are skipped on a fork PR; live scenarios run only on same-repo PRs/pushes with `ANTHROPIC_API_KEY` set.
+- `scripts/open-pr.sh` is for maintainers: it needs a private pattern file. Everyone else opens a PR the ordinary way, and CI's `public-hygiene` runs the public patterns on it.
 - **Which stages actually block a merge is narrower than the pipeline.** The branch ruleset requires two status *contexts*, not jobs: `typecheck · test · build`, which the `ci-green` aggregator carries (`needs: [build, test, floor, image-recipe, metric-runtimes]`), and `pytest helper lane (-m 'not cowork')`, which is the `python` job's name. So `action-self-test`, `boundary`, `live-key`, `scenarios`, and `parity-drift` run and report but do **not** gate. Read a red one as a real signal anyway: `boundary` in particular is the secrets-free proof that the sandbox enforces Cowork's limits.
 - Describe *what changed and why*; link issues.
 
@@ -142,6 +144,7 @@ The provided [GitHub Actions workflow](https://github.com/yaniv-golan/cowork-har
 | **test** | the unit suite (vitest), sharded 4-way. If a test step fails or reaches its own time limit, its log and any hang dumps are uploaded as an artifact (`hangs-shard-N`); the floor and release jobs do the same. A runner that stops responding uploads nothing | nothing | every push/PR |
 | **floor** | the unit suite, sharded 6-way, on Node 22 — the version `engines.node` declares — so the floor is exercised rather than asserted (other jobs run Node 24, the Active LTS line). Each shard uploads `hangs-floor-shard-N` when its test step does not pass and `timing-floor-shard-N` when it does | nothing | every push/PR; gates the merge context |
 | **floor-unsharded** (its own workflow, `floor-unsharded.yml`) | the unit suite once, unsharded, on Node 22, uploading `hangs-floor` or `timing-floor`. It watches for a hang that needs the whole suite in one process, and blocks nothing: the publish gate reads only `ci.yml`'s run | nothing | pushes to main, and by hand |
+| **public-hygiene** (its own workflow, `public-hygiene.yml`) | checks a pull request's commits, added lines, title, body and branch name for internal references, and re-runs when the title or body is edited. It installs nothing | nothing | every PR; a red shows on the PR but is not a required check |
 | **metric-runtimes** | the command-metric runtimes at their floors: every shipped Python metric file compiles on 3.9, the Python runner's audit hook and the closure tests run on 3.9, and the Node permission tests run on 22.12 (the `--experimental-permission` branch) | nothing | every push/PR; gates the merge context |
 | **action-self-test** | packs this commit and runs the packaged `uses: ./` Action across its full case set — pass (committed example cassette), usage-error fail (nonexistent path), assertion fail (checks the reporter renders a ❌ row), `lint`, and `analyze-skill`; `ci.yml` currently runs the packaged action **5** times (3 × `replay`, then `lint` and `analyze-skill`) — count the `with: command:` keys, not a bare `grep -c 'command:'`, which also matches step names and log strings | nothing | every push/PR |
 | **python** | `pytest` helper self-checks (`python/`, run with `-m 'not cowork'` — the token-free subset; the Docker/token `@pytest.mark.cowork` tests are excluded) | nothing (token-free assertions only) | every push/PR; gates the merge (its job name is the second required context) |

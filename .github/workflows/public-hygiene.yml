@@ -1,0 +1,63 @@
+name: public-hygiene
+
+# Checks what a pull request publishes: its commits, added lines, title, body and branch name, against the public
+# patterns. A workflow of its own because it has to run on `edited`, and ci.yml's concurrency group would cancel the
+# whole run on every title or body edit. It installs nothing: Node runs the script with type stripping.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: public-hygiene-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  public-hygiene:
+    name: public hygiene
+    # `edited` also fires on a closed pull request, whose range may no longer hold any commits.
+    if: ${{ github.event.pull_request.state == 'open' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # The head commit itself: the default merge ref does not exist while a pull request has conflicts.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: "24" }
+      - name: Check the commits, added lines, title, body and branch name
+        # Attacker-controlled text goes through the environment, never into the script. The live base branch, not
+        # base.sha: that is stale on `edited` and after a rebase, and would read main's lines as this branch's.
+        # The base branch's checker and samples, so that a pull request cannot certify itself by editing them. This file
+        # itself runs from the pull request's head, so a pull request can still edit this step, which is why this check
+        # is not a required one.
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          printf '%s' "$PR_TITLE" >"$RUNNER_TEMP/title"
+          printf '%s' "$PR_BODY" >"$RUNNER_TEMP/body"
+          checker="$RUNNER_TEMP/checker/scripts/check-public-hygiene.ts"
+          samples="$RUNNER_TEMP/checker/test/fixtures/public-hygiene/samples.json"
+          mkdir -p "$(dirname "$checker")" "$(dirname "$samples")"
+          if git show "origin/$BASE_REF:scripts/check-public-hygiene.ts" >"$checker" 2>/dev/null; then
+            git show "origin/$BASE_REF:test/fixtures/public-hygiene/samples.json" >"$samples"
+            echo "running the base branch's checker"
+          elif [ "$BASE_REF" = main ]; then
+            checker=scripts/check-public-hygiene.ts
+            echo "the base branch has no checker yet: running this pull request's copy"
+          else
+            echo "the base branch has no checker, and only main may run this pull request's copy"
+            exit 2
+          fi
+          node "$checker" --base "origin/$BASE_REF" --head "$HEAD_SHA" \
+            --title-file "$RUNNER_TEMP/title" --body-file "$RUNNER_TEMP/body" --branch "$HEAD_REF"
