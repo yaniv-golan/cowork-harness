@@ -667,13 +667,34 @@ export function promoteSkillDirTarget(skillFolder: string, skillSelector: string
   return { kind: "promoted", enclosing, name };
 }
 
+/** `critique <dir>/skills/<name>` with no plugin manifest at or above the skill: not promoted, because a `skills/<name>`
+ *  layout alone does not make a plugin (`~/.claude/skills/x` has it too). The skill is mounted and graded on its
+ *  own, which drops whatever the folder above `skills/` would contribute as a plugin (a root `agents/`, shared
+ *  references). Said once, with the spelling that mounts that folder instead; nothing about the run changes. */
+function noteManifestlessSkillsLayout(opts: ParsedArgs): void {
+  if (opts.skillSelector !== undefined || !existsSync(join(opts.skillFolder, "SKILL.md"))) return;
+  const positional = resolve(opts.skillFolder);
+  const parent = dirname(positional);
+  if (basename(parent) !== "skills" || findEnclosingPluginDir(positional) !== null) return;
+  const name = basename(positional);
+  const root = dirname(parent);
+  const shown = isAbsolute(opts.skillFolder) ? root : relative(process.cwd(), root) || ".";
+  process.stderr.write(
+    `::notice:: [critique] ${tildeify(opts.skillFolder)} has no plugin manifest (.claude-plugin/plugin.json) at or above it, so it is mounted and graded on its own, as a standalone skill: nothing outside this folder (a root agents/ or references/) is in the graded run. ` +
+      `To mount ${tildeify(shown)} as a plugin (named after its folder) and grade this skill in it, run critique ${tildeify(shown)} --skill ${name}\n`,
+  );
+}
+
 /** Apply `promoteSkillDirTarget` to the ONE `opts` binding `main` hands to every consumer — the resolver,
  *  the preview, both turns' argv (and so the mount, the resume identity and `skillHash`), and every report
  *  field. Written as a reassignment on purpose: a second binding would let the preview show the promotion
  *  while a paid turn mounted the original folder. Announces the decision on stderr. */
 export function applyTargetPromotion(opts: ParsedArgs): ParsedArgs {
   const p = promoteSkillDirTarget(opts.skillFolder, opts.skillSelector);
-  if (p === null) return opts;
+  if (p === null) {
+    noteManifestlessSkillsLayout(opts);
+    return opts;
+  }
   if (p.kind === "promoted") {
     process.stderr.write(
       `::notice:: [critique] ${p.name} is a skill inside plugin ${tildeify(p.enclosing)} — mounting the plugin as Cowork does, grading skill '${p.name}'\n`,
