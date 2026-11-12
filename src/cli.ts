@@ -2502,7 +2502,10 @@ async function cmdEval(rawArgs: string[]) {
       tokenCheck: (tier) => tokenCheck(tier),
       isolationCheck: () => isolationRefusal(),
       judgeCheck: (targets) => runJudgeCheck(targets),
-      runJob: makeEvalJobRunner((a) => runOneScenario({ ...a, command: "run", policy, externalChannel, o }), flags),
+      runJob: makeEvalJobRunner(
+        (a) => runOneScenario({ ...a, extra: { ...a.extra, noRegradeHint: true }, command: "run", policy, externalChannel, o }),
+        flags,
+      ),
       onPlan: (p) => (plan = p),
     });
   } catch (e) {
@@ -2529,7 +2532,8 @@ function hillclimbRunner(opts: { deciderCmd?: string; deciderDir?: string; json:
   const o = resolveOutput("run", flags);
   return {
     flags,
-    runScenario: (a: Parameters<ScenarioRunner<CommonFlags>>[0]) => runOneScenario({ ...a, command: "run", policy, externalChannel, o }),
+    runScenario: (a: Parameters<ScenarioRunner<CommonFlags>>[0]) =>
+      runOneScenario({ ...a, extra: { ...a.extra, noRegradeHint: true }, command: "run", policy, externalChannel, o }),
     close: () => externalChannel?.close?.(),
   };
 }

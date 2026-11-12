@@ -6,6 +6,17 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **A judged assert refused because its evidence was cut now says how to recover it from the kept run.** On a live
+  `run` or `record`, a `semantic_matches` / `semantic_pairwise` refusal for a file truncated at the per-file cap or
+  dropped or cut at the capture budget adds the `cowork-harness regrade <run-dir> --scenario <scenario.yaml>` command
+  that re-grades it with judge spend only: after scoping `evidence_files` to the deliverable for a per-file cut, with
+  `--authored-total-bytes` for a budget cut, and with `--allow-unchecked` only when another judged assert of the run
+  recorded what its judge read. There is no hint for an unreadable file, on `skill`, legs, `eval`/`hillclimb` arms,
+  replay, or inside `regrade`. An unscoped truncated-prefix message also says the cut file may be a generated file
+  beside the deliverable that the rubric is not about. Only the message text changes; verdicts do not.
+
 ### Documentation
 
 - **Testing an Agent Skills repo with no `plugin.json`.** A new section in the discovery guide, linked from the docs

@@ -13,10 +13,12 @@ import type { Assertion } from "../src/types";
 // Oracle: the messages and typed reasons below were produced by the build of the commit BEFORE this change
 // (the judge was called for every one of these), from these same fixtures — not derived from the code under
 // test. The budget figures in them are the defaults, so the budget env var is cleared for every case.
+// One later, deliberate wording change: an unscoped TRUNCATED prefix now adds that the cut file may be a generated
+// file outside the rubric.
 const BEFORE: Record<string, { message: string; semanticEvidence: { reason: string; paths?: string[] } }> = {
   evidence_incomplete: {
     message:
-      'evidence unavailable: the authored evidence the judge would grade is incomplete — 7 dropped at the capture budget (outputs/f3.md, outputs/f4.md, outputs/f5.md, outputs/f6.md, outputs/f7.md, outputs/f8.md, outputs/f9.md); 3 kept only as a TRUNCATED prefix (outputs/f0.md, outputs/f1.md, outputs/f2.md). A partial deliverable grades as a partial document, so a "claim not satisfied" could be an artefact of the cut. To grade it: raise $COWORK_HARNESS_AUTHORED_TOTAL_BYTES (currently 65536 bytes); or scope this assert with semantic_matches.evidence_files: ["<the deliverable>"], which exempts it from the 16384-byte per-file cap (raising the total alone will NOT lift that cap)',
+      'evidence unavailable: the authored evidence the judge would grade is incomplete — 7 dropped at the capture budget (outputs/f3.md, outputs/f4.md, outputs/f5.md, outputs/f6.md, outputs/f7.md, outputs/f8.md, outputs/f9.md); 3 kept only as a TRUNCATED prefix (outputs/f0.md, outputs/f1.md, outputs/f2.md) — if that is a generated file beside the deliverable, the rubric may not be about it at all. A partial deliverable grades as a partial document, so a "claim not satisfied" could be an artefact of the cut. To grade it: raise $COWORK_HARNESS_AUTHORED_TOTAL_BYTES (currently 65536 bytes); or scope this assert with semantic_matches.evidence_files: ["<the deliverable>"], which exempts it from the 16384-byte per-file cap (raising the total alone will NOT lift that cap)',
     semanticEvidence: {
       reason: "evidence_incomplete",
       paths: [

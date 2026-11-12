@@ -316,6 +316,9 @@ export interface ExecuteOptions {
    *  their own command name through; `record`'s live execution (cassette.ts) passes "record" explicitly so
    *  a recording session isn't misread as a `run` invocation in `stats`. */
   command?: "run" | "skill" | "record";
+  /** An eval or hillclimb arm: its run dir is re-graded through its own command, not `regrade --scenario`, so a
+   *  judge-cap refusal names no regrade remedy (see `regradeHintEligible`). */
+  noRegradeHint?: boolean;
   /** Capture the pre-run manifest whatever the scenario asserts, as a recording does (`scenarioArmsPreRunManifest`).
    *  `hillclimb run` sets it on every attempt: a loop adds metrics and asserts after its rows were written, and a
    *  kept run with no manifest can never be re-measured for them (`no_manifest`) — only a paid re-run would. */
@@ -867,6 +870,13 @@ function scanRunHookSources(
     spawnEnv: agentEnvForTier(plan, tier, baseline),
     knownEvents: new Set<string>(KNOWN_HOOK_EVENTS),
   });
+}
+
+/** Whether a judge-cap refusal in this execution may point at `regrade <run-dir> --scenario <file>`: a `run` or
+ *  `record` (a `skill` run has no scenario file to pass), not a leg (regrade needs `--leg` and refuses some legs), and
+ *  not an eval/hillclimb arm (`noRegradeHint`). A partial run never reaches assertion evaluation, so it never asks. */
+export function regradeHintEligible(o: Pick<ExecuteOptions, "command" | "leg" | "noRegradeHint">): boolean {
+  return (o.command === "run" || o.command === "record") && !o.leg && !o.noRegradeHint;
 }
 
 /** Whether a run at `fidelity` enables the can_use_tool web_fetch approval gate: `hostloop` and `container`, and only
@@ -2201,6 +2211,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       workRoot,
       userVisiblePrefixes: userVisibleRoots,
       lane: scenario.lane,
+      regradeHint: regradeHintEligible(opts),
       // Read-only folder inputs are captured body-less; artifact_json must reach the same
       // evidence-unavailable verdict here as on replay (see AssertContext.readonlyFolderRoots).
       readonlyFolderRoots,
