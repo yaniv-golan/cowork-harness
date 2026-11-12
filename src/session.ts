@@ -593,22 +593,24 @@ export function readonlyFolderRootsFromPlan(plan: LaunchPlan): string[] {
   return plan.mounts.filter((m) => (m.kind === "folder" && m.mode === "r") || m.kind === "project").map((m) => m.mountPath);
 }
 
-/** The name a plugin mount is loaded under when its source has no `.claude-plugin/plugin.json` naming it.
- *
- *  Claude Desktop writes a manifest (`{name}`, never overwriting one) into a plugin it syncs without one, and
- *  stages a server-synced plugin at `.remote-plugins/<server id>`, so the staged folder's name is never the
- *  plugin's name. The harness mirrors that in its staged copy (`writeMissingPluginManifest`, runtime/
- *  plugin-manifest.ts), and every reader that derives a name from the mount's SOURCE must use this same value:
- *   - a local-marketplace plugin: the marketplace ENTRY name, which is the mount path below
- *     `.local-plugins/marketplaces/<marketplace>/` (it may nest: `@scope/pkg`), not the source folder's name;
- *   - a `remote_plugins` mount: the source folder's name, the harness's stand-in for the server-side name;
- *   - a `local_plugins` mount: the source folder's name, which is also its staged folder's name, so nothing is
- *     written for it. */
+/** Whether the agent accepts `name` in a plugin manifest it loads by path: `claude plugin validate` refuses a
+ *  `--plugin-dir` manifest whose name holds whitespace, `@`, `:`, `/` or `\\` (a scoped `@scope/pkg` included). */
+export function manifestNameAccepted(name: string): boolean {
+  return name.length > 0 && !/[\s@:/\\]/.test(name);
+}
+
+/** The name a plugin mount is loaded under when its source has no `.claude-plugin/plugin.json` naming it. Every reader
+ *  that derives a name from the mount's SOURCE must use this value, so it agrees with the staged tree the agent loads:
+ *   - a `remote_plugins` mount: the source folder's name, the harness's stand-in for the server-side name, which
+ *     `writeMissingPluginManifest` (runtime/plugin-manifest.ts) writes into the staged copy as Claude Desktop does
+ *     for a plugin it syncs without one. A name the agent would refuse in a manifest is not written, so the plugin
+ *     keeps its staged folder's name (`plugin_<id>`), and so does this;
+ *   - a local-marketplace plugin: its staged folder's name, which is the marketplace entry name (the last segment of
+ *     a scoped `@scope/pkg`), never the source folder's; nothing is written for it;
+ *   - a `local_plugins` mount: the source folder's name, which is also its staged folder's name. */
 export function manifestlessPluginName(m: Pick<Mount, "kind" | "hostPath" | "mountPath">): string {
-  if (m.kind === "marketplace-plugin") {
-    const segs = m.mountPath.split("/");
-    if (segs[0] === ".local-plugins" && segs[1] === "marketplaces" && segs.length >= 4) return segs.slice(3).join("/");
-  }
+  if (m.kind === "marketplace-plugin") return basename(m.mountPath);
+  if (m.kind === "remote-plugin" && !manifestNameAccepted(basename(m.hostPath))) return basename(m.mountPath);
   return basename(m.hostPath);
 }
 
