@@ -100,6 +100,26 @@ describe("resolveCritiquedSkillDir — agents across all four branches", () => {
     expect(unpromoted.pluginRoot).toBe(join(root, "skills", "ms"));
   });
 
+  it("a plain skill folder with NO manifest resolves agents under the folder's name, as it does with a manifest naming it so", () => {
+    // Mounted on its own, the agent names this folder's plugin after the folder, so its skill-named agent and a
+    // `<folder>:<agent>` literal are what it dispatches. Invocation stays ungraded on this route either way.
+    const tree = {
+      "SKILL.md": '# demo-skill\nsubagent_type: "demo-skill:helper"\n',
+      "agents/demo-skill.md": "primary\n",
+      "agents/helper.md": "helper\n",
+      "agents/unrelated.md": "never dispatched\n",
+    };
+    const bare = resolveCritiquedSkillDir(materialize(tree, "demo-skill"), undefined);
+    const control = resolveCritiquedSkillDir(
+      materialize({ ...tree, ".claude-plugin/plugin.json": '{"name": "demo-skill"}' }, "demo-skill"),
+      undefined,
+    );
+    expect(control.agents.map((a) => a.rel)).toEqual(["agents/demo-skill.md", "agents/helper.md"]);
+    expect(bare.agents.map((a) => a.rel)).toEqual(control.agents.map((a) => a.rel));
+    expect(bare.gradedSkillName).toBeUndefined();
+    expect(control.gradedSkillName).toBeUndefined();
+  });
+
   it("a dir with no SKILL.md anywhere resolves no agents", () => {
     const root = materialize({ "plugin.json": '{"name": "plug"}', "agents/stray.md": "x\n" });
     expect(resolveCritiquedSkillDir(root, undefined).agents).toEqual([]);
