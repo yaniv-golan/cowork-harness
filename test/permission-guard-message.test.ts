@@ -75,7 +75,7 @@ const THREE = () => [
 ];
 
 describe("permissive_auto_allow explains the ask", () => {
-  it("(a) carries the CLI's reason verbatim and the de-duplicated count; severity stays fail", async () => {
+  it("carries the CLI's reason verbatim and the de-duplicated count; severity stays fail", async () => {
     const r = await resultFrom([frame("r1", "Bash", reasonFor("a.txt"), "safetyCheck")]);
     expect(r.decisions[0]).toMatchObject({ decisionReason: reasonFor("a.txt"), decisionReasonType: "safetyCheck" });
     const s = signalOf(r)!;
@@ -88,7 +88,7 @@ describe("permissive_auto_allow explains the ask", () => {
     expect(computeVerdict(r, "live").pass).toBe(false);
   });
 
-  it("(f) three reasons differing only by file name (one with a space in the name, all with a space in the dir) are ONE group of 3", async () => {
+  it("three reasons differing only by file name (one with a space in the name, all with a space in the dir) are ONE group of 3", async () => {
     const s = signalOf(await resultFrom(THREE()))!;
     expect(s.message).toContain("3× Bash");
     expect(s.message).not.toContain("1× Bash");
@@ -98,7 +98,7 @@ describe("permissive_auto_allow explains the ask", () => {
     expect(s.message).not.toContain("d.txt");
   });
 
-  it("(f) a different type or a different directory is a separate group", async () => {
+  it("a different type or a different directory is a separate group", async () => {
     const s = signalOf(
       await resultFrom([
         ...THREE(),
@@ -110,7 +110,7 @@ describe("permissive_auto_allow explains the ask", () => {
     expect(s.message.match(/1× Bash/g)).toHaveLength(2);
   });
 
-  it("(e) a frame with no decision_reason falls back to the tool-name list", async () => {
+  it("a frame with no decision_reason falls back to the tool-name list", async () => {
     const r = await resultFrom([frame("r1", "Write"), frame("r2", "Bash")]);
     expect(r.decisions[0]).not.toHaveProperty("decisionReason");
     const s = signalOf(r)!;
@@ -118,13 +118,13 @@ describe("permissive_auto_allow explains the ask", () => {
     expect(s.message).not.toContain('"');
   });
 
-  it("(e) a reasoned and an unreasoned ask: the reasoned one is grouped, the other listed by name — none dropped", async () => {
+  it("a reasoned and an unreasoned ask: the reasoned one is grouped, the other listed by name — none dropped", async () => {
     const s = signalOf(await resultFrom([frame("r1", "Bash", reasonFor("a.txt"), "safetyCheck"), frame("r2", "Write")]))!;
     expect(s.message).toContain("1× Bash");
     expect(s.message).toContain("Write");
   });
 
-  it("(e) an older result with the array but no matching decision rows still names every tool", () => {
+  it("an older result with the array but no matching decision rows still names every tool", () => {
     const r: RunResult = {
       scenario: "t",
       fidelity: "container",
@@ -139,7 +139,7 @@ describe("permissive_auto_allow explains the ask", () => {
     expect(signalOf(r)!.message).toContain("Bash, Bash");
   });
 
-  it("(g) container, lane local, no taskKind: only the conditional Cowork claim", async () => {
+  it("container, lane local, no taskKind: only the conditional Cowork claim", async () => {
     const s = signalOf(await resultFrom(THREE(), { lane: "local" }))!;
     expect(s.message).toMatch(
       /an attended Cowork task would show a permission card for this; a scheduled one would decline it after a timeout/i,
@@ -147,7 +147,22 @@ describe("permissive_auto_allow explains the ask", () => {
     expect(s.message).not.toMatch(/would BLOCK/i);
   });
 
-  it("(g) hostloop also makes the conditional claim; lane remote, protocol, microvm and answer_channel none make none", async () => {
+  it("a non-shell tool, alone or beside Bash, gets no Cowork claim", async () => {
+    for (const frames of [[frame("r1", "Write", reasonFor("a.txt"), "safetyCheck")], [...THREE(), frame("r4", "mcp__example__tool")]]) {
+      const m = signalOf(await resultFrom(frames, { lane: "local" }))!.message;
+      expect(m).not.toMatch(/Cowork task|real Cowork|permission card/i);
+    }
+    // the host loop's shell tool does get it
+    const hl = signalOf(
+      await resultFrom([frame("r1", "mcp__workspace__bash", reasonFor("a.txt"), "safetyCheck")], {
+        effectiveFidelity: "hostloop",
+        fidelity: "hostloop",
+      }),
+    )!.message;
+    expect(hl).toMatch(/attended Cowork task/);
+  });
+
+  it("hostloop also makes the conditional claim; lane remote, protocol, microvm and answer_channel none make none", async () => {
     expect(signalOf(await resultFrom(THREE(), { effectiveFidelity: "hostloop", fidelity: "hostloop" }))!.message).toMatch(
       /attended Cowork task/,
     );
@@ -162,7 +177,7 @@ describe("permissive_auto_allow explains the ask", () => {
     }
   });
 
-  it("(h) the remedy follows the command", async () => {
+  it("the remedy follows the command", async () => {
     const run = signalOf(await resultFrom(THREE(), { command: "run" }))!.message;
     const missing = signalOf(await resultFrom(THREE()))!.message;
     const skill = signalOf(await resultFrom(THREE(), { command: "skill" }))!.message;
@@ -197,7 +212,7 @@ describe("permissive_auto_allow explains the ask", () => {
   });
 });
 
-describe("(d2) replay re-derives decisionReason through the real re-drive", () => {
+describe("replay re-derives decisionReason through the real re-drive", () => {
   it("a constructed cassette's can_use_tool frame yields decisions[].decisionReason on replay", async () => {
     const f = frame("req-1", "Bash", reasonFor("a.txt"), "subcommandResults") as Record<string, unknown>;
     const events = [
@@ -237,7 +252,7 @@ describe("(d2) replay re-derives decisionReason through the real re-drive", () =
   });
 });
 
-describe("(d) no regression on the committed cassettes", () => {
+describe("no regression on the committed cassettes", () => {
   const CASSETTES = [
     "examples/replays/example-multiselect-gate.cassette.json",
     "examples/replays/example-pdf-skill.cassette.json",
@@ -255,7 +270,7 @@ describe("(d) no regression on the committed cassettes", () => {
   });
 });
 
-describe("(c) critique shows the graded run's failing signals under `graded outcome:`", () => {
+describe("critique shows the graded run's failing signals under `graded outcome:`", () => {
   const envelope = JSON.stringify({
     tool: "cowork-harness",
     command: "skill",

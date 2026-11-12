@@ -825,6 +825,12 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
   return { pass, exitCode: pass ? 0 : 1, signals, guards: guardRoster(result, lane, signals), failures };
 }
 
+/** The shell tools whose ask Desktop routes to its ordinary permission card (read in asar 4.23118.0): `Bash` on the VM
+ *  loop and `mcp__workspace__bash` on the host loop. Other tools have their own branches there (a browser or pane tool,
+ *  or an MCP tool that needs a person, is refused at once in an unattended turn), so the Cowork sentence is made only
+ *  when every auto-allowed tool is one of these. */
+const COWORK_CARD_TOOLS = new Set(["Bash", "mcp__workspace__bash"]);
+
 /** The text after the parent directory of the first absolute path in a reason is dropped, so asks that differ only by
  *  file name share a key. Spaces are allowed anywhere in the path: the key is everything up to the LAST `/` after the
  *  path's start, which never needs to know where a file name ends. A reason with no absolute path is its own key. */
@@ -838,11 +844,11 @@ function reasonGroupKey(reason: string): string {
  *  group of asks that differ only by file name, with its count, tool, reason kind and ONE verbatim example), then what
  *  real Cowork would do where that is established, then the remedy this command can perform.
  *
- *  The Cowork sentence is keyed on the fields a result carries: the tier (`effectiveFidelity`), `lane` and
+ *  The Cowork sentence is keyed on the fields a result carries: the tools, the tier (`effectiveFidelity`), `lane` and
  *  `answerChannel`, never `execution.taskKind` (nothing sets it, and its absence is not a signal). It is stated only for
- *  the local lane at the container and hostloop tiers, where an ask reaches Desktop's permission handler and waits for
- *  the user; how long a scheduled task waits before declining is not established, so no duration is named. Every
- *  other combination makes no claim about real Cowork. */
+ *  shell asks (`COWORK_CARD_TOOLS`) on the local lane at the container and hostloop tiers, where the ask reaches
+ *  Desktop's permission handler and waits for the user; how long a scheduled task waits before declining is not
+ *  established, so no duration is named. Every other combination makes no claim about real Cowork. */
 export function permissiveAutoAllowMessage(result: RunResult): string {
   const tools = result.permissiveAutoAllow ?? [];
   const rows = result.decisions.filter(
@@ -870,8 +876,9 @@ export function permissiveAutoAllowMessage(result: RunResult): string {
   } else parts.push(tools.join(", "));
 
   const tier = result.effectiveFidelity ?? result.fidelity;
+  const shellOnly = tools.every((t) => COWORK_CARD_TOOLS.has(t));
   const cowork =
-    (tier === "container" || tier === "hostloop") && result.lane !== "remote" && result.answerChannel !== "none"
+    shellOnly && (tier === "container" || tier === "hostloop") && result.lane !== "remote" && result.answerChannel !== "none"
       ? " An attended Cowork task would show a permission card for this; a scheduled one would decline it after a timeout."
       : "";
   const named = [...new Set(tools)].join(", ");
