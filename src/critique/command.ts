@@ -793,6 +793,16 @@ export interface ResolvedCritiqueTarget {
   hashBasis?: HashBasis;
 }
 
+/** The name the agent registers a folder's ROOT `SKILL.md` under when the folder is mounted as a plugin: the skill's
+ *  frontmatter `name` (minus a leading "<plugin>:", the plugin being this folder), else `fallback`, rewritten by
+ *  `sanitizeSkillName`. `fallback` is the folder's own name as the caller knows it — the mount's, or for an eval arm
+ *  snapshotted under another name, its source's. */
+export function rootSkillRegisteredName(folder: string, fallback: string): string {
+  const plugin = binaryPluginIdentity(folder).name;
+  const fm = readSkillFrontmatterName(join(folder, "SKILL.md")) ?? "";
+  return sanitizeSkillName((fm.startsWith(`${plugin}:`) ? fm.slice(plugin.length + 1) : fm) || fallback);
+}
+
 export function resolveCritiquedSkillDir(skillFolder: string, skillSelector: string | undefined): ResolvedCritiqueTarget {
   // Fail-fast on a typo'd / absent path BEFORE the caller mints a session and spawns the task turn — a
   // missing folder otherwise only surfaces as a mid-run mount failure that leaves a stray run dir behind.
@@ -869,9 +879,7 @@ export function resolveCritiquedSkillDir(skillFolder: string, skillSelector: str
     // its frontmatter `name` (minus a leading "<plugin>:", the plugin being this folder), else the
     // directory's, rewritten by `sanitizeSkillName`.
     if (enclosing !== null && enclosing !== mountRoot) {
-      const plugin = binaryPluginIdentity(skillFolder).name;
-      const fm = readSkillFrontmatterName(join(skillFolder, "SKILL.md")) ?? "";
-      const registered = sanitizeSkillName((fm.startsWith(`${plugin}:`) ? fm.slice(plugin.length + 1) : fm) || basename(mountRoot));
+      const registered = rootSkillRegisteredName(skillFolder, basename(mountRoot));
       return { skillDir: skillFolder, ...agentsFor(skillFolder, skillFolder, basename(mountRoot)), gradedSkillName: registered };
     }
     // Shape 1, or a plain skill folder with no manifest anywhere: mounted alone, the agent names it after its

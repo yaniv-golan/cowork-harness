@@ -8,6 +8,7 @@ import { join } from "node:path";
 import type { RunResult } from "../src/types.js";
 import type { DoctorCheck } from "../src/run/doctor.js";
 import { parseEvalArgs, planEvalDryRun, type EvalJobSpec } from "../src/eval/command.js";
+import { rootSkillRegisteredName, skillInvocationFromRecord } from "../src/critique/command.js";
 
 let root: string;
 const saved: Record<string, string | undefined> = {};
@@ -129,5 +130,23 @@ describe("eval: two plugin-root arms", () => {
     const text = (await dryRun(a, b, ["--skill", "demo-skill"])).join("\n");
     expect(text).not.toMatch(NOT_TRACKED);
     expect(text).not.toMatch(/arms differ beyond the skill/);
+  });
+});
+
+describe("eval: the skill-folder arm's invocation fact is observable, not only its name", () => {
+  it("over the snapshot shape (the skill folder's content under the plugin folder's name), the agent's id counts as invoked", () => {
+    // What eval stages for a `skills/demo-skill` arm: that folder's files, in a directory named after the declared plugin.
+    const snap = write(join(root, "arms", "after", "my-skills-repo"), { "SKILL.md": "---\nname: demo-skill\ndescription: d\n---\nx\n" });
+    const name = rootSkillRegisteredName(snap, "demo-skill");
+    expect(name).toBe("demo-skill");
+    const fact = (skillId: string) =>
+      skillInvocationFromRecord({
+        gradedSkillName: name,
+        pluginRoot: snap,
+        record: { skillActivity: [{ skillId }] },
+        eventsText: undefined,
+      });
+    expect(fact("my-skills-repo:demo-skill")).toBe(true);
+    expect(fact("another-plugin:demo-skill")).not.toBe(true);
   });
 });

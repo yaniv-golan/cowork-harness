@@ -38,7 +38,7 @@ import { readIndex, type RunIndexRow } from "../run/run-index.js";
 import { runsRoot } from "../run/trace-view.js";
 import { checkBatchBudget, noHistoryCauseText, runsDirInfo } from "../run/budget.js";
 import { recordBudgetStatus, type BudgetStatus } from "../run/budget-status.js";
-import { resolveCritiquedSkillDir, gradedSkillNameFor } from "../critique/command.js";
+import { resolveCritiquedSkillDir, gradedSkillNameFor, rootSkillRegisteredName } from "../critique/command.js";
 import { scenarioRows } from "./classify.js";
 import { type Correction } from "./stats.js";
 import { commandMetricFiles, resolvedCommand } from "../metric-command/resolve.js";
@@ -637,6 +637,20 @@ function prepareSearchCorpus(
   };
 }
 
+/** Every file under `dir`, as sorted `/`-separated relative paths (a snapshot: no symlinked dirs are followed). */
+function filesUnder(dir: string): string[] {
+  const out: string[] = [];
+  const walk = (rel: string): void => {
+    for (const e of readdirSync(join(dir, rel), { withFileTypes: true })) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(r);
+      else out.push(r);
+    }
+  };
+  walk("");
+  return out.sort();
+}
+
 /** Everything that can refuse before the first run, with the arm snapshots under `armsRoot`. Never exits and
  *  never creates the eval dir: the caller owns where the snapshots live and what is removed on a refusal. */
 function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot: string, mode: "run" | "plan"): PreparedArms {
@@ -677,7 +691,15 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
   // Which skill's invocation the reps record: one derivation per arm, and the arms must agree.
   // Not a refusal: a plugin with several skills (and no --skill), or a skill the arms name differently,
   // only makes the per-rep invocation fact unobservable. It never affects a row.
+  // An arm whose source is ONE skill folder (a root SKILL.md, the `skills/<name>` of a plugin, say) is snapshotted under
+  // the declared plugin folder's name, and the agent loads its root SKILL.md as a skill of that plugin: the skill's
+  // name is its own (frontmatter, else the SOURCE folder's name — the snapshot's name is the plugin's). Read from the
+  // snapshot, which is what is mounted (a git arm's `sourceDir` is the work tree, not the ref). critique's resolver is
+  // not asked here: it refuses `--skill` on a skill folder, on purpose, for critique's own positional.
+  const isSkillFolderArm = (s: SnapshotInfo) =>
+    existsSync(join(s.dir, "SKILL.md")) && (args.skill === undefined || !existsSync(join(s.dir, "skills", args.skill, "SKILL.md")));
   const skillNames = snaps.map((s) => {
+    if (isSkillFolderArm(s)) return rootSkillRegisteredName(s.dir, basename(s.sourceDir ?? s.dir));
     try {
       return gradedSkillNameFor(args.skill, resolveCritiquedSkillDir(s.dir, args.skill));
     } catch (caught) {
@@ -690,6 +712,20 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
     say(
       `[eval] no single skill to record invocation for (${args.skill ? `--skill ${args.skill} is not in both arms` : "pass --skill <name> to pick one"}): the per-rep invocation fact is unobservable`,
     );
+  // One arm a plugin root, the other a single skill folder: the root arm also ships everything outside that skill
+  // (a README, root agents/, other skills), which the agent loads as plugin content in that arm only.
+  const folderArm = snaps.findIndex(isSkillFolderArm);
+  const rootArm = folderArm === -1 ? -1 : 1 - folderArm;
+  if (rootArm !== -1 && !isSkillFolderArm(snaps[rootArm]!) && skillNames[rootArm] !== undefined) {
+    const own = `skills/${skillNames[rootArm]}/`;
+    const extra = filesUnder(snaps[rootArm]!.dir).filter((f) => !f.startsWith(own) && !f.startsWith(".claude-plugin/"));
+    if (extra.length > 0)
+      say(
+        `[eval] the arms differ beyond the skill: arm ${snaps[rootArm]!.spec.label} is a plugin root and arm ${snaps[folderArm]!.spec.label} is one skill folder, ` +
+          `so only arm ${snaps[rootArm]!.spec.label} ships ${extra.length} other file(s) (${extra.slice(0, 5).join(", ")}${extra.length > 5 ? ", …" : ""}); ` +
+          `a difference between the arms may come from them`,
+      );
+  }
 
   // Answer-key guard — before the signatures, whose walk would otherwise warn about the very links it refuses.
   // A command metric's script and deps are answer-key files too: the agent must not read its scorer through a mount.
