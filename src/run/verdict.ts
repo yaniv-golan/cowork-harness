@@ -7,6 +7,7 @@ import { VERDICT_MODIFIER_KEYS } from "../types.js";
 import { judgedOpts } from "../assert.js";
 import { endsOnRequestForInput } from "./input-request.js";
 import { outputsDeleteTier, outputsDeleteEntries, outputsDiffUnverified, outputsCheckArmed } from "./outputs-delete-tier.js";
+import { PERMISSIVE_AUTOALLOW_RATIONALE } from "../decide/decider.js";
 
 export interface VerdictSignal {
   code:
@@ -147,8 +148,9 @@ function guardRoster(result: RunResult, lane: "live" | "replay", signals: Verdic
  *
  * Beyond failed assertions and a hard `result:"error"`, the harness must never green a run whose
  * declared isolation guarantees were not actually met:
- *   - a cowork-parity permissive auto-allow real Cowork would BLOCK (fail unless the scenario opts in
- *     via `allow_permissive_auto_allow`),
+ *   - a permission the agent CLI asked for that nothing scripted answered, auto-allowed under cowork parity (fail
+ *     unless the scenario opts in via `allow_permissive_auto_allow`): nobody decided it, so the green is not a
+ *     faithful pass. The message carries the CLI's own reason (see `permissiveAutoAllowMessage`),
  *   - a recorded unauthorized delete in mnt/outputs (on a baseline that records outputs `rw`; from Desktop
  *     2.16120.0 a normal session may delete there), or a host-path leak — UNLESS the scenario already
  *     authored the matching assertion (`no_delete_in_outputs` / `transcript_no_host_path`), in which
@@ -441,13 +443,7 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
     const authored = result.assertions.map((a) => a.assertion);
     const optInPermissive = authored.some((a) => a.allow_permissive_auto_allow === true);
     if (result.permissiveAutoAllow?.length && !optInPermissive)
-      signals.push({
-        code: "permissive_auto_allow",
-        severity: "fail",
-        message:
-          `cowork parity auto-allowed off-registry tool(s) real Cowork would BLOCK: ${result.permissiveAutoAllow.join(", ")} — ` +
-          "not a faithful pass. Pin with --answer / permission_parity: strict, or assert allow_permissive_auto_allow: true.",
-      });
+      signals.push({ code: "permissive_auto_allow", severity: "fail", message: permissiveAutoAllowMessage(result) });
 
     // Capability fidelity: the (partial 'core') agent image omits a capability real Cowork ships, and the
     // skill was observed USING it on an otherwise-green run → a likely FALSE NEGATIVE. Fail unless the
@@ -827,4 +823,66 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
   if (result.unansweredGate) failures.push({ message: result.unansweredGate.message, kind: "guard" });
 
   return { pass, exitCode: pass ? 0 : 1, signals, guards: guardRoster(result, lane, signals), failures };
+}
+
+/** The text after the parent directory of the first absolute path in a reason is dropped, so asks that differ only by
+ *  file name share a key. Spaces are allowed anywhere in the path: the key is everything up to the LAST `/` after the
+ *  path's start, which never needs to know where a file name ends. A reason with no absolute path is its own key. */
+function reasonGroupKey(reason: string): string {
+  const start = reason.search(/(?:^|[\s"'`(=:])\//);
+  if (start < 0) return reason;
+  return reason.slice(0, reason.lastIndexOf("/") + 1);
+}
+
+/** The `permissive_auto_allow` message, from the RunResult alone. One line: what the agent CLI asked and why (each
+ *  group of asks that differ only by file name, with its count, tool, reason kind and ONE verbatim example), then what
+ *  real Cowork would do where that is established, then the remedy this command can perform.
+ *
+ *  The Cowork sentence is keyed on the fields a result carries: the tier (`effectiveFidelity`), `lane` and
+ *  `answerChannel`, never `execution.taskKind` (nothing sets it, and its absence is not a signal). It is stated only for
+ *  the local lane at the container and hostloop tiers, where an ask reaches Desktop's permission handler and waits for
+ *  the user; how long a scheduled task waits before declining is not established, so no duration is named. Every
+ *  other combination makes no claim about real Cowork. */
+export function permissiveAutoAllowMessage(result: RunResult): string {
+  const tools = result.permissiveAutoAllow ?? [];
+  const rows = result.decisions.filter(
+    (d) => d.kind === "tool" && d.decision === "allow" && d.by === "cowork" && d.rationale === PERMISSIVE_AUTOALLOW_RATIONALE,
+  );
+  const parts: string[] = [];
+  // The array is the gate. Only when the rows account for every entry are they used; otherwise (an older result, or a
+  // row lost somewhere) the message names every entry, as it always did, so nothing the gate counted goes unnamed.
+  if (rows.length === tools.length) {
+    const groups = new Map<string, { tool: string; type?: string; example: string; count: number }>();
+    const unreasoned: string[] = [];
+    for (const d of rows) {
+      if (d.decisionReason === undefined) {
+        unreasoned.push(d.name);
+        continue;
+      }
+      const key = JSON.stringify([d.name, d.decisionReasonType ?? "", reasonGroupKey(d.decisionReason)]);
+      const g = groups.get(key);
+      if (g) g.count++;
+      else groups.set(key, { tool: d.name, type: d.decisionReasonType, example: d.decisionReason, count: 1 });
+    }
+    for (const g of groups.values())
+      parts.push(`${g.count}× ${g.tool}${g.type !== undefined ? ` (${g.type})` : ""}, e.g. ${JSON.stringify(g.example)}`);
+    if (unreasoned.length) parts.push(`${unreasoned.join(", ")} (no reason given)`);
+  } else parts.push(tools.join(", "));
+
+  const tier = result.effectiveFidelity ?? result.fidelity;
+  const cowork =
+    (tier === "container" || tier === "hostloop") && result.lane !== "remote" && result.answerChannel !== "none"
+      ? " An attended Cowork task would show a permission card for this; a scheduled one would decline it after a timeout."
+      : "";
+  const named = [...new Set(tools)].join(", ");
+  const isProbe = result.command === "skill" && result.scenario.startsWith("probe-dispatch-");
+  const remedy = isProbe
+    ? `To decide it, re-run through \`skill\` with \`--answer-policy <yaml>\` holding a \`when_tool\` rule for ${named}.`
+    : result.command === "skill"
+      ? `To decide it, pass \`--answer-policy <yaml>\` with a \`when_tool\` rule for ${named}.`
+      : `To decide it, add a \`when_tool\` rule for ${named} to \`answers:\`, or set \`permission_parity: strict\`; if auto-allowing is intended, assert \`allow_permissive_auto_allow: true\`.`;
+  return (
+    `the agent CLI asked for ${tools.length} permission(s) that nothing scripted answered, and cowork parity auto-allowed them, so this is not a faithful pass: ` +
+    `${parts.join("; ")}.${cowork} ${remedy}`
+  );
 }

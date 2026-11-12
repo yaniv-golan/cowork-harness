@@ -3461,6 +3461,21 @@
       ".gradedOutcome": {
         "type": "string"
       },
+      ".gradedSignals": {
+        "type": "array"
+      },
+      ".gradedSignals[]": {
+        "type": "object",
+        "closed": true
+      },
+      ".gradedSignals[].code": {
+        "type": "string",
+        "required": true
+      },
+      ".gradedSignals[].message": {
+        "type": "string",
+        "required": true
+      },
       ".gradedSkill": {
         "type": "string"
       },
@@ -5033,6 +5048,12 @@
       ".decisions[].decision": {
         "type": "string",
         "required": true
+      },
+      ".decisions[].decisionReason": {
+        "type": "string"
+      },
+      ".decisions[].decisionReasonType": {
+        "type": "string"
       },
       ".decisions[].effort": {
         "type": "string"

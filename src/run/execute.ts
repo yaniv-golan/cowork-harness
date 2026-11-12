@@ -2642,7 +2642,7 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       nonDeterministicTerminal: onUnanswered === "llm" || onUnanswered === "prompt" || !!opts.externalChannel,
       gateProvenance: gateProvenance.total ? gateProvenance : undefined,
       partlyScriptedGates: record.partlyScriptedGates.length ? record.partlyScriptedGates : undefined, // report-only (warn signal)
-      permissiveAutoAllow: record.permissiveAutoAllow.length ? record.permissiveAutoAllow : undefined, // cowork-parity off-registry auto-allows (real Cowork blocks) — non-empty ⇒ NOT a faithful pass
+      permissiveAutoAllow: record.permissiveAutoAllow.length ? record.permissiveAutoAllow : undefined, // asks the agent CLI made that cowork parity auto-allowed, unscripted — non-empty ⇒ NOT a faithful pass
       // post-run scan signals (delete-in-outputs / host-path-leak / self-heal) — computeVerdict default-fails
       // when unasserted. `undefined` (NOT an all-false object) when events.jsonl was missing/corrupt, so
       // verify-run's `scanMissing = result.scan === undefined` fires and the dependent assertions fail loud.

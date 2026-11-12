@@ -1030,7 +1030,21 @@ interface SkillEnvelope {
     /** Surfaced in the report so a harvester never has to open a turn file. See `gradedOutcome`. */
     outcome?: string;
     fingerprint?: { skillHash?: string; skillCommit?: string | null };
+    /** The graded run's own verdict, as every `--output-format json` result row carries it. */
+    verdict?: { signals?: Array<{ code?: unknown; severity?: unknown; message?: unknown }> };
   }>;
+}
+
+/** The graded run's FAILING verdict signals (code + the message's first line), lifted from the task turn's envelope so
+ *  the report says why that run failed without a reader opening its result.json. Undefined when the envelope does not
+ *  parse or no signal failed. Exported for tests. */
+export function gradedSignalsFrom(stdout: string): Array<{ code: string; message: string }> | undefined {
+  const signals = parseEnvelope(stdout)?.results?.[0]?.verdict?.signals;
+  if (!Array.isArray(signals)) return undefined;
+  const failing = signals
+    .filter((s) => s && s.severity === "fail" && typeof s.code === "string")
+    .map((s) => ({ code: s.code as string, message: typeof s.message === "string" ? s.message.split("\n")[0]! : "" }));
+  return failing.length ? failing : undefined;
 }
 
 /** Best-effort parse of the `skill --output-format json` envelope (one compact line on stdout). Returns
@@ -1461,6 +1475,8 @@ interface ReportState {
    *  nothing to signal it. Documenting that only helps someone who already knows to look, in a tool whose
    *  whole purpose is killing silent wrong answers. Surfacing it here removes the need to know. */
   gradedOutcome?: string;
+  /** The graded run's failing verdict signals (`gradedSignalsFrom`): they concern the GRADED run, not the critique. */
+  gradedSignals?: Array<{ code: string; message: string }>;
   gradedSkillHash?: string;
   /** The model ids the GRADED turn actually ran on, read back from its own `result.json` (`models`) and
    *  filtered through `isLiveModelId`. The report already named the EVALUATOR's resolved model and named
@@ -1686,6 +1702,7 @@ export function buildTextReport(state: ReportState): string {
   // The GRADED turn's facts, so a consumer never opens result.turn-1.json (and never mistakes the
   // reflection turn's result.json for them).
   if (gradedOutcome) out.push(`  graded outcome: ${gradedOutcome}`);
+  for (const g of state.gradedSignals ?? []) out.push(`    graded run signal ✗ ${g.code}: ${g.message}`);
   if (state.gradedSkill)
     out.push(
       `  graded skill: ${state.gradedSkill} (skillTreeHash below is the per-skill change key; skillHash keys the whole mounted plugin)`,
@@ -1980,6 +1997,7 @@ export function buildJsonReport(state: ReportState): Record<string, unknown> {
     // On `base`, not a branch: a harvester reads these on EVERY outcome, including the infra-failure
     // paths where knowing which skill generation was graded matters most.
     gradedOutcome,
+    gradedSignals: state.gradedSignals,
     gradedSkillHash,
     gradedModels: state.gradedModels,
     gradedErrorReason: state.gradedErrorReason,
@@ -2692,6 +2710,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
         requestedFidelity: opts.requestedFidelity,
         taskResult: infraRow?.result,
         ...(infraRow?.outcome !== undefined ? { gradedOutcome: infraRow.outcome } : {}),
+        ...(infraRow ? { gradedSignals: gradedSignalsFrom(task.stdout) } : {}),
         ...(infraRow?.fingerprint?.skillHash !== undefined ? { gradedSkillHash: infraRow.fingerprint.skillHash } : {}),
         selfReportStatus: "unavailable",
         items: [],
@@ -2720,6 +2739,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
     const taskResult = extractResult(task);
     const taskRow = parseEnvelope(task.stdout)?.results?.[0];
     const gradedOutcome = taskRow?.outcome;
+    const gradedSignals = gradedSignalsFrom(task.stdout);
     const gradedSkillHash = taskRow?.fingerprint?.skillHash;
 
     // Best-effort lift of the graded turn's own recorded tier/baseline/cost from turns/1/result.json —
@@ -3004,6 +3024,7 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
       gateAnswers: gateAnswers?.length ? gateAnswers : undefined,
       taskResult,
       gradedOutcome,
+      gradedSignals,
       gradedSkillHash,
       gradedModels,
       gradedErrorReason,

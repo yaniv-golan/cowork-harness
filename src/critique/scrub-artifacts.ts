@@ -68,6 +68,7 @@ const REPORT_PATHS = [
   "items[].classification",
   "items[].findingFingerprint",
   "gateAnswers[].answeredBy",
+  "gradedSignals[].code", // a verdict signal code (closed enum); its message is scrubbed
   "evaluatorRepair[].appended", // always "}" by construction — a scrub value could only corrupt it
   "evidenceBudget.corpusOmitted[].reason",
 ];

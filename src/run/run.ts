@@ -442,6 +442,10 @@ interface DecisionRecord {
   effort?: string; // the LLM decider's effort for by:"llm" decisions, question and permission (its transport's pin) — beside `model`
   detail?: unknown;
   rationale?: string;
+  /** A permission ask's own reason, as the agent CLI sent it (`decision_reason`), and its kind
+   *  (`decision_reason_type`). Absent when the request carried none. */
+  decisionReason?: string;
+  decisionReasonType?: string;
   // The FULL offered option set (label + description) as originally presented by the model — present
   // only on kind:"question" gates. `detail` already carries the flat {question: chosen-answer} map for
   // gate-provenance.ts's existing readers; this is additive, not a replacement.
@@ -496,7 +500,7 @@ export interface RunRecord {
    *  select on one vocabulary. */
   gateOptions: { question: string; options: { label: string; description?: string }[]; multiSelect?: boolean }[];
   decisions: DecisionRecord[];
-  permissiveAutoAllow: string[]; // tools auto-allowed by cowork parity for unscripted/off-registry perms (real Cowork blocks these)
+  permissiveAutoAllow: string[]; // tools the agent CLI asked to use that cowork parity auto-allowed, unscripted (one entry per ask)
   /** Question batches the scripted rules answered only part of — the whole batch went to the fallback.
    *  Filled by `ScriptedDecider` through `RunContext.notePartlyScripted` (report-only). */
   partlyScriptedGates: PartlyScriptedGate[];
@@ -1835,15 +1839,15 @@ export class Run {
         ...(effort !== undefined ? { effort } : {}),
         rationale,
         detail,
+        ...(req.decisionReason !== undefined ? { decisionReason: req.decisionReason } : {}),
+        ...(req.decisionReasonType !== undefined ? { decisionReasonType: req.decisionReasonType } : {}),
       });
-      // A cowork-parity off-registry auto-allow is a SILENT false-green risk — real Cowork blocks for the
-      // user. Make it loud (stderr) AND machine-distinguishable (rec.permissiveAutoAllow → the envelope),
+      // A cowork-parity off-registry auto-allow is a SILENT false-green risk: the agent CLI asked, and nobody
+      // decided. Make it loud (stderr) AND machine-distinguishable (rec.permissiveAutoAllow → the envelope),
       // so a green carrying one isn't mistaken for a faithful pass.
       if (behavior === "allow" && by === "cowork" && rationale === PERMISSIVE_AUTOALLOW_RATIONALE) {
         this.rec.permissiveAutoAllow.push(req.tool);
-        warn(
-          `::warning:: [permission] "${req.tool}" auto-allowed by cowork parity (unscripted, off-registry) — real Cowork would BLOCK for the user. Not a faithful pass; pin with --answer or set permission_parity: strict.\n`,
-        );
+        warn(permissiveAutoAllowWarning(req.tool, req.decisionReasonType, req.decisionReason));
       }
       // pathDenials producer (2): a DENIED can_use_tool ask on a gated file tool with a path attempt —
       // captures EVERY deny regardless of which decider produced it (scripted, parity default, the
@@ -2035,8 +2039,18 @@ export function decisionRows(decisions: DecisionRecord[]): RunResult["decisions"
     ...(d.effort !== undefined ? { effort: d.effort } : {}),
     detail: d.detail,
     rationale: d.rationale,
+    ...(d.decisionReason !== undefined ? { decisionReason: d.decisionReason } : {}),
+    ...(d.decisionReasonType !== undefined ? { decisionReasonType: d.decisionReasonType } : {}),
     questions: d.questions,
   }));
+}
+
+/** The stderr line for one cowork-parity auto-allow. Command-neutral on purpose: `Run` knows neither the command,
+ *  the tier nor the lane, and in `chat` this line is the only trace, so it names the tool and the CLI's own reason and
+ *  claims nothing about real Cowork or a remedy (the verdict signal does that, from the whole result). */
+export function permissiveAutoAllowWarning(tool: string, reasonType: string | undefined, reason: string | undefined): string {
+  const why = reason !== undefined ? ` (${reasonType !== undefined ? `${reasonType}: ` : ""}${JSON.stringify(reason)})` : "";
+  return `::warning:: [permission] the agent CLI asked to use "${tool}"${why}; nothing scripted answered, so it was auto-allowed under cowork parity.\n`;
 }
 function kindOf(req: DecisionRequest): DecisionRecord["kind"] {
   return req.kind === "permission" ? "tool" : (req.kind as DecisionRecord["kind"]);
