@@ -46,6 +46,20 @@ describe("resolveDispatchableAgents — shared cross-language fixture", () => {
     });
   }
 
+  it("no manifest, root given RELATIVE (`critique .`): the folder's real name still namespaces its agents", () => {
+    const root = materialize(
+      { "skills/demo-skill/SKILL.md": '# demo-skill\nsubagent_type: "my-skills-repo:helper"\n', "agents/helper.md": "helper\n" },
+      "my-skills-repo",
+    );
+    const cwd = process.cwd();
+    process.chdir(root);
+    try {
+      expect(resolveDispatchableAgents(".", join("skills", "demo-skill"), "demo-skill").map((a) => a.rel)).toEqual(["agents/helper.md"]);
+    } finally {
+      process.chdir(cwd);
+    }
+  });
+
   it("the fixture is non-trivial (a fixture that lost its cases must not read as a clean pass)", () => {
     expect(fixture.cases.length).toBeGreaterThanOrEqual(10);
   });

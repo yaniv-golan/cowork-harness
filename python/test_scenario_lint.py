@@ -1726,6 +1726,21 @@ def test_resolve_corpus_agents_matches_shared_fixture(case, tmp_path):
     assert got == sorted(case["expected"])
 
 
+def test_corpus_agents_manifestless_root_relative_skill_dir(tmp_path, monkeypatch):
+    """No manifest, and the skill dir given relative (`.` from inside it): the root folder's REAL name still
+    namespaces its agents. `Path(".").name` is empty, so the name must come from the resolved path."""
+    root = _materialize(
+        {
+            "skills/demo-skill/SKILL.md": '# demo-skill\nsubagent_type: "my-skills-repo:helper"\n',
+            "agents/helper.md": "helper\n",
+        },
+        tmp_path / "my-skills-repo",
+    )
+    monkeypatch.chdir(root / "skills" / "demo-skill")
+    resolved = scenario._resolve_corpus_agents(".")
+    assert sorted(p.resolve().relative_to(root.resolve()).as_posix() for p in resolved) == ["agents/helper.md"]
+
+
 def test_corpus_sizing_counts_every_dispatchable_agent(tmp_path):
     """The ceiling warning must size what the packager actually ships. Sizing one agent while the packager
     shipped N under-reported precisely the multi-agent plugins the warning exists for."""
