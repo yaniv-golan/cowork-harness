@@ -139,6 +139,19 @@ describe("eval: two skill-folder arms", () => {
   });
 });
 
+describe("eval: a plugin WITH a manifest and a root SKILL.md (a plugin in its own right)", () => {
+  it("is not given the skill-folder name: tracking stays what critique's resolver says (none without --skill)", async () => {
+    const own = (at: string, body: string) =>
+      write(join(root, at, "my-skills-repo"), {
+        ".claude-plugin/plugin.json": '{"name": "my-skills-repo"}',
+        "SKILL.md": `---\nname: my-skills-repo\ndescription: d\n---\n${body}\n`,
+      });
+    const text = (await dryRun(own("a", "version A"), own("b", "version B"))).join("\n");
+    expect(text).toMatch(/no single skill to record invocation for \(pass --skill <name> to pick one\)/);
+    expect(text).not.toMatch(/arms differ beyond the skill/);
+  });
+});
+
 describe("eval: two plugin-root arms", () => {
   it("control: --skill is tracked and no file-set notice is printed", async () => {
     const a = repo("a", "version A", false);
