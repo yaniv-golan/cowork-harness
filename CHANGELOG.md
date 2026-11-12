@@ -28,7 +28,6 @@ All notable changes to this project are documented here. The format is based on
   longer names `--answer`, which cannot answer a tool permission, or claims that real Cowork would block. The stderr
   warning for each auto-allowed ask names the tool and the reason (home directory as `~`), and no remedy. The severity (fail) and the
   `permissiveAutoAllow` array are unchanged.
-
 - **A missing credential now says where the CLI looked.** The refusal on `run`, `skill`, `probe-dispatch`, `record`,
   `chat`, `critique`, `eval` and `hillclimb`, and `doctor`'s token row, list the places searched in precedence order
   (the environment, a `--dotenv` file given before or after the subcommand, `./.env` in the current directory, the
