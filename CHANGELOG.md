@@ -19,13 +19,14 @@ All notable changes to this project are documented here. The format is based on
 
 - **`permissive_auto_allow` says why the agent asked.** The signal's message now quotes the agent CLI's own reason
   for the permission ask, grouping asks that differ only by file name (count, tool, reason kind, one verbatim
-  example). For a shell ask in a `container` or `hostloop` run on the local lane it adds that an attended Cowork task
-  would show a permission card for the ask and a scheduled one would decline it after a timeout; other tools, other
-  tiers, `lane: remote` and `answer_channel: none` make no claim about Cowork. The remedy follows the command: a `when_tool` rule in
+  example), with the home directory shown as `~`. For a Bash ask in a `container` run on the local lane it adds that an
+  attended Cowork task would show a permission card for the ask and a scheduled one, unless it holds a stored approval
+  for the tool, would decline it when the run is reaped; other tools, other tiers (`hostloop` and `microvm` included:
+  their shell asks were not measured), `lane: remote` and `answer_channel: none` make no claim about Cowork. The remedy follows the command: a `when_tool` rule in
   `answers:`, `permission_parity: strict` or `allow_permissive_auto_allow: true` for `run`/`record`; a `when_tool` rule
   through `--answer-policy` for `skill` and `critique`; re-running through `skill` for `probe-dispatch`. The message no
   longer names `--answer`, which cannot answer a tool permission, or claims that real Cowork would block. The stderr
-  warning for each auto-allowed ask names the tool and the reason, and no remedy. The severity (fail) and the
+  warning for each auto-allowed ask names the tool and the reason (home directory as `~`), and no remedy. The severity (fail) and the
   `permissiveAutoAllow` array are unchanged.
 
 - **A missing credential now says where the CLI looked.** The refusal on `run`, `skill`, `probe-dispatch`, `record`,

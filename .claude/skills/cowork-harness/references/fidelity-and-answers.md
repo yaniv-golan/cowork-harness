@@ -198,8 +198,8 @@ the agent's own logic, varying by command and tier. Measured (the last row on it
 
 So a hello-world probe teaches the wrong expectation: `python3 ${CLAUDE_SKILL_DIR}/scripts/…` asks at `protocol`
 only, and a `sed` substitution on a file in the agent's config dir (where saved tool results land) is a write-safety
-ask (seen at container; hostloop's shell is a different tool). The signal quotes the CLI's reason (`decisions[].decisionReason`) and, at container/hostloop on the
-local lane, what Cowork would do.
+ask (seen at container; hostloop's shell is a different tool). The signal quotes the CLI's reason (`decisions[].decisionReason`) and, at container on the local
+lane, what Cowork would do.
 
 Decide it with a `when_tool: Bash` rule (`answers:`, or `--answer-policy` on `skill`/`critique`; `--answer` cannot
 answer a tool permission), `permission_parity: strict` to deny, or `allow_permissive_auto_allow: true` when

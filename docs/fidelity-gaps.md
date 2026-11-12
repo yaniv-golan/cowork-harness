@@ -1591,16 +1591,18 @@ file outside the config directory. No permission classifier ran: in the default 
 straight to the permission prompt channel, even though the request is marked classifier-approvable.
 
 **Real Cowork (read in asar 4.23118.0):** Desktop never reads that classifier mark. On the local lane, an attended
-Bash ask reaches Desktop's permission handler and waits for the user at a permission card; in a scheduled task the
-card waits and is then declined when the task is reaped with nobody there. How long that takes is not established,
+Bash ask reaches Desktop's permission handler and waits for the user's answer. In a scheduled task, a tool the task
+holds a stored approval for is approved without asking; otherwise the ask waits and is declined when the run is reaped
+(or superseded by a newer run) with nobody there. How long that takes is not established,
 and neither is whether attended local tasks are still offered to a given account (see
 [Which lane a session actually ran on](#which-lane-a-session-actually-ran-on)).
 
 **What the harness does:** the ask arrives like any other tool permission; at `container` the shell tool is Bash, so
 the ask reaches the run. (At `hostloop` shell commands go through `mcp__workspace__bash`; whether that path asks
 the same way was not measured.) Unscripted, `cowork` parity auto-allows it and the run fails the `permissive_auto_allow` verdict signal. The signal
-quotes the agent's reason (also kept on the matching `decisions[]` row as `decisionReason`) and, for a shell ask in a
-`container` or `hostloop` run on the local lane, says what an attended and a scheduled Cowork task would do. To decide the ask,
+quotes the agent's reason (also kept on the matching `decisions[]` row as `decisionReason`) and, for a Bash ask in a
+`container` run on the local lane, says what an attended and a scheduled Cowork task would do; at `hostloop` it makes
+no Cowork claim. To decide the ask,
 script a `when_tool: Bash` rule ([scenario.md](scenario.md#tool-permissions)); to avoid it, read the file with a
 command that cannot edit it.
 

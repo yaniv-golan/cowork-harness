@@ -30,7 +30,7 @@
     },
     {
       "phrase": "real Cowork would BLOCK",
-      "reason": "the permissive_auto_allow signal states what Cowork does only where it is established: an attended task shows a permission card, a scheduled one declines after a timeout"
+      "reason": "the permissive_auto_allow signal states what Cowork does only where it is established: an attended task shows a permission card, a scheduled one without a stored approval declines when the run is reaped"
     },
     {
       "phrase": "not a faithful pass. Pin with --answer",
