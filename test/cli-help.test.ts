@@ -432,3 +432,38 @@ describe.skipIf(!can)("cli --help: `trace --view questions` help matches what th
     expect(rendererEmitsDescriptions).toBe(true);
   });
 });
+
+// A skill folder needs no `.claude-plugin/plugin.json`: the plugin name falls back to the folder's basename, which is
+// what the staged agent does too, and an Agent Skills repo root (`skills/<name>/SKILL.md`, no manifest) is accepted
+// as is. The help used to say the manifest was required, which sent authors off to write one they did not need.
+// One assertion per help line, so each source line is pinned.
+describe.skipIf(!can)("cli --help: the source folder's manifest is optional", () => {
+  const MANIFEST_REQUIRED = /dir containing \.claude-plugin\/plugin\.json/;
+  const OPTIONAL = /\.claude-plugin\/plugin\.json\s+optional/;
+  const SKILLS_REPO = /Agent Skills repo root with\s+skills\/<name>\/SKILL\.md/;
+
+  it.each(["skill", "probe-dispatch", "critique"])("`%s --help` says the manifest is optional and names a skills-repo root", (cmd) => {
+    const { code, text } = help(cmd);
+    expect(code).toBe(0);
+    expect(text).not.toMatch(MANIFEST_REQUIRED);
+    expect(text).toMatch(OPTIONAL);
+    expect(text).toMatch(SKILLS_REPO);
+  });
+
+  it("`critique --help` says a skills/<name> path is promoted to its plugin only when the plugin has a manifest", () => {
+    const { text } = help("critique");
+    expect(text).toMatch(/only when <plugin> has\s+\.claude-plugin\/plugin\.json/);
+  });
+});
+
+// `--answer-policy` takes the same rules as a scenario `answers:` block — `when_tool` permission rules included — not
+// only AskUserQuestion regex→choice rules (`parseAnswerPolicyDoc` validates each entry as an AnswerRule).
+describe.skipIf(!can)("cli --help: --answer-policy accepts when_tool rules", () => {
+  it.each(["skill", "critique"])("`%s --help` names when_tool rules on the --answer-policy line", (cmd) => {
+    const { code, text } = help(cmd);
+    expect(code).toBe(0);
+    const at = text.indexOf("--answer-policy <yaml>");
+    expect(at, "no --answer-policy <yaml> in the help").toBeGreaterThanOrEqual(0);
+    expect(text.slice(at, at + 400)).toMatch(/when_tool/);
+  });
+});

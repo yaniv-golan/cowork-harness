@@ -149,7 +149,13 @@ function usage(): string {
   <skill-folder> may be git:<ref>:<path> (repo-relative, from the current repository): critique the
   skill as it is at that commit, from a snapshot, so an edit or a moved HEAD during the run changes
   nothing. A path at <plugin>/skills/<name> grades that skill of the plugin, as <plugin> --skill
-  <name> does; the report records the resolved commit in source.commit.
+  <name> does, but only when <plugin> has .claude-plugin/plugin.json; the report records the resolved
+  commit in source.commit.
+
+  <skill-folder> is a skill folder, a plugin folder (.claude-plugin/plugin.json optional — the plugin
+  name falls back to the folder name), or an Agent Skills repo root with skills/<name>/SKILL.md. For a
+  repo root with no manifest, pass the root (with --skill <name> when it has several skills), not
+  <root>/skills/<name>: that path is graded as a bare folder, without the root's agents/.
 
   critique --compare <report.json | summary.json …> [--strict] [--cluster none|lexical] [--out <path>] [--output-format json]
   lines up several critiques of one skill side by side (no spend, no model): one group, or two by
@@ -178,7 +184,8 @@ Graded-run tuning (shapes the run being graded):
   --timeout <ms>            wall-clock budget for the task turn (default 30 min)
   --label <tag>             generation tag in the run index (pair critiques across fixes)
   --allow-missing-capability   don't fail EITHER turn on a lean-image capability gap (both turns)
-  --answer "<q-regex>=<choice>" | --answer-policy <yaml>   pre-answer the skill's gates (repeatable)
+  --answer "<q-regex>=<choice>" | --answer-policy <yaml>   pre-answer the skill's gates (repeatable); the
+                            policy file takes question (when_question) and tool-permission (when_tool) rules
   --on-unanswered fail|first   unscripted-gate policy ('prompt' is refused: no TTY inside the spawn)
   --decider-llm [--intent "<line>"] [--decider-model <id>] | --decider-cmd '<helper>' | --decider-dir <dir>
                             answer LIVE gates in the graded run (see 'skill --help')

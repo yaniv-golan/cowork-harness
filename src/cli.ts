@@ -473,7 +473,9 @@ const SKILL_HELP = `cowork-harness skill <plugin-folder> "<prompt>"
   session on every run — no install, marketplace registration, or version bump.
 
 Source (at least one):
-  <plugin-folder>                  dir containing .claude-plugin/plugin.json
+  <plugin-folder>                  a plugin folder (.claude-plugin/plugin.json optional — the plugin name
+                                   falls back to the folder name), or an Agent Skills repo root with
+                                   skills/<name>/SKILL.md (mounted whole, as one plugin)
   --plugin <dir>                   extra plugin source (repeatable)
   --marketplace <dir> --enable name@mkt    load skills via a marketplace.json
 
@@ -501,8 +503,9 @@ Fidelity  --fidelity <tier>       (default: container)
 
 Questions:
   --answer "<q-regex>=<choice>"    pre-answer a matching AskUserQuestion (repeatable)
-  --answer-policy <yaml>           a reusable file of the same regex→choice rules (a bare list, or an
-                                   {answers: [...]} doc) — for skills with several known gates
+  --answer-policy <yaml>           a reusable file of rules, the same shape as a scenario answers: block (a
+                                   bare list, or an {answers: [...]} doc): question rules (when_question)
+                                   and tool-permission rules (when_tool) — for skills with several known gates
   --on-unanswered <policy>         what to do with an UNscripted question (default: adaptive)
       fail     error + print the exact --answer to add (default when piped / CI)
       prompt   ask at the TTY (default when a human is attached)
@@ -2978,7 +2981,8 @@ Fidelity  --fidelity <container|microvm|hostloop>   (default: hostloop — path-
                                a native agent binary — see 'skill --help' for the tier descriptions)
 
 Source:
-  <skill-dir>                  dir containing .claude-plugin/plugin.json
+  <skill-dir>                  a plugin folder (.claude-plugin/plugin.json optional — the plugin name falls
+                               back to the folder name), or an Agent Skills repo root with skills/<name>/SKILL.md
   --plugin <dir>                extra plugin source (repeatable)
 
 Files:

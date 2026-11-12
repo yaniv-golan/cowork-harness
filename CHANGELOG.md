@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Documentation
 
+- **`skill`, `probe-dispatch` and `critique` help no longer say the source folder needs `.claude-plugin/plugin.json`.**
+  It is optional: the plugin name falls back to the folder name, and an Agent Skills repo root with
+  `skills/<name>/SKILL.md` is accepted as is. `critique --help` adds that a `<plugin>/skills/<name>` path is graded
+  as part of its plugin only when the plugin has a manifest. The `--answer-policy` help on `skill` and `critique`
+  now says the file takes `when_tool` permission rules as well as question rules.
 - **`web_fetch.approved_domains` applies at `container` too.** The session docs said it took effect at `hostloop` only.
   It applies wherever the web_fetch approval gate is on: `container` and `hostloop` (and `cowork`, which resolves to
   one of them) when the baseline's web_fetch-via-API gate is on; not `microvm` or `protocol`. Behaviour is unchanged;
