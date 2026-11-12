@@ -123,6 +123,22 @@ for (const manifest of [false, true])
     });
   });
 
+describe("eval: two skill-folder arms", () => {
+  it("--skill naming neither arm's skill is not silently replaced by the skill the arms do share", async () => {
+    const a = repo("a", "version A", false);
+    const b = repo("b", "version B", false);
+    const text = (await dryRun(join(a, "skills", "demo-skill"), join(b, "skills", "demo-skill"), ["--skill", "other-skill"])).join("\n");
+    expect(text).toMatch(/--skill other-skill is not in both arms/);
+  });
+
+  it("control: --skill naming their shared skill is tracked", async () => {
+    const a = repo("a", "version A", false);
+    const b = repo("b", "version B", false);
+    const text = (await dryRun(join(a, "skills", "demo-skill"), join(b, "skills", "demo-skill"), ["--skill", "demo-skill"])).join("\n");
+    expect(text).not.toMatch(NOT_TRACKED);
+  });
+});
+
 describe("eval: two plugin-root arms", () => {
   it("control: --skill is tracked and no file-set notice is printed", async () => {
     const a = repo("a", "version A", false);
