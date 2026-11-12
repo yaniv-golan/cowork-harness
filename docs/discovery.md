@@ -85,8 +85,9 @@ as that route's skills (`<folder>:<agent>` on the `local_plugins` and `remote_pl
   `git add`-ed), so a new, untracked file is not in the run.
 - **For Cowork fidelity, add a minimal manifest.** Claude Desktop's plugin install path (its zip install, the one
   traced) refuses a plugin with no `.claude-plugin/plugin.json`, and Desktop writes one for a server-synced plugin
-  that lacks it, so on those routes a plugin reaches Cowork's agent with a manifest. A one-line `{"name": "my-skills-repo"}`, with the folder's name, keeps
-  the `<folder>:<skill>` id on every plugin route. The alternative is to test the skill standalone through
+  that lacks it, so on those routes a plugin reaches Cowork's agent with a manifest. A one-line
+  `{"name": "my-skills-repo"}`, with the folder's name, gives the `<folder>:<skill>` id on every plugin route,
+  `chat --raw` included. The alternative is to test the skill standalone through
   `skills.local`.
 - **The static checkers cannot tell how a tree with no manifest will be installed**, so some still need the manifest:
   - `lint-skill` keeps the `${CLAUDE_PLUGIN_ROOT}` WARN, naming both routes (on `skills.local` nothing replaces the

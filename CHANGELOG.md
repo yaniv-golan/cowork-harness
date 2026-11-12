@@ -29,8 +29,7 @@ All notable changes to this project are documented here. The format is based on
   `availableSkills[].whenToUse` (both were wrong before for this case). A folder name holding whitespace, `@`, `:`,
   `/` or `\` cannot be a manifest name: nothing is written, a WARN says so, and the plugin keeps `plugin_<id>`, which
   the harness now reports too. A local-marketplace plugin with no manifest gets none written (its staged folder
-  already carries its entry name), and the harness's readers now use that name, not the source folder's. A scenario
-  asserting on the old `plugin_<id>:<skill>` id of a manifest-less remote plugin needs the new id.
+  already carries its entry name), and the harness's readers now use that name, not the source folder's.
 - `lint-skill`: `plugin-root-in-vm-bash` for a skill with no plugin manifest above it is still a WARN, but its message
   now names both install routes (as a standalone skill nothing replaces the token; a folder above it loaded as a
   plugin is named after the folder and the agent does replace it) and its fix suggests adding a manifest. A
@@ -66,6 +65,12 @@ All notable changes to this project are documented here. The format is based on
   It applies wherever the web_fetch approval gate is on: `container` and `hostloop` (and `cowork`, which resolves to
   one of them) when the baseline's web_fetch-via-API gate is on; not `microvm` or `protocol`. Behaviour is unchanged;
   a test now pins the tier rule and the seeded/unseeded contrast.
+
+### Upgrade notes
+
+- **A manifest-less `remote_plugins` skill has a new id.** A scenario that asserts on `plugin_<id>:<skill>` for a
+  `remote_plugins` folder with no `.claude-plugin/plugin.json` now sees `<folder>:<skill>` (the harness writes the
+  manifest Claude Desktop writes for a synced plugin). Update the assertion, or add a manifest to the folder.
 
 ### Fixed
 

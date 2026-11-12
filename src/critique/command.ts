@@ -150,8 +150,7 @@ function usage(): string {
   skill as it is at that commit, from a snapshot, so an edit or a moved HEAD during the run changes
   nothing. A path at <plugin>/skills/<name> grades that skill of the plugin, as <plugin> --skill
   <name> does, but only when <plugin> has a manifest (.claude-plugin/plugin.json or a root plugin.json);
-  the report records the resolved
-  commit in source.commit.
+  the report records the resolved commit in source.commit.
 
   <skill-folder> is a skill folder, a plugin folder (.claude-plugin/plugin.json optional — the plugin
   name falls back to the folder name), or an Agent Skills repo root with skills/<name>/SKILL.md. For a
