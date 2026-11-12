@@ -489,7 +489,33 @@ describe.skipIf(!havePython)("lint-skill — plugin-root finding per form", () =
     writeFileSync(join(d, "SKILL.md"), ["# S", "", "```bash", 'bash "${CLAUDE_PLUGIN_ROOT}/x.sh"', "```", ""].join("\n"));
     const hits = lintSkill(d).findings.filter((f) => f.rule.startsWith("plugin-root"));
     expect(hits.map((f) => [f.rule, f.severity])).toEqual([["plugin-root-in-vm-bash", "WARN"]]);
-    expect(hits[0]!.message).toMatch(/outside a plugin/);
+    expect(hits[0]!.message).toMatch(/no plugin manifest/);
+  });
+
+  it("no manifest above a `skills/<name>` skill: the WARN names both install routes, since the linter cannot tell which applies", () => {
+    // Installed as a standalone skill nothing replaces the token; the folder above `skills/` mounted as a plugin
+    // with no manifest is named after its folder, and the agent does replace it there. Severity is unchanged.
+    const root = join(mkdtempSync(join(tmpdir(), "cwh-skill-mless-")), "my-skills-repo");
+    const d = join(root, "skills", "demo-skill");
+    mkdirSync(d, { recursive: true });
+    writeFileSync(
+      join(d, "SKILL.md"),
+      ["# S", "", "```bash", 'python3 "${CLAUDE_PLUGIN_ROOT}/skills/demo-skill/x.py"', "```", ""].join("\n"),
+    );
+    const hits = lintSkill(d).findings.filter((f) => f.rule.startsWith("plugin-root"));
+    expect(hits.map((f) => [f.rule, f.severity])).toEqual([["plugin-root-in-vm-bash", "WARN"]]);
+    expect(hits[0]!.message).toMatch(/as a standalone skill/);
+    expect(hits[0]!.message).toMatch(/as a plugin/);
+    expect(hits[0]!.fix).toMatch(/\.claude-plugin\/plugin\.json/);
+
+    // control: the same tree with a manifest at its root is the plugin-skill INFO, as before
+    mkdirSync(join(root, ".claude-plugin"));
+    writeFileSync(join(root, ".claude-plugin", "plugin.json"), '{"name": "my-skills-repo"}');
+    expect(
+      lintSkill(d)
+        .findings.filter((f) => f.rule.startsWith("plugin-root"))
+        .map((f) => [f.rule, f.severity]),
+    ).toEqual([["plugin-root-braced-in-vm-bash", "INFO"]]);
   });
 
   it.each([
