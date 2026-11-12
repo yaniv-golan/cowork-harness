@@ -1,4 +1,5 @@
 import { warn } from "../io.js";
+import { writeMissingPluginManifest } from "./plugin-manifest.js";
 import { existsSync, mkdirSync, cpSync, realpathSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import type { LaunchPlan } from "../session.js";
@@ -95,6 +96,7 @@ export function stageWorkspace(plan: LaunchPlan, mntHost: string, fixtureRoots: 
           verbatimSymlinks: true,
           ...(f ? { filter: f } : {}),
         });
+        writeMissingPluginManifest(mt, dest);
       } else {
         // buildLaunchPlan already validated every mount source present (or filtered it out under
         // COWORK_HARNESS_SOFT_MISSING), so a source absent HERE means it vanished between plan-build

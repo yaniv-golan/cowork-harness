@@ -593,6 +593,25 @@ export function readonlyFolderRootsFromPlan(plan: LaunchPlan): string[] {
   return plan.mounts.filter((m) => (m.kind === "folder" && m.mode === "r") || m.kind === "project").map((m) => m.mountPath);
 }
 
+/** The name a plugin mount is loaded under when its source has no `.claude-plugin/plugin.json` naming it.
+ *
+ *  Claude Desktop writes a manifest (`{name}`, never overwriting one) into a plugin it syncs without one, and
+ *  stages a server-synced plugin at `.remote-plugins/<server id>`, so the staged folder's name is never the
+ *  plugin's name. The harness mirrors that in its staged copy (`writeMissingPluginManifest`, runtime/
+ *  plugin-manifest.ts), and every reader that derives a name from the mount's SOURCE must use this same value:
+ *   - a local-marketplace plugin: the marketplace ENTRY name, which is the mount path below
+ *     `.local-plugins/marketplaces/<marketplace>/` (it may nest: `@scope/pkg`), not the source folder's name;
+ *   - a `remote_plugins` mount: the source folder's name, the harness's stand-in for the server-side name;
+ *   - a `local_plugins` mount: the source folder's name, which is also its staged folder's name, so nothing is
+ *     written for it. */
+export function manifestlessPluginName(m: Pick<Mount, "kind" | "hostPath" | "mountPath">): string {
+  if (m.kind === "marketplace-plugin") {
+    const segs = m.mountPath.split("/");
+    if (segs[0] === ".local-plugins" && segs[1] === "marketplaces" && segs.length >= 4) return segs.slice(3).join("/");
+  }
+  return basename(m.hostPath);
+}
+
 /** Plugin skill-source roots for `resolveAvailableSkills`'s whenToUse enrichment. Reads each
  *  staged plugin mount's `.claude-plugin/plugin.json` for the plugin `name` + `skills` subdir; best-effort,
  *  never throws (a missing/corrupt manifest falls back to the dir basename + a "skills" subdir). */
@@ -600,7 +619,7 @@ export function pluginSkillRootsFromPlan(plan: LaunchPlan): PluginSkillRoot[] {
   const out: PluginSkillRoot[] = [];
   for (const m of plan.mounts) {
     if (m.kind !== "local-plugin" && m.kind !== "remote-plugin" && m.kind !== "marketplace-plugin") continue;
-    const { name, skillsSubdir } = binaryPluginIdentity(m.hostPath);
+    const { name, skillsSubdir } = binaryPluginIdentity(m.hostPath, manifestlessPluginName(m));
     out.push({ pluginName: name, hostPath: m.hostPath, skillsSubdir, stageFilter: m.stageFilter });
   }
   return out;
@@ -614,9 +633,13 @@ export function pluginSkillRootsFromPlan(plan: LaunchPlan): PluginSkillRoot[] {
  *  `context.availableSkills[].id`, so it is the ONE rule to use wherever an observed id is compared to a
  *  graded plugin. `readPluginName` in resolve-agents.ts is a different, deliberately lenient contract
  *  (it mirrors the Python linter and accepts a root `plugin.json`) and must not be used for that
- *  comparison: doing so turned a fully-invoked run into `skillInvocationObserved: false`. Never throws. */
-export function binaryPluginIdentity(pluginRoot: string): { name: string; skillsSubdir: string } {
-  let name = basename(pluginRoot);
+ *  comparison: doing so turned a fully-invoked run into `skillInvocationObserved: false`. Never throws.
+ *
+ *  `fallbackName` is for a caller that reads a mount's SOURCE while the agent loads its staged copy: a
+ *  manifest-less remote or marketplace plugin gets a manifest written into that copy (`manifestlessPluginName`),
+ *  so the name the agent sees is not the source's basename. Path-only callers keep the basename. */
+export function binaryPluginIdentity(pluginRoot: string, fallbackName = basename(pluginRoot)): { name: string; skillsSubdir: string } {
+  let name = fallbackName;
   let skillsSubdir = "skills";
   try {
     const parsed = JSON.parse(readFileSync(join(pluginRoot, ".claude-plugin", "plugin.json"), "utf8")) as {
@@ -655,7 +678,7 @@ function guessMarketplaceQualifier(mount: Mount): string {
 /**
  * Enumerate every plugin mounted for this session — the `plugins` SDK-MCP server's `list_plugins`
  * catalog. Reads each plugin mount's `.claude-plugin/plugin.json` for `name`/`description`/`skills`
- * subdir (best-effort — a missing/corrupt manifest falls back to the mount's dir basename, no
+ * subdir (best-effort — a missing/corrupt manifest falls back to `manifestlessPluginName`, no
  * description, and the default "skills" subdir, same fallback `pluginSkillRootsFromPlan` uses), then
  * lists that subdir's skill dirs with their `SKILL.md` descriptions (empty array if the subdir is
  * missing/unreadable — a plugin need not have any skills).
@@ -664,7 +687,7 @@ export function mountedPluginsFromPlan(plan: LaunchPlan): MountedPlugin[] {
   const out: MountedPlugin[] = [];
   for (const m of plan.mounts) {
     if (m.kind !== "local-plugin" && m.kind !== "remote-plugin" && m.kind !== "marketplace-plugin") continue;
-    let name = basename(m.hostPath);
+    let name = manifestlessPluginName(m);
     let description: string | undefined;
     let skillsSubdir = "skills";
     const pj = join(m.hostPath, ".claude-plugin", "plugin.json");

@@ -1,4 +1,5 @@
 import { cpSync, existsSync, mkdirSync, realpathSync, rmSync } from "node:fs";
+import { writeMissingPluginManifest } from "./plugin-manifest.js";
 import { isConnectedContent } from "../session.js";
 import { dirname, join } from "node:path";
 import { containedRealPath } from "../boundary-paths.js";
@@ -62,6 +63,7 @@ export function stageHostLoopWorkspace(plan: LaunchPlan, mntHost: string, fixtur
           verbatimSymlinks: true,
           ...(f ? { filter: f } : {}),
         });
+        writeMissingPluginManifest(mt, dest);
       } else {
         // buildLaunchPlan validated every source present (or filtered it under COWORK_HARNESS_SOFT_MISSING);
         // absent here is a TOCTOU vanish. Fail loud instead of silently staging an incomplete workspace.

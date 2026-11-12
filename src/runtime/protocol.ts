@@ -1,4 +1,5 @@
 import { warn } from "../io.js";
+import { writeMissingPluginManifest } from "./plugin-manifest.js";
 import { artifactsRootEnv, permissionPromptArgs } from "../answer-channel.js";
 import { spawn } from "node:child_process";
 import { mkdirSync, cpSync, existsSync, realpathSync } from "node:fs";
@@ -96,6 +97,7 @@ export function stageProtocolMounts(plan: LaunchPlan, work: string, workReal = r
         verbatimSymlinks: true,
         ...(f ? { filter: f } : {}),
       });
+      writeMissingPluginManifest(m, dest);
     } else if ((process.env.COWORK_HARNESS_SOFT_MISSING ?? "") === "") {
       // The source vanished between plan-build (which already validated existence for a REQUIRED mount)
       // and staging — a TOCTOU race. Silently skipping would stage an empty tree, then a file_exists /
