@@ -124,6 +124,7 @@ import {
   isCommandGlobalFlag,
   recordLeadingGlobals,
   recordInstallCredentials,
+  recordDotenvSource,
   setRunsDir,
   stripCommandGlobals,
   withCommandGlobals,
@@ -1012,6 +1013,7 @@ async function main() {
   // loud instead, naming the path and the underlying cause, before any fallback source is touched.
   if (explicitEnvFile) {
     seenSources.add(resolve(explicitEnvFile));
+    recordDotenvSource({ kind: "--dotenv", path: resolve(explicitEnvFile) });
     try {
       loadedEnv.push(...loadDotenv(explicitEnvFile, { strict: true }));
     } catch (err) {
@@ -1028,6 +1030,7 @@ async function main() {
     const key = resolve(f);
     if (seenSources.has(key)) continue; // don't double-load when cwd (or --dotenv) === install dir
     seenSources.add(key);
+    recordDotenvSource({ kind: install ? "the install's .env" : "./.env", path: key });
     const keys = loadDotenv(f);
     loadedEnv.push(...keys);
     if (install) packageRootCredentials = keys.filter((k) => SECRET_ENV_KEYS.has(k));

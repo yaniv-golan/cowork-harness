@@ -1,4 +1,4 @@
-import { applyParsedCommandGlobals, withCommandGlobals } from "./command-globals.js";
+import { applyParsedCommandGlobals, dotenvSourcesLookedAt, withCommandGlobals } from "./command-globals.js";
 import { FIDELITY_TIERS } from "../types.js";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
@@ -20,7 +20,7 @@ import {
 import { decideLoopFromBaseline } from "../loop-decision.js";
 import { limaPath, vmStatus, instanceName, vmProvisioned } from "../runtime/lima.js";
 import { fail, isJsonOutput, jsonPayloadEnvelope } from "./envelope.js";
-import { writeAllSync } from "../io.js";
+import { tildeify, writeAllSync } from "../io.js";
 import { GRADER_CREDENTIAL_KEYS, graderCredential } from "../decide/llm-transport.js";
 import { runtimeAuthKey } from "../runtime/host-env.js";
 import { pinnedDigestFor, resolveAgentImage, resolveContainerRuntime, resolveProxyImage } from "../runtime/agent-image.js";
@@ -152,6 +152,10 @@ export interface DoctorProbe {
   // When cwd is a git WORKTREE with no local ./.env but the main checkout has one, returns that .env path —
   // the gitignored .env doesn't travel to a worktree, a common "no token" first-run trap. null otherwise.
   worktreeEnv(): string | null;
+  // Where the CLI looked for a credential, in precedence order (the environment, then each .env file it read), as
+  // display strings — recorded by the CLI's loader (command-globals). OPTIONAL: a probe without it, or a process
+  // that recorded none (a library caller), lists nothing, so the message never claims a search it did not make.
+  envSources?(): string[];
   baseline(): { ok: true; version: string } | { ok: false; error: string };
   // Advisory only (never blocks doctor) — is `python3` on PATH? `lint` requires it. Optional so existing
   // test doubles don't need updating: when a probe doesn't implement it, doctor falls back to a real
@@ -378,6 +382,19 @@ export const realProbe: DoctorProbe = {
     return r.status === 0;
   },
   authTokenOnly: () => !!process.env.ANTHROPIC_AUTH_TOKEN && !process.env.CLAUDE_CODE_OAUTH_TOKEN && !process.env.ANTHROPIC_API_KEY,
+  envSources: () => {
+    const files = dotenvSourcesLookedAt();
+    if (!files.length) return [];
+    return [
+      "the environment",
+      ...files.map((f) => {
+        const missing = existsSync(f.path) ? "" : ", no such file";
+        return f.kind === "--dotenv"
+          ? `--dotenv ${tildeify(f.path)}${missing ? " (no such file)" : ""}`
+          : `${f.kind} (${tildeify(f.path)}${missing})`;
+      }),
+    ];
+  },
   worktreeEnv: () => {
     if (existsSync(join(process.cwd(), ".env"))) return null; // a local .env exists → not the worktree trap
     const gitDir = spawnSync("git", ["rev-parse", "--git-dir"], { encoding: "utf8" });
@@ -519,6 +536,10 @@ export function tokenCheck(tier: Tier, probe: DoctorProbe = realProbe): DoctorCh
   // .env doesn't apply. Point at it via --dotenv. (Keychain takes precedence — it's the "you have a token,
   // just unreadable in-Docker" case.)
   const worktreeEnv = !token && !authTokenOnly && !keychainOnly ? probe.worktreeEnv() : null;
+  // Where the CLI looked, listed FIRST on a missing credential: "set a token" means little until you know which files
+  // were read (a .env is picked up from the cwd, not from the folder under test).
+  const sources = !token && !authTokenOnly ? (probe.envSources?.() ?? []) : [];
+  const lookedIn = sources.length ? ` (looked in: ${sources.join("; ")})` : "";
   // A rejected ANTHROPIC_AUTH_TOKEN is not reported as an auth error at protocol: the agent sends it as a plain bearer
   // and retries the 401 until the run's timeout (measured against a local 401 server). The caveat rides on the `ok` row.
   const authTokenCaveat =
@@ -537,16 +558,16 @@ export function tokenCheck(tier: Tier, probe: DoctorProbe = realProbe): DoctorCh
       : authTokenOnly
         ? `only ANTHROPIC_AUTH_TOKEN is set, and it reaches the agent at fidelity protocol only: at fidelity ${tier} the agent is given CLAUDE_CODE_OAUTH_TOKEN, else ANTHROPIC_API_KEY`
         : keychainOnly
-          ? "found a 'Claude Code-credentials' Keychain entry, but cowork-harness does not pass a Keychain credential to the agent"
+          ? `no ${accepted}${lookedIn}; found a 'Claude Code-credentials' Keychain entry, but cowork-harness does not pass a Keychain credential to the agent`
           : worktreeEnv
-            ? "no token in this git worktree (its ./.env is gitignored, so it's absent here)"
-            : `no ${accepted}`,
+            ? `no token in this git worktree (its ./.env is gitignored, so it's absent here)${lookedIn}`
+            : `no ${accepted}${lookedIn}`,
     remedy: token
       ? undefined
       : authTokenOnly
         ? "put a token in CLAUDE_CODE_OAUTH_TOKEN (claude setup-token), or use ANTHROPIC_API_KEY — for an API-key gateway at fidelity hostloop, also list ANTHROPIC_BASE_URL in the session's agent_env.passthrough. An ANTHROPIC_AUTH_TOKEN gateway runs at fidelity protocol"
         : keychainOnly
-          ? "copy your Keychain token into ./.env — cowork-harness injects only env / .env into the agent, at every tier: echo CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) >> .env — or, if the token is already in another file, point at it: cowork-harness --dotenv <path> <cmd> (doctor honors --dotenv too)"
+          ? "if the token is already in a file, point at it: cowork-harness --dotenv <path> <cmd> (doctor honors --dotenv too); otherwise copy your Keychain token into ./.env — cowork-harness injects only env / .env into the agent, at every tier: echo CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) >> .env"
           : worktreeEnv
             ? `the main checkout has a .env — point at it: cowork-harness --dotenv ${worktreeEnv} <cmd> (or set CLAUDE_CODE_OAUTH_TOKEN)`
             : `export CLAUDE_CODE_OAUTH_TOKEN=$(claude setup-token) (or set ${protocol ? "ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN" : "ANTHROPIC_API_KEY"}), put it in ./.env, or point at another file: cowork-harness --dotenv <path> <cmd>`,

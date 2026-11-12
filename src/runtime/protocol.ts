@@ -171,13 +171,14 @@ export function spawnProtocol(
   return { child, runTag, workDir: work, subagentConfigRoot: plan.configDir };
 }
 
-/** The refusal for a run with no credential the agent can use at `tier`: doctor's own detail and remedy, so the text
- *  and the predicate cannot drift. `who` names the scenario(s). */
+/** The refusal for a run with no credential the agent can use at `tier`: doctor's own detail (which lists where the CLI
+ *  looked) and remedy, so the text and the predicate cannot drift, then the Keychain note. `who` names the scenario(s). */
 export function credentialRefusal(who: string, check: DoctorCheck, tier = "protocol"): string {
   return (
-    `${who}: fidelity ${tier} needs a credential in the environment (env / .env) — ${check.detail}. ` +
-    `The agent runs with a managed config dir, so a Keychain or /login session is not used.` +
-    (check.remedy ? ` Fix: ${check.remedy}` : "")
+    `${who}: fidelity ${tier} needs a credential in the environment (env / .env) — ${check.detail}.` +
+    (check.remedy ? ` Fix: ${check.remedy}.` : "") +
+    // Last: where it looked and how to point at a file come first; the Keychain note is the fallback explanation.
+    ` The agent runs with a managed config dir, so a Keychain or /login session is not used.`
   );
 }
 

@@ -8,6 +8,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Changed
 
+- **A missing credential now says where the CLI looked.** The refusal on `run`, `skill`, `probe-dispatch`, `record`,
+  `chat`, `critique`, `eval` and `hillclimb`, and `doctor`'s token row, list the places searched in precedence order
+  (the environment, a `--dotenv` file given before or after the subcommand, `./.env` in the current directory, the
+  install's `.env`, each marked when it does not exist), then how to point at a file with `--dotenv`, and only then
+  the Keychain note. The search itself is unchanged.
 - **A judged assert refused because its evidence was cut now says how to recover it from the kept run.** On a live
   `run` or `record`, a `semantic_matches` / `semantic_pairwise` refusal for a file truncated at the per-file cap or
   dropped or cut at the capture budget adds the `cowork-harness regrade <run-dir> --scenario <scenario.yaml>` command

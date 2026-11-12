@@ -55,6 +55,29 @@ export function runDirFlagGiven(): boolean {
   return state?.leading["--run-dir"] === true || applied.has("--run-dir");
 }
 
+/** One .env file the CLI read (or tried to) for credentials, in precedence order. */
+export interface DotenvSource {
+  kind: "--dotenv" | "./.env" | "the install's .env";
+  path: string;
+}
+const dotenvSources: DotenvSource[] = [];
+
+/** Record a .env file the CLI looked at — main() for the leading --dotenv, ./.env and the install's .env, and
+ *  applyCommandGlobal for a --dotenv after the subcommand — so a missing-credential message can say where it looked
+ *  (doctor's `envSources`). A path recorded twice (cwd === install dir) is listed once. */
+export function recordDotenvSource(src: DotenvSource): void {
+  const at = dotenvSources.findIndex((s) => resolve(s.path) === resolve(src.path));
+  if (at >= 0) return;
+  // An explicit --dotenv outranks both auto-loaded files, wherever on the command line it was given.
+  if (src.kind === "--dotenv") dotenvSources.unshift(src);
+  else dotenvSources.push(src);
+}
+
+/** The .env files recorded so far, highest precedence first. Empty when no CLI loader ran (a library caller). */
+export function dotenvSourcesLookedAt(): readonly DotenvSource[] {
+  return dotenvSources;
+}
+
 /** Called once by main(), after the leading flags are handled and BEFORE any .env file is loaded. */
 export function recordLeadingGlobals(leading: Record<CommandGlobalFlag, boolean>): void {
   state = { protectedKeys: new Set(Object.keys(process.env)), leading, installCredentials: new Set() };
@@ -79,6 +102,7 @@ export function applyCommandGlobal(command: string, flag: CommandGlobalFlag, val
     return;
   }
   if (!existsSync(value)) fail(command, "usage", `--dotenv file not found: ${value}`, undefined, json);
+  recordDotenvSource({ kind: "--dotenv", path: resolve(value) });
   let entries: Map<string, string>;
   try {
     entries = parseDotenv(readFileSync(value, "utf8"));
