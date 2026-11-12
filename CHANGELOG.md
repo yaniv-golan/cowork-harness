@@ -6,7 +6,27 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- **`decisions[].decisionReason` / `decisionReasonType`.** A tool-permission row in `result.json` carries the agent
+  CLI's reason for the ask and its kind (`decision_reason` / `decision_reason_type` on the request), when the request
+  had one. Re-derived on replay from the recorded frames.
+- **`critique` lists the graded run's failing verdict signals.** Under `graded outcome:` the text report prints one
+  line per failing signal (code and the message's first line), labelled as concerning the graded run; the JSON report
+  carries them as `gradedSignals`. `--summary-out` does not.
+
 ### Changed
+
+- **`permissive_auto_allow` says why the agent asked.** The signal's message now quotes the agent CLI's own reason
+  for the permission ask, grouping asks that differ only by file name (count, tool, reason kind, one verbatim
+  example). For a `container` or `hostloop` run on the local lane it adds that an attended Cowork task would show a
+  permission card for the ask and a scheduled one would decline it after a timeout; other tiers, `lane: remote` and
+  `answer_channel: none` make no claim about Cowork. The remedy follows the command: a `when_tool` rule in
+  `answers:`, `permission_parity: strict` or `allow_permissive_auto_allow: true` for `run`/`record`; a `when_tool` rule
+  through `--answer-policy` for `skill` and `critique`; re-running through `skill` for `probe-dispatch`. The message no
+  longer names `--answer`, which cannot answer a tool permission, or claims that real Cowork would block. The stderr
+  warning for each auto-allowed ask names the tool and the reason, and no remedy. The severity (fail) and the
+  `permissiveAutoAllow` array are unchanged.
 
 - **A missing credential now says where the CLI looked.** The refusal on `run`, `skill`, `probe-dispatch`, `record`,
   `chat`, `critique`, `eval` and `hillclimb`, and `doctor`'s token row, list the places searched in precedence order
@@ -40,6 +60,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Documentation
 
+- **A `sed` substitution on a file in the agent's config directory asks for Bash.** A new fidelity-gaps entry: the
+  agent's write-safety check asks for it even though Bash is pre-approved, so `permissive_auto_allow` can fire at
+  `container`; what the request carries, which commands were not asked, what Desktop does with the ask, and the
+  residual (measured on the native macOS build of the same agent version). The scenario guide says asks reach a rule
+  only when the agent itself asks, and the companion skill's section on the signal covers the container case.
 - **Companion skill.** The authoring reference points at the Agent Skills repo section; the semantic-judging reference
   says to scope `evidence_files` from the start when a skill writes a generated file beside its deliverable, and that a
   kept run refused at a cap can be re-graded; the debugging and critique references carry the `toolCalls` input shape
