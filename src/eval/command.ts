@@ -699,7 +699,11 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
   const isSkillFolderArm = (s: SnapshotInfo) =>
     existsSync(join(s.dir, "SKILL.md")) && (args.skill === undefined || !existsSync(join(s.dir, "skills", args.skill, "SKILL.md")));
   const skillNames = snaps.map((s) => {
-    if (isSkillFolderArm(s)) return rootSkillRegisteredName(s.dir, basename(s.sourceDir ?? s.dir));
+    if (isSkillFolderArm(s)) {
+      const own = rootSkillRegisteredName(s.dir, basename(s.sourceDir ?? s.dir));
+      // `--skill` still selects: a skill folder whose skill it does not name has no such skill.
+      return args.skill === undefined || args.skill === own ? own : undefined;
+    }
     try {
       return gradedSkillNameFor(args.skill, resolveCritiquedSkillDir(s.dir, args.skill));
     } catch (caught) {
