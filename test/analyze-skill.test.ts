@@ -960,6 +960,64 @@ describe("resolveSkillTarget — directory union resolution", () => {
     expect(resolved.error).toMatch(/agents/);
   });
 
+  it("a root with NO manifest but skills/*/SKILL.md, named directly, scans what the same root with a manifest scans", () => {
+    // Loaded as a plugin, such a folder is named after itself and carries its root agents/ and commands/; scanning
+    // only its (absent) top-level SKILL.md used to report 0 files as a clean pass.
+    const make = (manifest: boolean) => {
+      const root = join(mkdtempSync(join(tmpdir(), "as-resolve-mless-")), "my-skills-repo");
+      const files: Record<string, string> = {
+        "README.md": "readme\n",
+        "agents/helper.md": "agent doc\n",
+        "commands/c.md": "command doc\n",
+        "references/r.md": "reference doc\n",
+        "skills/demo-skill/SKILL.md": "skill body\n",
+        "skills/demo-skill/references/example.md": "skill reference\n",
+        "skills/not-a-skill/notes.md": "no SKILL.md here\n",
+        ...(manifest ? { ".claude-plugin/plugin.json": JSON.stringify({ name: "my-skills-repo" }) } : {}),
+      };
+      for (const [rel, body] of Object.entries(files)) {
+        mkdirSync(dirname(join(root, rel)), { recursive: true });
+        writeFileSync(join(root, rel), body);
+      }
+      const resolved = resolveSkillTarget(root);
+      if ("error" in resolved) throw new Error(`expected a resolution, got error: ${resolved.error}`);
+      return {
+        files: resolved.files.map((f) => f.slice(root.length + 1)).sort(),
+        unscanned: resolved.unscanned.map((u) => u.slice(root.length + 1)),
+      };
+    };
+    const control = make(true);
+    expect(control.files).toEqual(
+      [
+        join("agents", "helper.md"),
+        join("commands", "c.md"),
+        join("references", "r.md"),
+        join("skills", "demo-skill", "SKILL.md"),
+        join("skills", "demo-skill", "references", "example.md"),
+      ].sort(),
+    );
+    expect(make(false)).toEqual(control);
+  });
+
+  it("no manifest: only the NAMED root is recognized — a skill dir under it does not walk up to the root's agents/", () => {
+    const root = join(mkdtempSync(join(tmpdir(), "as-resolve-mless-up-")), "my-skills-repo");
+    mkdirSync(join(root, "agents"), { recursive: true });
+    writeFileSync(join(root, "agents", "helper.md"), "agent doc\n");
+    const skillDir = join(root, "skills", "demo-skill");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(join(skillDir, "SKILL.md"), "skill body\n");
+    const resolved = resolveSkillTarget(skillDir);
+    if ("error" in resolved) throw new Error(`expected a resolution, got error: ${resolved.error}`);
+    expect(resolved.files).toEqual([join(skillDir, "SKILL.md")]);
+  });
+
+  it("no manifest and no skills/*/SKILL.md: still the usage error", () => {
+    const root = mkdtempSync(join(tmpdir(), "as-resolve-mless-none-"));
+    mkdirSync(join(root, "skills", "empty"), { recursive: true });
+    writeFileSync(join(root, "README.md"), "readme\n");
+    expect("error" in resolveSkillTarget(root)).toBe(true);
+  });
+
   it("a FILE target still resolves to just that file (unchanged single-file behavior)", () => {
     const d = mkdtempSync(join(tmpdir(), "as-resolve-file-"));
     const file = join(d, "SKILL.md");
