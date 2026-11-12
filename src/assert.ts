@@ -1006,7 +1006,9 @@ function regradeHintText(a: Assertion, refusal: SemanticRefusal, ctx: AssertCont
   const r = refusal.capRecovery;
   const o = judgedOpts(a);
   if (!ctx.regradeHint || !r || !o) return "";
-  const sibling = [...(ctx.judgedDocs?.keys() ?? [])].some((k) => k !== a);
+  // A semantic_pairwise assert records its document in `composedDocs` (whether or not a judge read it); regrade measures
+  // against either (`judgedDoc ?? composedDoc`), so both count as a sibling's recorded document.
+  const sibling = [...(ctx.judgedDocs?.keys() ?? []), ...(ctx.composedDocs?.keys() ?? [])].some((k) => k !== a);
   const cmd =
     "cowork-harness regrade <run-dir> --scenario <scenario.yaml>" +
     (r.budget ? " --authored-total-bytes <N>" : "") +

@@ -109,6 +109,14 @@ describe("judge-cap refusal: a branch-specific regrade hint on an eligible live 
     }
   });
 
+  it("a graded semantic_pairwise sibling counts too: it records its document as composedDocs, not judgedDocs", async () => {
+    const ctx = ctxFor([{ path: "outputs/big.html", content: "x", truncated: true }], undefined, true);
+    const pairwise = { semantic_pairwise: { refs: ["r"] } } as unknown as Assertion;
+    ctx.composedDocs = new Map([[pairwise, { sha256: "0".repeat(64), sections: [] } as never]]);
+    const m = await messageOf(ctx, [judged()]);
+    expect(m).toContain(`\`${REGRADE} --allow-unchecked\``);
+  });
+
   it("no hint when the context does not ask for one (replay, verify-run, regrade, skill, legs, eval/hillclimb arms)", async () => {
     for (const flag of [undefined, false]) {
       const m = await messageOf(ctxFor([{ path: "outputs/big.html", content: "x", truncated: true }], undefined, flag), [judged()]);
