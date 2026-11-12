@@ -74,8 +74,9 @@ command accepts it as it is. What changes is how you mount it, and each mounting
 | `chat --raw <root>` | the whole root, staged under a fixed `skill` directory | `skill:<skill>` |
 | `skills.local: [<root>/skills/<name>]` | that one skill folder, standalone | `<skill>` |
 
-With no manifest the plugin name falls back to the folder name; the staged agent does the same. On the plugin
-routes the whole root is plugin content: `README.md` and `AGENTS.md` are staged with it, and the agents in a root
+On the `local_plugins` routes (the first row), with no manifest the plugin name falls back to the folder name, as the
+staged agent's does; the other rows name it after their staged directory instead. On every plugin route the whole
+root is plugin content: `README.md` and `AGENTS.md` are staged with it, and the agents in a root
 `agents/` register as `<folder>:<agent>`.
 
 - **Commit first.** Inside a git repo the harness stages only git-tracked files (in the index: committed or

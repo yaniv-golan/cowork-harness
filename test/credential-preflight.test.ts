@@ -208,6 +208,7 @@ describe.skipIf(!can)("credential pre-flight", () => {
     const r = cli(["critique", "sk", "--prompt", "do the thing", "--model", "claude-sonnet-5"], d);
     expect(r.code, r.all).toBe(2);
     expect(r.all).toContain("critique: no usable agent credential for fidelity container");
+    expect(r.all).toMatch(/looked in: the environment; \.\/\.env \(/);
     expect(r.all).not.toMatch(SPAWN_GUARD);
     expect(existsSync(join(d, ".runs"))).toBe(false);
   });

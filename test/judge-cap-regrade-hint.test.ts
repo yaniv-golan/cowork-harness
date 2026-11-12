@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { runSemanticJudges, evaluate, type AssertContext, type SemanticJudge } from "../src/assert.js";
 import { regradeHintEligible } from "../src/run/execute.js";
@@ -138,6 +139,11 @@ describe("regrade-hint wiring", () => {
   it("execute.ts sets the context flag from regradeHintEligible, at its one assert-context site", () => {
     const src = read("src/run/execute.ts");
     expect(src.match(/regradeHint: regradeHintEligible\(opts\)/g)).toHaveLength(1);
+  });
+
+  it("no other src/ file sets it, so replay, verify-run and regrade (verify-context) build hint-free contexts", () => {
+    const files = execFileSync("git", ["grep", "-l", "regradeHint:", "--", "src"], { encoding: "utf8" }).trim().split("\n");
+    expect(files).toEqual(["src/run/execute.ts"]);
   });
 
   it("the eval and hillclimb arm runners opt out", () => {
