@@ -842,7 +842,7 @@ export function packageEvidence(
   const corpusCuts: Array<{ tag: string; name: string; keptBytes: number; totalBytes: number; omitted: boolean }> = [];
   // TWO keys again, for a different reason than the accept/display split. `key` is the DISPLAY string —
   // what a reader, a citation and a remedy see — and it is NOT unique: a plugin named (or a plugin
-  // DIRECTORY named, since `readPluginName` falls back to the basename) `agents` gives a root reference at
+  // DIRECTORY named, since a manifest-less plugin's name falls back to its directory's) `agents` gives a root reference at
   // `references/x.md` the display key `agents/references/x.md`, identical to an agent at
   // `<root>/agents/references/x.md`. That collided in the allocator's Map: last-writer-wins on the
   // allowance while `remaining` was decremented for BOTH, measured at an 11,388 B ceiling overshoot.

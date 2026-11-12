@@ -133,7 +133,9 @@ function literalToAgentName(value: string, pluginName: string | undefined): stri
 export function resolveDispatchableAgents(pluginRoot: string, skillDir: string, skillName: string | undefined): ResolvedAgent[] {
   const all = enumeratePluginAgents(pluginRoot);
   if (all.length === 0) return [];
-  const pluginName = readPluginName(pluginRoot);
+  // No manifest: the agent names a plugin after its folder (`binaryPluginIdentity`), so a `<folder>:<agent>` literal
+  // dispatches this plugin's agent. Same fallback as the reference resolver; `readPluginName` itself stays as it is.
+  const pluginName = readPluginName(pluginRoot) ?? basename(pluginRoot);
   const picked = new Map<string, ResolvedAgent>(); // absPath -> entry; first `via` wins
   // Declared BEFORE `add` on purpose: every picked agent is itself a dispatch SOURCE, so `add` pushes it.
   // Clauses 1 and 3 used to add without pushing, and clause 2 pushed only when `add` returned true — so a

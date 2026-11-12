@@ -3643,7 +3643,9 @@ def _resolve_corpus_agents(skill_dir):
     all_agents = _enumerate_plugin_agents(plugin_dir)
     if not all_agents:
         return []
-    plugin_name = _read_plugin_name(plugin_dir)
+    # No manifest: the agent names a plugin after its folder, so a `<folder>:<agent>` literal dispatches this
+    # plugin's agent. Mirrors `readPluginName(pluginRoot) ?? basename(pluginRoot)` in resolve-agents.ts.
+    plugin_name = _read_plugin_name(plugin_dir) or plugin_dir.name
     skill_name = skill_dir.name
     picked = {}
     sources = []  # declared before `add`: every picked agent is itself a dispatch SOURCE
