@@ -149,13 +149,15 @@ function usage(): string {
   <skill-folder> may be git:<ref>:<path> (repo-relative, from the current repository): critique the
   skill as it is at that commit, from a snapshot, so an edit or a moved HEAD during the run changes
   nothing. A path at <plugin>/skills/<name> grades that skill of the plugin, as <plugin> --skill
-  <name> does, but only when <plugin> has .claude-plugin/plugin.json; the report records the resolved
+  <name> does, but only when <plugin> has a manifest (.claude-plugin/plugin.json or a root plugin.json);
+  the report records the resolved
   commit in source.commit.
 
   <skill-folder> is a skill folder, a plugin folder (.claude-plugin/plugin.json optional — the plugin
   name falls back to the folder name), or an Agent Skills repo root with skills/<name>/SKILL.md. For a
   repo root with no manifest, pass the root (with --skill <name> when it has several skills), not
-  <root>/skills/<name>: that path is graded as a bare folder, without the root's agents/.
+  <root>/skills/<name>: that path is graded as a bare folder, without the root's agents/ (a notice
+  says so).
 
   critique --compare <report.json | summary.json …> [--strict] [--cluster none|lexical] [--out <path>] [--output-format json]
   lines up several critiques of one skill side by side (no spend, no model): one group, or two by
