@@ -176,9 +176,11 @@ export function spawnProtocol(
 export function credentialRefusal(who: string, check: DoctorCheck, tier = "protocol"): string {
   return (
     `${who}: fidelity ${tier} needs a credential in the environment (env / .env) — ${check.detail}.` +
-    (check.remedy ? ` Fix: ${check.remedy}.` : "") +
+    // The remedy ends in a shell command more often than not: no sentence punctuation right after it (a pasted
+    // `>> .env.` writes a file nothing reads), so the closing note follows a dash.
+    (check.remedy ? ` Fix: ${check.remedy} — the` : " The") +
     // Last: where it looked and how to point at a file come first; the Keychain note is the fallback explanation.
-    ` The agent runs with a managed config dir, so a Keychain or /login session is not used.`
+    ` agent runs with a managed config dir, so a Keychain or /login session is not used.`
   );
 }
 
