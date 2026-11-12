@@ -19,9 +19,9 @@ All notable changes to this project are documented here. The format is based on
 
 - **`permissive_auto_allow` says why the agent asked.** The signal's message now quotes the agent CLI's own reason
   for the permission ask, grouping asks that differ only by file name (count, tool, reason kind, one verbatim
-  example). For a `container` or `hostloop` run on the local lane it adds that an attended Cowork task would show a
-  permission card for the ask and a scheduled one would decline it after a timeout; other tiers, `lane: remote` and
-  `answer_channel: none` make no claim about Cowork. The remedy follows the command: a `when_tool` rule in
+  example). For a shell ask in a `container` or `hostloop` run on the local lane it adds that an attended Cowork task
+  would show a permission card for the ask and a scheduled one would decline it after a timeout; other tools, other
+  tiers, `lane: remote` and `answer_channel: none` make no claim about Cowork. The remedy follows the command: a `when_tool` rule in
   `answers:`, `permission_parity: strict` or `allow_permissive_auto_allow: true` for `run`/`record`; a `when_tool` rule
   through `--answer-policy` for `skill` and `critique`; re-running through `skill` for `probe-dispatch`. The message no
   longer names `--answer`, which cannot answer a tool permission, or claims that real Cowork would block. The stderr

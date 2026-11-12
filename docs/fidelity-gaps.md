@@ -650,8 +650,7 @@ scripted permission answer decides it, and an unscripted call falls to the permi
 **What this means for a scenario.** An unscripted call to such a tool records a permissive auto-allow, which fails
 the verdict by default, so the gap shows only when a scenario scripts an allow for the tool or asserts
 `allow_permissive_auto_allow: true`. Either way the tool runs here where Cowork, in a scheduled task, would refuse it.
-The signal's message says a scheduled task would decline an ask after a timeout; for a tool carrying this mark the
-refusal is immediate instead. To test the refusal path, script a deny for the tool.
+To test the refusal path, script a deny for the tool.
 
 ### @-mentioned files in a scheduled task — not modeled
 
@@ -1597,10 +1596,11 @@ card waits and is then declined when the task is reaped with nobody there. How l
 and neither is whether attended local tasks are still offered to a given account (see
 [Which lane a session actually ran on](#which-lane-a-session-actually-ran-on)).
 
-**What the harness does:** the ask arrives like any other tool permission, at `container` as well as `hostloop`.
-Unscripted, `cowork` parity auto-allows it and the run fails the `permissive_auto_allow` verdict signal. The signal
-quotes the agent's reason (also kept on the matching `decisions[]` row as `decisionReason`) and, for a `container` or
-`hostloop` run on the local lane, says what an attended and a scheduled Cowork task would do. To decide the ask,
+**What the harness does:** the ask arrives like any other tool permission; at `container` the shell tool is Bash, so
+the ask reaches the run. (At `hostloop` shell commands go through `mcp__workspace__bash`; whether that path asks
+the same way was not measured.) Unscripted, `cowork` parity auto-allows it and the run fails the `permissive_auto_allow` verdict signal. The signal
+quotes the agent's reason (also kept on the matching `decisions[]` row as `decisionReason`) and, for a shell ask in a
+`container` or `hostloop` run on the local lane, says what an attended and a scheduled Cowork task would do. To decide the ask,
 script a `when_tool: Bash` rule ([scenario.md](scenario.md#tool-permissions)); to avoid it, read the file with a
 command that cannot edit it.
 

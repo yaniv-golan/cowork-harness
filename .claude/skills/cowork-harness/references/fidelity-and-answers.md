@@ -186,7 +186,7 @@ hands `fn` exactly this dict.
 
 The default `permission_parity: cowork` auto-allows an unscripted ask for any tool but `Read`, `Glob` and `Grep`,
 and `computeVerdict` FAILS the run: nobody decided the ask. The harness only answers asks; whether the agent ASKS is
-the agent's own logic, varying by command and tier. Measured, same scenario shape and session:
+the agent's own logic, varying by command and tier. Measured (the last row on its own, in agent 2.1.317's macOS build):
 
 | Tier | Bash command | tool used | ask | verdict |
 |---|---|---|---|---|
@@ -198,7 +198,7 @@ the agent's own logic, varying by command and tier. Measured, same scenario shap
 
 So a hello-world probe teaches the wrong expectation: `python3 ${CLAUDE_SKILL_DIR}/scripts/…` asks at `protocol`
 only, and a `sed` substitution on a file in the agent's config dir (where saved tool results land) is a write-safety
-ask on any tier. The signal quotes the CLI's reason (`decisions[].decisionReason`) and, at container/hostloop on the
+ask (seen at container; hostloop's shell is a different tool). The signal quotes the CLI's reason (`decisions[].decisionReason`) and, at container/hostloop on the
 local lane, what Cowork would do.
 
 Decide it with a `when_tool: Bash` rule (`answers:`, or `--answer-policy` on `skill`/`critique`; `--answer` cannot
