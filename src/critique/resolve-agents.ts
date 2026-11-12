@@ -1,5 +1,5 @@
 import { readFileSync, existsSync } from "node:fs";
-import { join, basename } from "node:path";
+import { join, basename, resolve } from "node:path";
 import { parse } from "yaml";
 import { listSkillFilesRecursive } from "./corpus-walk.js";
 
@@ -135,7 +135,7 @@ export function resolveDispatchableAgents(pluginRoot: string, skillDir: string, 
   if (all.length === 0) return [];
   // No manifest: the agent names a plugin after its folder (`binaryPluginIdentity`), so a `<folder>:<agent>` literal
   // dispatches this plugin's agent. Same fallback as the reference resolver; `readPluginName` itself stays as it is.
-  const pluginName = readPluginName(pluginRoot) ?? basename(pluginRoot);
+  const pluginName = readPluginName(pluginRoot) ?? basename(resolve(pluginRoot)); // resolved: `critique .` names "."
   const picked = new Map<string, ResolvedAgent>(); // absPath -> entry; first `via` wins
   // Declared BEFORE `add` on purpose: every picked agent is itself a dispatch SOURCE, so `add` pushes it.
   // Clauses 1 and 3 used to add without pushing, and clause 2 pushed only when `add` returned true — so a

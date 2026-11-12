@@ -3640,8 +3640,10 @@ def _resolve_corpus_agents(skill_dir):
     # where the TS side still enumerates agents because it is handed the root explicitly; layout-only
     # diverged for a skill that is not under `skills/` but does have a manifest above it, which the
     # packager sizes and this sized as ZERO. Neither rule alone matches; the union does.
+    # The layout test and the folder-name fallback read the RESOLVED path: `Path(".").name` is empty.
+    real = skill_dir.resolve()
     plugin_dir = _find_enclosing_plugin_dir(skill_dir / "SKILL.md") or (
-        skill_dir.parent.parent if skill_dir.parent.name == "skills" else None
+        real.parent.parent if real.parent.name == "skills" else None
     )
     if plugin_dir is None or not (plugin_dir / "agents").is_dir():
         return []
@@ -3650,8 +3652,8 @@ def _resolve_corpus_agents(skill_dir):
         return []
     # No manifest: the agent names a plugin after its folder, so a `<folder>:<agent>` literal dispatches this
     # plugin's agent. Mirrors `readPluginName(pluginRoot) ?? basename(pluginRoot)` in resolve-agents.ts.
-    plugin_name = _read_plugin_name(plugin_dir) or plugin_dir.name
-    skill_name = skill_dir.name
+    plugin_name = _read_plugin_name(plugin_dir) or Path(plugin_dir).resolve().name
+    skill_name = real.name
     picked = {}
     sources = []  # declared before `add`: every picked agent is itself a dispatch SOURCE
 
