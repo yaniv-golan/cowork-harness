@@ -128,28 +128,57 @@ describe("a manifest-less remote plugin: the staged copy gets a manifest named a
   });
 });
 
-describe("a manifest-less local-marketplace plugin: the manifest carries the marketplace ENTRY name", () => {
-  function marketplace(): string {
+describe("a manifest-less local-marketplace plugin: nothing is written, and the readers use the staged leaf", () => {
+  // The staged folder is named after the marketplace entry, so the agent already loads it under that name; a manifest
+  // would change nothing, and Claude Desktop writing one for a LOCAL marketplace plugin is not established.
+  function marketplace(entry: string): string {
     const mk = mkdtempSync(join(tmpdir(), "pms-mk-"));
     write(mk, {
-      ".claude-plugin/marketplace.json": JSON.stringify({ name: "mymkt", plugins: [{ name: "demo-plugin", source: "./src-dir" }] }),
+      ".claude-plugin/marketplace.json": JSON.stringify({ name: "mymkt", plugins: [{ name: entry, source: "./src-dir" }] }),
     });
     skillsRepo(mk, "src-dir");
     return mk;
   }
   for (const tier of TIERS) {
-    it(`${tier}: the entry name, not the source directory's name`, () => {
-      const mk = marketplace();
+    it(`${tier}: the entry name, not the source directory's name, with no manifest written`, () => {
+      const mk = marketplace("demo-plugin");
       const p = planFor({ local_marketplaces: [mk], enabled: ["demo-plugin@mymkt"] }, tier);
       const m = pluginMount(p);
       expect(m.mountPath).toBe(".local-plugins/marketplaces/mymkt/demo-plugin");
+      const { mnt, stderr } = stage(p, tier);
+      const staged = join(mnt, m.mountPath);
+      expect(existsSync(join(staged, ".claude-plugin"))).toBe(false);
+      expect(readersAgree(p, staged)).toBe("demo-plugin");
+      expect(stderr).not.toMatch(/plugin\.json/);
+    });
+
+    it(`${tier}: a scoped entry name (@scope/pkg) — the readers use the staged leaf, as the agent does`, () => {
+      const mk = marketplace("@scope/pkg");
+      const p = planFor({ local_marketplaces: [mk], enabled: ["@scope/pkg@mymkt"] }, tier);
+      const m = pluginMount(p);
+      expect(m.mountPath).toBe(".local-plugins/marketplaces/mymkt/@scope/pkg");
       const { mnt } = stage(p, tier);
       const staged = join(mnt, m.mountPath);
-      expect(JSON.parse(readFileSync(join(staged, ".claude-plugin", "plugin.json"), "utf8"))).toEqual({ name: "demo-plugin" });
-      expect(existsSync(join(mk, "src-dir", ".claude-plugin"))).toBe(false);
-      expect(readersAgree(p, staged)).toBe("demo-plugin");
+      expect(existsSync(join(staged, ".claude-plugin"))).toBe(false);
+      expect(readersAgree(p, staged)).toBe("pkg");
     });
   }
+});
+
+describe("a manifest-less remote plugin whose folder name the agent would refuse in a manifest", () => {
+  for (const tier of TIERS)
+    for (const dirName of ["my skills repo", "@my-skills"])
+      it(`${tier}: '${dirName}' — nothing written, a WARN says so, and the readers use the staged leaf`, () => {
+        const src = skillsRepo(mkdtempSync(join(tmpdir(), "pms-src-")), dirName);
+        const p = planFor({ remote_plugins: [src] }, tier);
+        const m = pluginMount(p);
+        const { mnt, stderr } = stage(p, tier);
+        const staged = join(mnt, m.mountPath);
+        expect(existsSync(join(staged, ".claude-plugin"))).toBe(false);
+        expect(readersAgree(p, staged)).toBe(m.mountPath.split("/").pop());
+        expect(stderr).toMatch(/::warning::.*plugin\.json/);
+        expect(stderr).toContain(dirName);
+      });
 });
 
 describe("controls: what must NOT change", () => {
