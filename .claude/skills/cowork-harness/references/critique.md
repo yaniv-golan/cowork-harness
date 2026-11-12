@@ -166,8 +166,7 @@ the corpus only ever holds files the mount carries.
 the plugin, as Cowork does, and grades `<name>` (same corpus, `skillHash`, `gradedSkill`), with a notice.
 It mounts the skill folder alone — and says why — only when `--skill` cannot reach it (not at exactly
 `skills/<name>`, a submodule, or a case mismatch); that run and its corpus lack the plugin's agents and
-shared references. With no plugin manifest at or above the skill there is no plugin to promote to: the skill
-is graded alone, and a notice gives `critique <dir> --skill <name>` to mount `<dir>` as a plugin instead.
+shared references.
 
 The report's `evidenceBudget` object says exactly what was shown — read it instead of inferring budgets
 from `dist/` source:

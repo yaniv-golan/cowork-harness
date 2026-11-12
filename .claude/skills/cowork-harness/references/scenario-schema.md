@@ -374,9 +374,7 @@ with no session file, the CLI flags `--folder <dir>` and `--upload <file>` are t
 
 **Installed vs. local-uploads layout:** to mirror a plugin installed through Cowork's UI, declare it under
 `plugins.remote_plugins` instead — Cowork serves an installed plugin from `.remote-plugins/plugin_<id>`
-(named by id, not plugin name; a folder with no `.claude-plugin/plugin.json` gets one in its staged copy naming
-it after the folder, as Claude Desktop does for a synced plugin, so its skills load as `<folder>:<skill>`), while
-`local_plugins` mounts two levels deeper
+(named by id, not plugin name), while `local_plugins` mounts two levels deeper
 (`.local-plugins/marketplaces/local-desktop-app-uploads/<plugin>`). The choice matters to a skill that
 locates its own files from the shell (at host-loop, Cowork's default, the braced `${CLAUDE_PLUGIN_ROOT}` is
 replaced with a HOST path that the bash tool rewrites to the plugin's VM mount when it stands as its own
