@@ -1010,14 +1010,15 @@ function listSubdirs(dir: string, failures: AnalysisFailure[] = []): string[] {
  *  hooks/MCP-only plugin with `agents/`/`references/`/`commands/`/`skills/` all absent or empty) —
  *  conflating the two produced a confusing "looked for plugin.json" message even for a dir that plainly
  *  HAD one. */
-/** Whether `dir/skills/<name>/SKILL.md` exists for some `<name>`. Best-effort: an unreadable `skills/` is "no", and the
- *  plugin-root walk that follows reports it. */
+/** Whether `dir/skills/<name>/SKILL.md` exists for some `<name>`. Best-effort: an unreadable `skills/` is "no", so the
+ *  dir is not recognized as a manifest-less plugin root and resolves as it did before (the usage error). */
 function hasSkillsSubdirSkill(dir: string): boolean {
   try {
     return readdirSync(join(dir, "skills"), { withFileTypes: true }).some(
       (e) => e.isDirectory() && existsSync(join(dir, "skills", e.name, "SKILL.md")),
     );
-  } catch {
+  } catch (e) {
+    rethrowIfExit(e);
     return false;
   }
 }
