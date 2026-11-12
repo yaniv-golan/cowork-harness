@@ -77,13 +77,14 @@ command accepts it as it is. What changes is how you mount it, and each mounting
 On the `local_plugins` routes (the first row), with no manifest the plugin name falls back to the folder name, as the
 staged agent's does; the other rows name it after their staged directory instead. On every plugin route the whole
 root is plugin content: `README.md` and `AGENTS.md` are staged with it, and the agents in a root
-`agents/` register as `<folder>:<agent>`.
+`agents/` register under the same plugin name as that route's skills (`<folder>:<agent>` on the `local_plugins`
+routes).
 
 - **Commit first.** Inside a git repo the harness stages only git-tracked files (in the index: committed or
   `git add`-ed), so a new, untracked file is not in the run.
-- **For Cowork fidelity, add a minimal manifest.** Claude Desktop's plugin zip upload refuses a plugin with no
-  `.claude-plugin/plugin.json`, and Desktop writes one for a server-synced plugin that lacks it, so on both routes a
-  plugin reaches Cowork's agent with a manifest. A one-line `{"name": "my-skills-repo"}`, with the folder's name, keeps
+- **For Cowork fidelity, add a minimal manifest.** Claude Desktop's plugin install path (its zip install, the one
+  traced) refuses a plugin with no `.claude-plugin/plugin.json`, and Desktop writes one for a server-synced plugin
+  that lacks it, so on those routes a plugin reaches Cowork's agent with a manifest. A one-line `{"name": "my-skills-repo"}`, with the folder's name, keeps
   the `<folder>:<skill>` id; `remote_plugins` then registers `my-skills-repo:<skill>` as well. The alternative is to
   test the skill standalone through `skills.local`.
 - **The static checkers expect the manifest too.** Without one they read the tree as a standalone skill:

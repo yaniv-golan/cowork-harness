@@ -42,7 +42,7 @@ the folder basename (collision-resolved); there is no `to:` override. See `refer
 > to copy untracked files (won't reflect what ships). A folder **outside** any repo is copied raw (no guard).
 
 **An Agent Skills repo with no `plugin.json`** mounts as is (`skill <root>`: id `<folder>:<skill>`). Desktop's zip
-upload refuses one, so for Cowork fidelity add `.claude-plugin/plugin.json` (`{"name": "<folder>"}`).
+install refuses one, so for Cowork fidelity add `.claude-plugin/plugin.json` (`{"name": "<folder>"}`).
 [Every route and its id](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/discovery.md#testing-an-agent-skills-repo-no-pluginjson).
 
 ### Choose a fidelity tier
