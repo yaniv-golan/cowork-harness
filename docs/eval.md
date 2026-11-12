@@ -178,7 +178,11 @@ marker says so (`enforced: "lower_bound"`). It is a pre-flight only: the cap nev
 - `--holdout <scenario.yaml>` — repeatable; see [Picking scenarios](#picking-scenarios).
 - `--skill <name>` — the skill whose invocation each rep records. A plugin with one skill (or a root
   `SKILL.md`) needs none; for a plugin with several skills, name one. Without a single skill, the
-  per-rep invocation fact is `unobservable`; it never affects a row.
+  per-rep invocation fact is `unobservable`; it never affects a row. An arm that is one skill folder (a
+  plugin's `skills/<name>`, say) is snapshotted under the declared plugin folder's name, so its skill is named
+  by its own frontmatter `name` (else the source folder's name) and matches the same skill in a plugin-root
+  arm. When one arm is a plugin root and the other one skill folder, eval lists the files only the root arm
+  ships (a README, root `agents/`, other skills), since the agent loads them as plugin content in that arm only.
 - `--on-unanswered fail|first`, `--decider-cmd`, `--decider-dir` — how unscripted questions are answered,
   as on `run`.
 - `--fail-on possible|confirmed` — opt in to gating (see [Exit codes](#exit-codes)).
