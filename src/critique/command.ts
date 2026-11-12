@@ -682,7 +682,7 @@ function noteManifestlessSkillsLayout(opts: ParsedArgs): void {
   const root = dirname(parent);
   const shown = isAbsolute(opts.skillFolder) ? root : relative(process.cwd(), root) || ".";
   process.stderr.write(
-    `::notice:: [critique] ${tildeify(opts.skillFolder)} has no plugin manifest (.claude-plugin/plugin.json) at or above it, so it is mounted and graded on its own, as a standalone skill: nothing outside this folder (a root agents/ or references/) is in the graded run. ` +
+    `::notice:: [critique] ${tildeify(opts.skillFolder)} has no plugin manifest (.claude-plugin/plugin.json or a root plugin.json) at or above it, so it is mounted and graded on its own, as a standalone skill: nothing outside this folder (a root agents/ or references/) is in the graded run. ` +
       `To mount ${tildeify(shown)} as a plugin (named after its folder) and grade this skill in it, run critique ${tildeify(shown)} --skill ${name}\n`,
   );
 }

@@ -596,7 +596,8 @@ export function readonlyFolderRootsFromPlan(plan: LaunchPlan): string[] {
 /** Whether the agent accepts `name` in a plugin manifest it loads by path: `claude plugin validate` refuses a
  *  `--plugin-dir` manifest whose name holds whitespace, `@`, `:`, `/` or `\\` (a scoped `@scope/pkg` included). */
 export function manifestNameAccepted(name: string): boolean {
-  return name.length > 0 && !/[\s@:/\\]/.test(name);
+  // Mirrors the agent's refusal: "@", ":", whitespace, path separators, or invisible/control characters.
+  return name.length > 0 && !/[\s@:/\\\p{Cc}\p{Cf}]/u.test(name);
 }
 
 /** The name a plugin mount is loaded under when its source has no `.claude-plugin/plugin.json` naming it. Every reader
@@ -638,8 +639,9 @@ export function pluginSkillRootsFromPlan(plan: LaunchPlan): PluginSkillRoot[] {
  *  comparison: doing so turned a fully-invoked run into `skillInvocationObserved: false`. Never throws.
  *
  *  `fallbackName` is for a caller that reads a mount's SOURCE while the agent loads its staged copy: a
- *  manifest-less remote or marketplace plugin gets a manifest written into that copy (`manifestlessPluginName`),
- *  so the name the agent sees is not the source's basename. Path-only callers keep the basename. */
+ *  manifest-less remote plugin gets a manifest written into that copy, and a marketplace plugin keeps its staged
+ *  folder's name (`manifestlessPluginName`), so the name the agent sees is not always the source's basename.
+ *  Path-only callers keep the basename. */
 export function binaryPluginIdentity(pluginRoot: string, fallbackName = basename(pluginRoot)): { name: string; skillsSubdir: string } {
   let name = fallbackName;
   let skillsSubdir = "skills";
