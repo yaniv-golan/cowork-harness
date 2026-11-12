@@ -41,6 +41,10 @@ the folder basename (collision-resolved); there is no `to:` override. See `refer
 > `::notice:: [stage]` listing the excluded files. Fix: `git add` the skill, or `COWORK_HARNESS_GITSET=0`
 > to copy untracked files (won't reflect what ships). A folder **outside** any repo is copied raw (no guard).
 
+**An Agent Skills repo with no `plugin.json`** mounts as is (`skill <root>`: id `<folder>:<skill>`). Desktop's zip
+upload refuses one, so for Cowork fidelity add `.claude-plugin/plugin.json` (`{"name": "<folder>"}`).
+[Every route and its id](https://github.com/yaniv-golan/cowork-harness/blob/main/docs/discovery.md#testing-an-agent-skills-repo-no-pluginjson).
+
 ### Choose a fidelity tier
 
 | Tier | What it gives you | Use when |
@@ -218,23 +222,12 @@ your gate actually has a label called `"first"`.
 
 ### web_fetch (never auto-allowed, two-path)
 
-`web_fetch` behaves unlike `curl`. A URL is gated by **provenance**, not the egress allowlist:
-
-- A URL is *provenanced* iff it appeared in the **prompt** or a **prior `web_fetch` result**. To
-  make a fetch succeed, put the URL in the prompt.
-- **Provenanced** → fetches (still SSRF-guarded per redirect hop); the egress hostname allowlist is
-  **not consulted**.
-- **Not provenanced** → raises a per-domain approval gate (`webfetch:<domain>`) that is never
-  auto-allowed. Unanswered, it **ends the run as an unanswered gate** under `on_unanswered: fail`
-  (the `run` and `record` default), naming the domain, the URL and the rule to add; `--on-unanswered first` denies
-  it, and `llm` picks one of its three buttons (`Allow once`, `Allow all for website`, `Deny`). Answer it with a
-  scripted rule (`when_tool: "webfetch:<domain>"` + `decide: allow` and `grant: once|domain`, or `decide: deny`), a
-  session
-  `web_fetch.approved_domains`, or a live decider.
-
-Surprise to remember: adding a host to `egress.extra_allow` is a **no-op** for a provenanced fetch, and on Path B it
-cannot admit the baseline's `network.webFetchVendorDeny` hosts (from `desktop-4.4212.0`).
-Full model in `references/scenario-schema.md`.
+A URL is gated by **provenance**, not the egress allowlist. One that appeared in the **prompt** or a prior `web_fetch`
+result fetches (SSRF-guarded per redirect hop); `egress.extra_allow` is a no-op for it, so put the URL in the prompt.
+Any other raises a per-domain gate (`webfetch:<domain>`), never auto-allowed: unanswered under `on_unanswered: fail`
+it **ends the run**, naming the rule to add. Answer it with `when_tool: "webfetch:<domain>"` (`decide: allow` +
+`grant: once|domain`, or `decide: deny`), a session `web_fetch.approved_domains`, or a live decider. Full model
+(Path B, its vendor deny list): `references/scenario-schema.md`.
 
 ### A skill that parks and resumes in a later session: `legs:`
 

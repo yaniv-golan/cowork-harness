@@ -141,7 +141,8 @@ decide which assertions from *Assertions: two orthogonal axes* in `assertions-gu
   `total_cost_usd` for the run — the authoritative single-run spend of the agent session, which leaves out the `semantic_matches` judge and the LLM decider calls; NOT the same source as summing
   `modelUsage[].costUSD`, which is what `trace --view usage` reports, so the two can differ),
   `usage` (`input_tokens`/`output_tokens`/`turns`), `toolDurations` (with `toolDurationsBasis`), `models`,
-  `toolCalls` (every tool call in stream order: `name`, top-level `input` fields each capped at 10 KB, and
+  `toolCalls` (every tool call in stream order: `name`, top-level `input` fields as `{text, truncated?}` capped at 10 KB
+  — `jq '.toolCalls[] | .input.command.text'` — and
   `origin` `main`/`subagent`/`unknown` — what the object form of `tool_called`/`tool_not_called` reads; `denied: true` means the agent received a deny answer to that call's permission request, which a hook block never sets; the footer's `denied: N` counts those answers), `toolErrors`,
   `redundantToolCalls`, `modelUsage`, `thinking`, `skillActivity`, `subagents[]` (prompt/`dispatchModel`/
   `resolvedModel`/output/`attributedSkillId`, `outputTruncated`, `referencesRead`, `reasoning`/`reasoningElided`),

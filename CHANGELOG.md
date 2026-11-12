@@ -24,6 +24,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Documentation
 
+- **Companion skill.** The authoring reference points at the Agent Skills repo section; the semantic-judging reference
+  says to scope `evidence_files` from the start when a skill writes a generated file beside its deliverable, and that a
+  kept run refused at a cap can be re-graded; the debugging and critique references carry the `toolCalls` input shape
+  and the `gradedOutcome` values. The authoring reference's web_fetch summary is shorter, with the full model still in
+  the scenario-schema reference, to keep the skill under the critique evidence ceiling.
 - **`toolCalls[].input` shape.** The debugging guide documents that each top-level input field is `{text, truncated?}`,
   not the raw value (a command is `.input.command.text`), with a `jq` line that lists a run's shell commands.
 - **`critique`'s `gradedOutcome` values.** The critique guide lists `delivered_clean`, `delivered_with_verdict_fail`,
