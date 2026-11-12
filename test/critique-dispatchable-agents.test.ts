@@ -15,12 +15,15 @@ import { snapshotTurnBoundary } from "../src/critique/evidence.js";
 interface Case {
   name: string;
   skill: string;
+  /** The plugin root's directory name, when a case depends on it (a manifest-less plugin is named after it). */
+  rootName?: string;
   tree: Record<string, string>;
   expected: string[];
 }
 
-function materialize(tree: Record<string, string>): string {
-  const root = mkdtempSync(join(tmpdir(), "cwh-agents-"));
+function materialize(tree: Record<string, string>, rootName?: string): string {
+  const tmp = mkdtempSync(join(tmpdir(), "cwh-agents-"));
+  const root = rootName === undefined ? tmp : join(tmp, rootName);
   for (const [rel, content] of Object.entries(tree)) {
     const abs = join(root, rel);
     mkdirSync(dirname(abs), { recursive: true });
@@ -37,7 +40,7 @@ describe("resolveDispatchableAgents — shared cross-language fixture", () => {
   // previous oracle-from-the-implementation test in this repo fell into.
   for (const c of fixture.cases) {
     it(c.name, () => {
-      const root = materialize(c.tree);
+      const root = materialize(c.tree, c.rootName);
       const got = resolveDispatchableAgents(root, join(root, "skills", c.skill), c.skill).map((a) => a.rel);
       expect(got).toEqual([...c.expected].sort());
     });

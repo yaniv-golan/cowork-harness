@@ -1719,7 +1719,8 @@ def test_fixture_is_non_trivial():
 
 @pytest.mark.parametrize("case", _fixture_cases(), ids=lambda c: c["name"])
 def test_resolve_corpus_agents_matches_shared_fixture(case, tmp_path):
-    root = _materialize(case["tree"], tmp_path / "plugin")
+    # `rootName`: a manifest-less plugin is named after its folder, so such a case fixes the folder's name.
+    root = _materialize(case["tree"], tmp_path / case.get("rootName", "plugin"))
     resolved = scenario._resolve_corpus_agents(root / "skills" / case["skill"])
     got = sorted(p.relative_to(root).as_posix() for p in resolved)
     assert got == sorted(case["expected"])
