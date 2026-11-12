@@ -1,4 +1,4 @@
-import { warn } from "../io.js";
+import { tildeifyText, warn } from "../io.js";
 import { isUsageLimit, matchesTerminalUsageLimitText, SUBAGENT_USAGE_LIMIT } from "../usage-limit.js";
 import { randomUUID, createHash } from "node:crypto";
 import type { AgentSession, AgentEvent, DecisionRequest, DecisionResponse, QSpec } from "../agent/session.js";
@@ -2049,7 +2049,7 @@ export function decisionRows(decisions: DecisionRecord[]): RunResult["decisions"
  *  the tier nor the lane, and in `chat` this line is the only trace, so it names the tool and the CLI's own reason and
  *  claims nothing about real Cowork or a remedy (the verdict signal does that, from the whole result). */
 export function permissiveAutoAllowWarning(tool: string, reasonType: string | undefined, reason: string | undefined): string {
-  const why = reason !== undefined ? ` (${reasonType !== undefined ? `${reasonType}: ` : ""}${JSON.stringify(reason)})` : "";
+  const why = reason !== undefined ? ` (${reasonType !== undefined ? `${reasonType}: ` : ""}${JSON.stringify(tildeifyText(reason))})` : "";
   return `::warning:: [permission] the agent CLI asked to use "${tool}"${why}; nothing scripted answered, so it was auto-allowed under cowork parity.\n`;
 }
 function kindOf(req: DecisionRequest): DecisionRecord["kind"] {

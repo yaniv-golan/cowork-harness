@@ -4,6 +4,8 @@ import { resolve } from "node:path";
 import { toDecisionRequest, type AgentEvent, type AgentSession, type DecisionResponse } from "../src/agent/session.js";
 import { PermissionDefaultDecider } from "../src/decide/decider.js";
 import { decisionRows, permissiveAutoAllowWarning, Run } from "../src/run/run.js";
+import { tildeifyText } from "../src/io.js";
+import { homedir } from "node:os";
 import { computeVerdict } from "../src/run/verdict.js";
 import { replayCassette, type Cassette } from "../src/run/cassette.js";
 import { buildJsonReport, buildTextReport, gradedSignalsFrom } from "../src/critique/command.js";
@@ -142,7 +144,7 @@ describe("permissive_auto_allow explains the ask", () => {
   it("container, lane local, no taskKind: only the conditional Cowork claim", async () => {
     const s = signalOf(await resultFrom(THREE(), { lane: "local" }))!;
     expect(s.message).toMatch(
-      /an attended Cowork task would show a permission card for this; a scheduled one would decline it after a timeout/i,
+      /an attended Cowork task would show a permission card for this; a scheduled one, unless it holds a stored approval for the tool, would decline it when the run is reaped/i,
     );
     expect(s.message).not.toMatch(/would BLOCK/i);
   });
@@ -152,21 +154,19 @@ describe("permissive_auto_allow explains the ask", () => {
       const m = signalOf(await resultFrom(frames, { lane: "local" }))!.message;
       expect(m).not.toMatch(/Cowork task|real Cowork|permission card/i);
     }
-    // the host loop's shell tool does get it
+    // nor does the host loop's shell tool, whose asks were not measured
     const hl = signalOf(
       await resultFrom([frame("r1", "mcp__workspace__bash", reasonFor("a.txt"), "safetyCheck")], {
         effectiveFidelity: "hostloop",
         fidelity: "hostloop",
       }),
     )!.message;
-    expect(hl).toMatch(/attended Cowork task/);
+    expect(hl).not.toMatch(/Cowork task|real Cowork|permission card/i);
   });
 
-  it("hostloop also makes the conditional claim; lane remote, protocol, microvm and answer_channel none make none", async () => {
-    expect(signalOf(await resultFrom(THREE(), { effectiveFidelity: "hostloop", fidelity: "hostloop" }))!.message).toMatch(
-      /attended Cowork task/,
-    );
+  it("hostloop, lane remote, protocol, microvm and answer_channel none make no Cowork claim", async () => {
     for (const over of [
+      { effectiveFidelity: "hostloop", fidelity: "hostloop" },
       { lane: "remote" as const },
       { effectiveFidelity: "protocol", fidelity: "protocol" },
       { effectiveFidelity: "microvm", fidelity: "microvm" },
@@ -209,6 +209,42 @@ describe("permissive_auto_allow explains the ask", () => {
     const bare = permissiveAutoAllowWarning("Write", undefined, undefined);
     expect(bare).toContain('"Write"');
     expect(bare).toContain("auto-allowed under cowork parity");
+  });
+});
+
+describe("the reason carries no home directory", () => {
+  it("tildeifyText replaces the home directory only where it starts a path, exact prefix only", () => {
+    const h = "/Users/someone";
+    expect(tildeifyText(`edit ${h}/x/a.txt which`, h)).toBe("edit ~/x/a.txt which");
+    expect(tildeifyText(`"${h}" and ${h}`, h)).toBe(`"~" and ~`);
+    expect(tildeifyText(`${h}2/x and /srv${h}/y`, h)).toBe(`${h}2/x and /srv${h}/y`);
+    expect(tildeifyText(`${h}/x`, `${h}/`)).toBe("~/x");
+    expect(tildeifyText("/a/b", "/")).toBe("/a/b");
+  });
+
+  it("the stderr line and the verdict message both show ~ for a reason under the home directory", async () => {
+    const reason = `Asked to modify ${homedir()}/proj/x.txt which is a protected location.`;
+    const w = permissiveAutoAllowWarning("Bash", "safetyCheck", reason);
+    expect(w).toContain("~/proj/x.txt");
+    expect(w).not.toContain(homedir() + "/");
+    const m = signalOf(await resultFrom([frame("r1", "Bash", reason, "safetyCheck")]))!.message;
+    expect(m).toContain("~/proj/x.txt");
+    expect(m).not.toContain(homedir() + "/");
+  });
+});
+
+describe("grouping never merges different reasons", () => {
+  it("a slash after the path splits asks that differ only by file name, and never merges different directories", async () => {
+    const r = (dir: string, f: string) => `Asked to modify ${dir}/${f} which is protected and/or shared.`;
+    const split = signalOf(await resultFrom([frame("r1", "Bash", r("/d", "a.txt"), "t"), frame("r2", "Bash", r("/d", "b.txt"), "t")]))!;
+    expect(split.message.match(/1× Bash/g)).toHaveLength(2);
+    const dirs = signalOf(
+      await resultFrom([
+        frame("r1", "Bash", reasonFor("a.txt"), "t"),
+        frame("r2", "Bash", "Asked to modify /other/a.txt which is a protected location.", "t"),
+      ]),
+    )!;
+    expect(dirs.message.match(/1× Bash/g)).toHaveLength(2);
   });
 });
 

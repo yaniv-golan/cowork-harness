@@ -1,6 +1,6 @@
 import { describeSubagentUsageLimit, subagentUsageLimits } from "../usage-limit.js";
 import { allowsMaxTurns, turnCapReached } from "./turn-cap.js";
-import { warn } from "../io.js";
+import { tildeifyText, warn } from "../io.js";
 import { rootfsManifestDesktopVersion } from "../baseline.js";
 import type { InfraErrorSource, RunResult } from "../types.js";
 import { VERDICT_MODIFIER_KEYS } from "../types.js";
@@ -825,15 +825,20 @@ export function computeVerdict(result: RunResult, lane: "live" | "replay"): Verd
   return { pass, exitCode: pass ? 0 : 1, signals, guards: guardRoster(result, lane, signals), failures };
 }
 
-/** The shell tools whose ask Desktop routes to its ordinary permission card (read in asar 4.23118.0): `Bash` on the VM
- *  loop and `mcp__workspace__bash` on the host loop. Other tools have their own branches there (a browser or pane tool,
- *  or an MCP tool that needs a person, is refused at once in an unattended turn), so the Cowork sentence is made only
- *  when every auto-allowed tool is one of these. */
-const COWORK_CARD_TOOLS = new Set(["Bash", "mcp__workspace__bash"]);
+/** The one ask the Cowork sentence covers: the built-in `Bash`, which Desktop's VM loop routes to its ordinary
+ *  permission handler (read in asar 4.23118.0), and whose sensitive-path ask was measured on the agent. Other tools have
+ *  their own branches there (a browser or pane tool, or an MCP tool that needs a person, is refused at once in an
+ *  unattended turn), so the sentence is made only when every auto-allowed tool is Bash. */
+const COWORK_CARD_TOOLS = new Set(["Bash"]);
 
 /** The text after the parent directory of the first absolute path in a reason is dropped, so asks that differ only by
  *  file name share a key. Spaces are allowed anywhere in the path: the key is everything up to the LAST `/` after the
- *  path's start, which never needs to know where a file name ends. A reason with no absolute path is its own key. */
+ *  path's start, which never needs to know where a file name ends. A reason with no absolute path is its own key.
+ *
+ *  The cost of not knowing where the path ends: a `/` in the text AFTER the path (an "and/or", a second path), or a
+ *  path the regex does not see as absolute (a Windows `C:\…` path), moves or removes the cut, so asks that differ only
+ *  by file name land in separate groups. It never merges asks the CLI gave different reasons for in different
+ *  directories or with different words before the path: everything up to the cut stays in the key. */
 function reasonGroupKey(reason: string): string {
   const start = reason.search(/(?:^|[\s"'`(=:])\//);
   if (start < 0) return reason;
@@ -846,9 +851,12 @@ function reasonGroupKey(reason: string): string {
  *
  *  The Cowork sentence is keyed on the fields a result carries: the tools, the tier (`effectiveFidelity`), `lane` and
  *  `answerChannel`, never `execution.taskKind` (nothing sets it, and its absence is not a signal). It is stated only for
- *  shell asks (`COWORK_CARD_TOOLS`) on the local lane at the container and hostloop tiers, where the ask reaches
- *  Desktop's permission handler and waits for the user; how long a scheduled task waits before declining is not
- *  established, so no duration is named. Every other combination makes no claim about real Cowork. */
+ *  Bash asks (`COWORK_CARD_TOOLS`) on the local lane at the container tier, where the ask reaches Desktop's permission
+ *  handler and waits for the user's answer. A scheduled task auto-approves a tool it holds a stored approval for, and
+ *  otherwise declines the ask when the run is reaped or superseded; how long that takes is not established, so no
+ *  duration is named. `hostloop` and `microvm` deliberately make no claim: the host loop's shell is a different tool
+ *  (`mcp__workspace__bash`) whose asks were not measured, and microvm's spawn was not read. Every other combination
+ *  makes no claim about real Cowork either. */
 export function permissiveAutoAllowMessage(result: RunResult): string {
   const tools = result.permissiveAutoAllow ?? [];
   const rows = result.decisions.filter(
@@ -871,15 +879,15 @@ export function permissiveAutoAllowMessage(result: RunResult): string {
       else groups.set(key, { tool: d.name, type: d.decisionReasonType, example: d.decisionReason, count: 1 });
     }
     for (const g of groups.values())
-      parts.push(`${g.count}× ${g.tool}${g.type !== undefined ? ` (${g.type})` : ""}, e.g. ${JSON.stringify(g.example)}`);
+      parts.push(`${g.count}× ${g.tool}${g.type !== undefined ? ` (${g.type})` : ""}, e.g. ${JSON.stringify(tildeifyText(g.example))}`);
     if (unreasoned.length) parts.push(`${unreasoned.join(", ")} (no reason given)`);
   } else parts.push(tools.join(", "));
 
   const tier = result.effectiveFidelity ?? result.fidelity;
   const shellOnly = tools.every((t) => COWORK_CARD_TOOLS.has(t));
   const cowork =
-    shellOnly && (tier === "container" || tier === "hostloop") && result.lane !== "remote" && result.answerChannel !== "none"
-      ? " An attended Cowork task would show a permission card for this; a scheduled one would decline it after a timeout."
+    shellOnly && tier === "container" && result.lane !== "remote" && result.answerChannel !== "none"
+      ? " An attended Cowork task would show a permission card for this; a scheduled one, unless it holds a stored approval for the tool, would decline it when the run is reaped."
       : "";
   const named = [...new Set(tools)].join(", ");
   const isProbe = result.command === "skill" && result.scenario.startsWith("probe-dispatch-");
