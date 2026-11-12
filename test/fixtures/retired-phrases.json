@@ -19,6 +19,14 @@
     {
       "phrase": "no spend cap",
       "reason": "hillclimb run has a per-pass spend cap, --max-budget-usd"
+    },
+    {
+      "phrase": "HOSTLOOP-ONLY in effect",
+      "reason": "approved_domains applies at container as well as hostloop, when the web_fetch-via-API gate is on"
+    },
+    {
+      "phrase": "Takes effect at `hostloop` only",
+      "reason": "approved_domains applies at container as well as hostloop, when the web_fetch-via-API gate is on"
     }
   ],
   "allowlist": [

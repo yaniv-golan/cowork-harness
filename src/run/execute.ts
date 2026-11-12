@@ -869,6 +869,13 @@ function scanRunHookSources(
   });
 }
 
+/** Whether a run at `fidelity` enables the can_use_tool web_fetch approval gate: `hostloop` and `container`, and only
+ *  with the baseline's web_fetch-via-API gate on. It is also where `web_fetch.approved_domains` applies, since that
+ *  gate is the set's only reader — the set is seeded on every tier, and nothing reads it at `microvm` or `protocol`. */
+export function webFetchGateEnabled(fidelity: string, viaApiOn: boolean): boolean {
+  return (fidelity === "hostloop" || fidelity === "container") && viaApiOn;
+}
+
 export async function executeScenario(scenario: Scenario, opts: ExecuteOptions = {}): Promise<RunResult> {
   // A signal is being handled (a multi-scenario loop reached its next scenario during the grace period):
   // start nothing new. The termination handler owns the exit and fires within that period.
@@ -1435,9 +1442,10 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
   // Set by spawnProtocol, never re-derived.
   let protocolSubagentConfigRoot: string | undefined;
   let promptFidelityWarnings: string[] | undefined; // structured prompt warnings collected by renderPrompts
-  // web_fetch provenance is gate-driven (coworkWebFetchViaApi) and host-loop only. The ref is
-  // created HERE (before spawnHostLoop builds the handler) and filled with a Run-backed bundle after
-  // the Run exists — the handler reads ref.current at call time (strictly after the stream starts).
+  // web_fetch provenance is gate-driven (coworkWebFetchViaApi) and applies at hostloop AND container
+  // (webFetchGateEnabled). The ref is created HERE (before spawnHostLoop builds the handler) and filled with a
+  // Run-backed bundle after the Run exists — the handler reads ref.current at call time (strictly after the
+  // stream starts).
   const viaApiOn = readGateFlag(baseline, "1978029737", "coworkWebFetchViaApi", false);
   const promptGateOn = readGateFlag(baseline, "1978029737", "coworkWebFetchPrompt", false);
   const provenanceRef: { current?: WebFetchProvenance } = {};
@@ -1759,13 +1767,13 @@ export async function executeScenario(scenario: Scenario, opts: ExecuteOptions =
       if (spawnedSessionRoot !== undefined) run.setSessionRoot(spawnedSessionRoot);
       if (spawnedAgentCwd !== undefined) run.setExpectedAgentCwd(spawnedAgentCwd);
       // fill the provenance bundle (backed by Run's tracker + recorded approval) BEFORE drive().
-      // Host-loop only, and only when the web_fetch-via-API gate is on; otherwise the handler stays
-      // allowlist-only (ref.current undefined). Run seeds the set from turns + tool_results.
+      // Only when the web_fetch-via-API gate is on; otherwise the handler stays allowlist-only
+      // (ref.current undefined). Run seeds the set from turns + tool_results.
       // BOTH loops, not just host-loop: production's VM-loop factory calls the provenance path
       // unconditionally and has no allowlist fallback in it at all. Leaving `ref.current` undefined at
       // container drops the handler onto PATH B — the gate-OFF path — even though the tool exists only
       // BECAUSE the gate is on, which is the inverse of production.
-      if ((effectiveFidelity === "hostloop" || effectiveFidelity === "container") && viaApiOn) {
+      if (webFetchGateEnabled(effectiveFidelity, viaApiOn)) {
         run.enableWebFetchGate();
         provenanceRef.current = {
           isAllowed: (u) => run.provenanceHas(u),

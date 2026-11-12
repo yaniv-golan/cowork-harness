@@ -6,6 +6,13 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Documentation
+
+- **`web_fetch.approved_domains` applies at `container` too.** The session docs said it took effect at `hostloop` only.
+  It applies wherever the web_fetch approval gate is on: `container` and `hostloop` (and `cowork`, which resolves to
+  one of them) when the baseline's web_fetch-via-API gate is on; not `microvm` or `protocol`. Behaviour is unchanged;
+  a test now pins the tier rule and the seeded/unseeded contrast.
+
 ## [5.0.0] - 2026-11-09
 
 ### Breaking changes
