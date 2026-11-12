@@ -99,7 +99,14 @@ exception: it reads every prompt leg of the root, each as its own source run. Se
           | {request_id: .response.request_id, answers: .response.response.updatedInput.answers}' "$RUN/control-out.jsonl"
    # the raw line behind a `trace` row you want to see unabridged
    sed -n '204p' "$RUN/events.jsonl" | jq .
+   # every shell command the run issued, from result.json's toolCalls (Bash at container, mcp__workspace__bash at hostloop)
+   jq -r '.toolCalls[] | select(.input.command) | .input.command.text' "$RUN/turns/1/result.json"
    ```
+
+   `toolCalls[]` in `result.json` holds every tool call in stream order as `{name, input, origin, toolUseId?,
+   parentToolUseId?, denied?}`. Each top-level input field is an object, not the raw value:
+   `input.<field> = {text, truncated?}`, where `text` is the value (a non-string one as its JSON) capped at 10 KB and
+   `truncated: true` marks a cut. So a command is `.input.command.text`, not `.input.command`.
 
    If what you find there is worth *gating* on rather than just reading, promote it to an assertion:
    [`question_context`](./scenario.md#full-schema) matches a regex against everything a gate put in front

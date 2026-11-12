@@ -24,6 +24,11 @@ All notable changes to this project are documented here. The format is based on
 
 ### Documentation
 
+- **`toolCalls[].input` shape.** The debugging guide documents that each top-level input field is `{text, truncated?}`,
+  not the raw value (a command is `.input.command.text`), with a `jq` line that lists a run's shell commands.
+- **`critique`'s `gradedOutcome` values.** The critique guide lists `delivered_clean`, `delivered_with_verdict_fail`,
+  `no_deliverable` and `errored`, and says a verdict fail there is the graded run's own asserts, not the critique's
+  findings.
 - **Testing an Agent Skills repo with no `plugin.json`.** A new section in the discovery guide, linked from the docs
   index and the companion skill: which mounting gives which skill id (`<folder>:<skill>` for the repo root as a
   plugin, `plugin_<id>:<skill>` through `remote_plugins`, `skill:<skill>` under `chat --raw`, bare `<skill>` through
