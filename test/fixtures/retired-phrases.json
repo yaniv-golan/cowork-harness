@@ -27,6 +27,18 @@
     {
       "phrase": "Takes effect at `hostloop` only",
       "reason": "approved_domains applies at container as well as hostloop, when the web_fetch-via-API gate is on"
+    },
+    {
+      "phrase": "real Cowork would BLOCK",
+      "reason": "the permissive_auto_allow signal states what Cowork does only where it is established: an attended task shows a permission card, a scheduled one declines after a timeout"
+    },
+    {
+      "phrase": "not a faithful pass. Pin with --answer",
+      "reason": "--answer cannot answer a tool permission; the signal names a when_tool rule (answers: or --answer-policy) instead"
+    },
+    {
+      "phrase": "Not a faithful pass; pin with --answer",
+      "reason": "the stderr warning for an auto-allowed ask names the tool and the CLI's reason, and no remedy"
     }
   ],
   "allowlist": [

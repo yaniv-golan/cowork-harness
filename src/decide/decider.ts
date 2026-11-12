@@ -279,7 +279,7 @@ export function isDefaultAllowedTool(tool: string): boolean {
 }
 
 /** The rationale a cowork-parity off-registry auto-allow carries. Shared so run.ts can detect a
- *  permissive auto-allow (real Cowork would BLOCK for the user) without string-matching drift. */
+ *  permissive auto-allow (an ask the agent CLI made that nothing scripted answered) without string-matching drift. */
 export const PERMISSIVE_AUTOALLOW_RATIONALE = "allow-unscripted (cowork parity)";
 /** The parity default's two FIXED answers: a registry allow (either parity) and the strict off-registry deny. */
 export const DEFAULT_ALLOW_RATIONALE = "default-allow built-in";

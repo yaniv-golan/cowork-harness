@@ -601,7 +601,7 @@ kept as written, because they are join keys or closed enums:
 - at the report root (and under `reportState` in the salvage file): `sessionId`, `outDir`, `skillFolder`,
   `skillDir`, `gradedSkill`, `gradedSkillHash`, `gradedModels`, `evaluatorModel`, `requestedModel`,
   `fidelity`, `requestedFidelity`, `gradedEffectiveFidelity`, `gradedBaseline`, `taskResult`,
-  `gradedOutcome`, `selfReportStatus`, `skillMdStatus`, `infraFailurePhase`, `infraFailureKind`,
+  `gradedOutcome`, `gradedSignals[].code`, `selfReportStatus`, `skillMdStatus`, `infraFailurePhase`, `infraFailureKind`,
   `verdictProvenance`, `harnessVersion`, `corpusHash`, `packagedCorpusHash`, `skillTreeHash`, `hashBasis`,
   `source.kind`, `source.commit`, `corpusManifest[].origin`, `corpusManifest[].status`, `corpusManifest[].sha256`,
   and `corpusDrift`'s two hashes (a manifest `key` is a file name, and is scrubbed);
@@ -912,7 +912,9 @@ reach into `turns/1/` yourself:
   `delivered_with_verdict_fail`, `no_deliverable` or `errored` — `errored` when the run errored, `no_deliverable`
   when it stalled or ended on a question, otherwise whether its verdict passed. "Delivered" means no such signal
   fired, not that a deliverable exists. A verdict fail here is the graded run's own guards and asserts failing, not
-  the critique's findings, which never change it; and
+  the critique's findings, which never change it. Which ones failed is listed beside it: `gradedSignals` (each failing
+  signal's `code` and the first line of its message) in JSON, and one `graded run signal ✗` line each under
+  `graded outcome:` in the text. `--summary-out` does not carry them; and
 - the graded result is also written under the stable name **`result.graded.json`**, and the graded turn's
   trace as **`trace.graded.json`** — both at the run-dir root, alongside `turns/1/` and `turns/2/`.
 

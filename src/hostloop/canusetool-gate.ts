@@ -41,9 +41,10 @@ const REQUEST_COWORK_DIRECTORY = "mcp__cowork__request_cowork_directory";
 // `permission_parity: "strict"` that's a deny, but under the DEFAULT `"cowork"` parity (session.ts:90) it's
 // a decisive, loudly-flagged auto-ALLOW (rationale `PERMISSIVE_AUTOALLOW_RATIONALE` = "allow-unscripted
 // (cowork parity)") — an unattended allow, not a prompt. That auto-allow is fully audit-visible in the RUN
-// lane (`rec.permissiveAutoAllow`, fails the verdict unless opted in — src/run/verdict.ts:181), but in the
-// CHAT lane the persisted result drops the field entirely (src/run/chat-result.ts:133; chat has no verdict
-// pass) — the only surviving trace there is a stderr warning. Either way it isn't auto-refused pre-prompt
+// lane (`rec.permissiveAutoAllow`, fails the verdict's `permissive_auto_allow` unless opted in), but in the
+// CHAT lane the persisted result drops the field entirely (src/run/chat-result.ts; chat has no verdict
+// pass) — what survives there is the decisions[] row (with the CLI's `decisionReason`) and a stderr
+// warning. Either way it isn't auto-refused pre-prompt
 // the way production refuses it. Also unhandled, unlike the sibling PreToolUse gate
 // (pretooluse-path-hook.ts, which trims + lexically resolves + realpaths): no `.trim()` on the raw input
 // and no case-folding — e.g. `" ~/.ssh"` (leading space) or `~/.SSH` (case-insensitive filesystem) will
