@@ -208,8 +208,32 @@ describe.skipIf(!can)("credential pre-flight", () => {
     const r = cli(["critique", "sk", "--prompt", "do the thing", "--model", "claude-sonnet-5"], d);
     expect(r.code, r.all).toBe(2);
     expect(r.all).toContain("critique: no usable agent credential for fidelity container");
+    expect(r.all).toMatch(/looked in: the environment; \.\/\.env \(/);
     expect(r.all).not.toMatch(SPAWN_GUARD);
     expect(existsSync(join(d, ".runs"))).toBe(false);
+  });
+
+  // The refusal lists where the CLI looked, highest precedence first: the environment, a --dotenv (given AFTER the
+  // subcommand here, so the per-command path records it too), ./.env, the install's .env. Proves main() and the
+  // per-command loader actually record their sources — a stub probe alone would pass without either.
+  it("a missing credential names where it looked, a trailing --dotenv first among the files", () => {
+    const d = work({ alpha: "protocol" });
+    writeFileSync(join(d, "empty.env"), "# no credential here\n");
+    for (const args of [
+      ["run", "sc/alpha.yaml", "--dotenv", "empty.env"],
+      ["record", "sc/alpha.yaml", "--dotenv", "empty.env"],
+    ]) {
+      const r = cli(args, d);
+      expect(r.code, r.all).toBe(2);
+      const looked = r.all.match(/looked in: ([^)]*\)[^)]*\)[^)]*\))/)?.[1] ?? "";
+      expect(looked, `${args[0]}: ${r.all}`).toMatch(
+        /^the environment; --dotenv \S*empty\.env; \.\/\.env \(\S*\.env, no such file\); the install's \.env \(\S*\.env/,
+      );
+      // the pointer at a file comes after the list, the Keychain note after both
+      const at = (t: string) => r.all.indexOf(t);
+      expect(at("--dotenv <path>"), args[0]).toBeGreaterThan(at("looked in:"));
+      expect(r.all.lastIndexOf("Keychain"), args[0]).toBeGreaterThan(at("--dotenv <path>"));
+    }
   });
 
   it("record: its all-tier guard refuses first (exit 2, nothing spawned); --dry-run is not refused", () => {

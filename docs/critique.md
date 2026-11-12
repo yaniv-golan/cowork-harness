@@ -905,7 +905,11 @@ reach into `turns/1/` yourself:
   conditions;
 - the graded turn's **`outcome` and `skillHash` are in the report itself** (`gradedOutcome` /
   `gradedSkillHash` in `--output-format json`, and in the text header) — a harvester never needs a turn
-  file; and
+  file. `gradedOutcome` is the graded run's own rollup of its result and verdict, one of `delivered_clean`,
+  `delivered_with_verdict_fail`, `no_deliverable` or `errored` — `errored` when the run errored, `no_deliverable`
+  when it stalled or ended on a question, otherwise whether its verdict passed. "Delivered" means no such signal
+  fired, not that a deliverable exists. A verdict fail here is the graded run's own guards and asserts failing, not
+  the critique's findings, which never change it; and
 - the graded result is also written under the stable name **`result.graded.json`**, and the graded turn's
   trace as **`trace.graded.json`** — both at the run-dir root, alongside `turns/1/` and `turns/2/`.
 

@@ -66,7 +66,9 @@ only manifests in the production execution split.
 is unrestricted and does not reflect Cowork's default-deny sandbox. Use it only when you
 specifically want unmediated access to the native Cowork agent. `--upload`, `--folder`, `--plugin`,
 and `--fidelity` are **rejected** in `--raw` mode (the command exits with a usage error listing them,
-rather than silently ignoring them); only `--model` is carried through.
+rather than silently ignoring them); only `--model` is carried through. The only credential it passes to the
+container is `CLAUDE_CODE_OAUTH_TOKEN`: an `ANTHROPIC_API_KEY` alone does not reach the agent there. The folder is
+mounted as a plugin named `skill`, so its skills register as `skill:<name>` whatever the folder is called.
 
 ## In-session commands
 

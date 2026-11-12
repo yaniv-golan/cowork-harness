@@ -49,7 +49,7 @@ Plugins are bind-mounted at the Cowork paths; the MCP config is passed via `--mc
 
 | Goal | How |
 |---|---|
-| Test a single local **skill** dir in isolation | `skills.local: ["./skills/my-skill"]` (staged into the config dir's `skills/`). Use `plugins.local_plugins` instead only for a **plugin** root — a dir with `.claude-plugin/plugin.json` — mounted via `--plugin-dir`. |
+| Test a single local **skill** dir in isolation | `skills.local: ["./skills/my-skill"]` (staged into the config dir's `skills/`). Use `plugins.local_plugins` instead for a **plugin** root — a dir with `.claude-plugin/plugin.json`, or an Agent Skills repo root with none ([below](#testing-an-agent-skills-repo-no-pluginjson)) — mounted via `--plugin-dir`. |
 | Swap an MCP server for a stub | point `mcp.config` at a test `mcp.json` (see `examples/data/mcp.json`) |
 | Exercise an org-remote plugin | `plugins.remote_plugins: ["./fixtures/org-plugin"]` |
 | Reproduce your installed plugins and skills | `plugins.from_host: true` (or name them). Copied into the run, hashed and recorded; see [session.md](./session.md#your-installed-set-pluginsfrom_host) |
@@ -61,6 +61,42 @@ directory it did not create — a real Claude config, or another run's — is re
 A command that runs the scenario more than once (`run --repeat` above 1, `run --matrix` of more than one cell, `eval`, `hillclimb`) refuses
 a pinned `config_dir` before the first run, rather than spending one run and refusing the next. So does a batch
 (`run <dir/>`, `record <dir/>`, `record --rerecord-stale`) in which two scenarios pin the same dir; one is fine.
+
+## Testing an Agent Skills repo (no `plugin.json`)
+
+A repo laid out as `skills/<name>/SKILL.md` at its root, with no `.claude-plugin/plugin.json`, needs no wrapper: every
+command accepts it as it is. What changes is how you mount it, and each mounting gives the skill a different id:
+
+| You pass | What is mounted | Skill id the agent registers |
+|---|---|---|
+| `skill <root>`, `plugins.local_plugins: [<root>]`, `chat <root>` | the **whole root** as one plugin, named after the folder | `<folder>:<skill>` |
+| `plugins.remote_plugins: [<root>]` | the whole root, staged as `.remote-plugins/plugin_<id>` | `plugin_<id>:<skill>` (the staged directory's name, not the folder's) |
+| `chat --raw <root>` | the whole root, staged under a fixed `skill` directory | `skill:<skill>` |
+| `skills.local: [<root>/skills/<name>]` | that one skill folder, standalone | `<skill>` |
+
+On the `local_plugins` routes (the first row), with no manifest the plugin name falls back to the folder name, as the
+staged agent's does; the other rows name it after their staged directory instead. On every plugin route the whole
+root is plugin content: `README.md` and `AGENTS.md` are staged with it, and the agents in a root
+`agents/` register under the same plugin name as that route's skills (`<folder>:<agent>` on the `local_plugins`
+routes).
+
+- **Commit first.** Inside a git repo the harness stages only git-tracked files (in the index: committed or
+  `git add`-ed), so a new, untracked file is not in the run.
+- **For Cowork fidelity, add a minimal manifest.** Claude Desktop's plugin install path (its zip install, the one
+  traced) refuses a plugin with no `.claude-plugin/plugin.json`, and Desktop writes one for a server-synced plugin
+  that lacks it, so on those routes a plugin reaches Cowork's agent with a manifest. A one-line `{"name": "my-skills-repo"}`, with the folder's name, keeps
+  the `<folder>:<skill>` id; `remote_plugins` then registers `my-skills-repo:<skill>` as well. The alternative is to
+  test the skill standalone through `skills.local`.
+- **The static checkers expect the manifest too.** Without one they read the tree as a standalone skill:
+  - `lint-skill` warns that `${CLAUDE_PLUGIN_ROOT}` is never replaced (true on `skills.local`; on the plugin routes the
+    agent does replace it), calls the repo's own `<folder>:<agent>` another plugin's, and misses a mistyped agent id;
+  - `resolve-agent-types <root>` prints no agents;
+  - `analyze-skill <root>` scans no markdown file and reports a clean pass, and on `<root>/skills/<name>` it skips the
+    root's `agents/`;
+  - `critique` leaves an agent referenced as `<folder>:<agent>` out of the graded corpus, and grades a
+    `<root>/skills/<name>` path as a bare folder; pass the root instead (with `--skill <name>` when it has several).
+
+  Scenario `lint` is unaffected.
 
 ## What the model actually sees — and how to verify it
 

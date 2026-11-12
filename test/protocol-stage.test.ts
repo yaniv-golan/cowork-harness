@@ -182,7 +182,7 @@ describe("spawnProtocol — the sealed config dir and the credential it needs", 
     vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "");
     expect(() => run(minimalPlan([]))).toThrow(UsageError);
     expect(() => run(minimalPlan([]))).toThrow(
-      /^test-scenario: fidelity protocol needs a credential in the environment \(env \/ \.env\) — .*The agent runs with a managed config dir, so a Keychain or \/login session is not used\. Fix: /,
+      /^test-scenario: fidelity protocol needs a credential in the environment \(env \/ \.env\) — .* Fix: .* — the agent runs with a managed config dir, so a Keychain or \/login session is not used\.$/,
     );
     expect(spawnMock).not.toHaveBeenCalled();
   });

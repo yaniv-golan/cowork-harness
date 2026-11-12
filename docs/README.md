@@ -31,6 +31,7 @@ reading order and tables that follow.
 | I want to… | Start here |
 |---|---|
 | Test a local skill before shipping it | [scenario.md](./scenario.md) (author a scenario) and the `skill` command in [CLI page → Commands at a glance](./cli.md#commands-at-a-glance) |
+| **Test an Agent Skills repo** (`skills/<name>/SKILL.md`, no `plugin.json`) | [discovery.md → Testing an Agent Skills repo](./discovery.md#testing-an-agent-skills-repo-no-pluginjson) — the mountings, the skill id each gives, and why to add a minimal manifest for Cowork fidelity |
 | Gate CI without spending tokens | [cassette.md](./cassette.md) (record/replay) + the [CI recipe](../.claude/skills/cowork-harness/references/ci-recipe.md) |
 | **Check my skill actually *ran*** — not that the answer merely looked right | [debugging.md → hunt the false-green](./debugging.md#the-run-was-green-but-you-dont-trust-it--hunt-the-false-green) (`skillsInvoked` / `skillActivity`) |
 | **Prove a `description` edit didn't break triggering** | `skill_triggered` / `no_skill_triggered` in [scenario.md](./scenario.md#full-schema); the router model in [discovery.md](./discovery.md) |

@@ -6,6 +6,50 @@ All notable changes to this project are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+
+- **A missing credential now says where the CLI looked.** The refusal on `run`, `skill`, `probe-dispatch`, `record`,
+  `chat`, `critique`, `eval` and `hillclimb`, and `doctor`'s token row, list the places searched in precedence order
+  (the environment, a `--dotenv` file given before or after the subcommand, `./.env` in the current directory, the
+  install's `.env`, each marked when it does not exist), then how to point at a file with `--dotenv`, with the
+  Keychain fallback last. No suggested shell command is followed by sentence punctuation. The search itself is unchanged.
+- **A judged assert refused because its evidence was cut now says how to recover it from the kept run.** On a live
+  `run` or `record`, a `semantic_matches` / `semantic_pairwise` refusal for a file truncated at the per-file cap or
+  dropped or cut at the capture budget adds the `cowork-harness regrade <run-dir> --scenario <scenario.yaml>` command
+  that re-grades it with judge spend only: after scoping `evidence_files` to the deliverable for a per-file cut, with
+  `--authored-total-bytes` for a budget cut, and with `--allow-unchecked` only when another judged assert of the run
+  recorded what its judge read. There is no hint for an unreadable file, on `skill`, legs, `eval`/`hillclimb` arms,
+  replay, or inside `regrade`. An unscoped truncated-prefix message also says the cut file may be a generated file
+  beside the deliverable that the rubric is not about. Only the message text changes; verdicts do not.
+
+### Documentation
+
+- **Companion skill.** The authoring reference points at the Agent Skills repo section; the semantic-judging reference
+  says to scope `evidence_files` from the start when a skill writes a generated file beside its deliverable, and that a
+  kept run refused at a cap can be re-graded; the debugging and critique references carry the `toolCalls` input shape
+  and the `gradedOutcome` values. The authoring reference's web_fetch summary is shorter, with the full model still in
+  the scenario-schema reference, to keep the skill under the critique evidence ceiling.
+- **`toolCalls[].input` shape.** The debugging guide documents that each top-level input field is `{text, truncated?}`,
+  not the raw value (a command is `.input.command.text`), with a `jq` line that lists a run's shell commands.
+- **`critique`'s `gradedOutcome` values.** The critique guide lists `delivered_clean`, `delivered_with_verdict_fail`,
+  `no_deliverable` and `errored`, and says a verdict fail there is the graded run's own asserts, not the critique's
+  findings.
+- **Testing an Agent Skills repo with no `plugin.json`.** A new section in the discovery guide, linked from the docs
+  index and the companion skill: which mounting gives which skill id (`<folder>:<skill>` for the repo root as a
+  plugin, `plugin_<id>:<skill>` through `remote_plugins`, `skill:<skill>` under `chat --raw`, bare `<skill>` through
+  `skills.local`), that the whole root becomes plugin content, that only git-tracked files are staged, and why a
+  minimal manifest is the faithful choice for Cowork: Claude Desktop's plugin zip install refuses a plugin without one. The
+  chat guide now says `chat --raw` passes only `CLAUDE_CODE_OAUTH_TOKEN` to its container.
+- **`skill`, `probe-dispatch` and `critique` help no longer say the source folder needs `.claude-plugin/plugin.json`.**
+  It is optional: the plugin name falls back to the folder name, and an Agent Skills repo root with
+  `skills/<name>/SKILL.md` is accepted as is. `critique --help` adds that a `<plugin>/skills/<name>` path is graded
+  as part of its plugin only when the plugin has a manifest. The `--answer-policy` help on `skill` and `critique`
+  now says the file takes `when_tool` permission rules as well as question rules.
+- **`web_fetch.approved_domains` applies at `container` too.** The session docs said it took effect at `hostloop` only.
+  It applies wherever the web_fetch approval gate is on: `container` and `hostloop` (and `cowork`, which resolves to
+  one of them) when the baseline's web_fetch-via-API gate is on; not `microvm` or `protocol`. Behaviour is unchanged;
+  a test now pins the tier rule and the seeded/unseeded contrast.
+
 ## [5.0.0] - 2026-11-09
 
 ### Breaking changes

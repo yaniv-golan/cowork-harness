@@ -4988,17 +4988,21 @@ function hasEnvCredential(): boolean {
   return !!(process.env.CLAUDE_CODE_OAUTH_TOKEN || process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN);
 }
 
+/** The text of `record`'s no-credential refusal: where it looked (when the CLI recorded its sources), how to point at
+ *  a file, and only then the Keychain note — the same order as doctor's `token` row. */
+export function recordNoCredentialMessage(sources: string[]): string {
+  return (
+    "record: no model credentials — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, or at fidelity protocol ANTHROPIC_AUTH_TOKEN" +
+    (sources.length ? ` (looked in: ${sources.join("; ")})` : "") +
+    ". Put it in ./.env, or point at a file that holds it: cowork-harness --dotenv <path> record … " +
+    "(the agent never reads a macOS Keychain login; run `cowork-harness doctor` for full diagnostics)"
+  );
+}
+
 /** `record`'s refusal with no model credential. In-Docker containers cannot read the macOS Keychain, and protocol never
  *  uses one; without it the failure would surface as result:"error" + empty stderr after the agent spawns. */
 function failNoRecordCredential(asJson: boolean) {
-  return fail(
-    "record",
-    "runtime",
-    "record: no model credentials — set CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY, or at fidelity protocol ANTHROPIC_AUTH_TOKEN " +
-      "(in-Docker the macOS Keychain is not accessible; run `cowork-harness doctor` for full diagnostics)",
-    undefined,
-    asJson,
-  );
+  return fail("record", "runtime", recordNoCredentialMessage(realProbe.envSources?.() ?? []), undefined, asJson);
 }
 
 export async function cmdRecord(args: string[]) {

@@ -429,6 +429,11 @@ export interface SemanticRefusal {
   /** Absent for a refusal decided from the assertion alone (an unmeetable `min_pass`): no evidence was composed. */
   semanticEvidence?: SemanticEvidence;
   message: string;
+  /** Set when the evidence was cut at a capture cap and a re-grade of the kept run can recover it: `scope` when an
+   *  unscoped assert lost a file to the per-file cap (scoping `evidence_files` lifts it), `budget` when the total
+   *  capture budget dropped or cut graded content. Absent when any graded file was unreadable — nothing recovers
+   *  that — and for every other reason. Read by `check` to word the regrade hint (`regradeHintText`). */
+  capRecovery?: { scope: boolean; budget: boolean };
 }
 
 export interface AssertContext {
@@ -471,6 +476,11 @@ export interface AssertContext {
   /** For a call the API refused for its credential (401/403): which credential the graders used (names only). Live
    *  lane only; appended to the check message, so it is persisted with that message in `assertions[].message`. */
   judgeErrorHints?: Map<Assertion, string>;
+  /** True when this run's kept dir can be re-graded with `regrade <run-dir> --scenario <file>`: a live, non-partial
+   *  `run` or `record` that is not a leg or an eval/hillclimb arm. Set at ONE site (execute.ts, from
+   *  `regradeHintEligible`); every other context (replay, verify-run, regrade itself, chat) leaves it unset, so a
+   *  judge-cap refusal there carries no regrade hint. */
+  regradeHint?: boolean;
   /** Per-assert facts about the DOCUMENT that was composed for a `semantic_matches` grade — populated by
    *  runSemanticJudges, which is the only place that knows them (composing is where the caps bite).
    *  `evidenceCut` is true when the aggregate `JUDGE_DOC_CAP` truncated the authored-file evidence (or the
@@ -988,6 +998,32 @@ export function forkRecordRefusal(a: Assertion, ctx: AssertContext): SemanticRef
   };
 }
 
+/** The regrade hint a judge-cap refusal gets on an eligible live run (`ctx.regradeHint`), or "" — appended by `check`,
+ *  not by `semanticRefusal`: whether to name `--allow-unchecked` depends on whether ANOTHER judged assert of the run
+ *  recorded the document its judge read (regrade measures widened content against those, and refuses it without the
+ *  flag), and the pre-pass decides a refusal before a later sibling is graded. At `check` time every grade is in. */
+function regradeHintText(a: Assertion, refusal: SemanticRefusal, ctx: AssertContext): string {
+  const r = refusal.capRecovery;
+  const o = judgedOpts(a);
+  if (!ctx.regradeHint || !r || !o) return "";
+  // A semantic_pairwise assert records its document in `composedDocs` (whether or not a judge read it); regrade measures
+  // against either (`judgedDoc ?? composedDoc`), so both count as a sibling's recorded document.
+  const sibling = [...(ctx.judgedDocs?.keys() ?? []), ...(ctx.composedDocs?.keys() ?? [])].some((k) => k !== a);
+  const cmd =
+    "cowork-harness regrade <run-dir> --scenario <scenario.yaml>" +
+    (r.budget ? " --authored-total-bytes <N>" : "") +
+    (sibling ? " --allow-unchecked" : "");
+  return (
+    `. A kept run can be re-graded without re-running the agent (judge spend only): ` +
+    (r.scope ? `add ${o.key}.evidence_files: ["<the deliverable>"] to the scenario, then run ` : "run ") +
+    `\`${cmd}\`` +
+    (r.budget ? ", with <N> above the budget the run used" : "") +
+    (sibling
+      ? ` — --allow-unchecked because another judged assert of this run recorded what its judge read, and regrade refuses content that judge never saw without it`
+      : "")
+  );
+}
+
 /** Decide whether a `semantic_matches` assert's evidence is unavailable — from the composed evidence ALONE,
  *  never from a grade. ONE definition, called by `runSemanticJudges` (to skip the judge call for an assert
  *  whose verdict is already decided) and by `check` (to report it), so the two cannot disagree about which
@@ -1096,7 +1132,12 @@ export function semanticRefusal(
       remedies.push(`investigate the unreadable path(s) — no budget setting can recover them`);
     }
     if (truncatedGraded.length) {
-      bits.push(`${truncatedGraded.length} kept only as a TRUNCATED prefix (${truncatedGraded.join(", ")})`);
+      bits.push(
+        `${truncatedGraded.length} kept only as a TRUNCATED prefix (${truncatedGraded.join(", ")})` +
+          // Unscoped, a file cut here hit the per-file cap — often a large generated file (an HTML render, a data dump)
+          // written beside the deliverable, which the rubric is not about at all.
+          (scoped ? "" : ` — if that is a generated file beside the deliverable, the rubric may not be about it at all`),
+      );
       remedies.push(
         scoped
           ? `raise $COWORK_HARNESS_AUTHORED_TOTAL_BYTES (currently ${currentBudget()} bytes) — an in-scope file is already exempt from the per-file cap, so it is the TOTAL that did not fit`
@@ -1109,6 +1150,14 @@ export function semanticRefusal(
     };
     return {
       semanticEvidence,
+      ...(unreadableGraded.length
+        ? {}
+        : {
+            capRecovery: {
+              scope: !scoped && truncatedGraded.length > 0,
+              budget: omittedGraded.length > 0 || (scoped && truncatedGraded.length > 0),
+            },
+          }),
       message:
         `evidence unavailable: the ${scoped ? "in-scope " : ""}authored evidence the judge would grade is incomplete — ${bits.join("; ")}. ` +
         `A partial deliverable grades as a partial document, so a "claim not satisfied" could be an artefact of the cut. ` +
@@ -3231,7 +3280,7 @@ function check(
       results.push(fail(judgeInvalidMessage(a, ctx)));
     } else if (refusal) {
       semanticEvidence = refusal.semanticEvidence;
-      results.push(fail(refusal.message));
+      results.push(fail(refusal.message + regradeHintText(a, refusal, ctx)));
     } else if (!judged) {
       results.push(fail("evidence unavailable: semantic judge not run (semantic_matches is live-only; skipped on replay)"));
     } else {
@@ -3285,7 +3334,7 @@ function check(
       results.push(fail(judgeInvalidMessage(a, ctx)));
     } else if (refusal) {
       semanticEvidence = refusal.semanticEvidence;
-      results.push(fail(refusal.message));
+      results.push(fail(refusal.message + regradeHintText(a, refusal, ctx)));
     } else if (!outcomes) {
       results.push(fail("evidence unavailable: pairwise judge not run (semantic_pairwise is live-only; skipped on replay)"));
     } else if (!gated.length) {

@@ -119,7 +119,8 @@ egress:
 
 # ── web_fetch (TEST CONVENIENCE — not a real Cowork setting) ────────────────────
 web_fetch:
-  approved_domains: []           # HOSTLOOP-ONLY in effect (see the table below): pre-approve these hosts
+  approved_domains: []           # applies at container/hostloop with the web_fetch-via-API gate on, not at
+                                 # microvm (see the table below): pre-approve these hosts
                                  # for the run — simulates the in-session effect of
                                  # clicking "Allow all for website" (seeds Run.approvedDomains), but for THIS
                                  # run only: the set starts empty every run (Cowork has no persistent
@@ -381,7 +382,7 @@ copies of your installed plugins and skills: don't publish it.
 
 | Field | Type | Cowork control | Notes |
 |---|---|---|---|
-| `web_fetch.approved_domains[]` | string[] | *(none — TEST CONVENIENCE, not a real Cowork setting)* | **Takes effect at `hostloop` only** (and at `cowork` when it resolves there), and only with the web_fetch-via-API gate on: that is the one path that enables the web_fetch approval gate, which is the only consumer of this set. The value is still parsed and seeded at `container`/`microvm`, where nothing reads it. Where it does apply: pre-approves these hosts for the run, as if the user had clicked "Allow all for website" earlier in the session (seeds `Run.approvedDomains`) — a `web_fetch` to a listed host raises no approval gate. The set starts empty every run; Cowork itself has no persistent pre-approval across runs. `web_fetch`'s real gate is the URL provenance set, seeded from URLs in the prompt — see [boundary.md](./boundary.md). |
+| `web_fetch.approved_domains[]` | string[] | *(none — TEST CONVENIENCE, not a real Cowork setting)* | **Applies at `container` and `hostloop`** (and at `cowork`, which resolves to one of them), and only when the baseline's web_fetch-via-API gate is on: those are the runs that enable the web_fetch approval gate, which is the only consumer of this set. Not at `microvm` or `protocol`, where the value is still parsed and seeded but nothing reads it. Where it does apply: pre-approves these hosts for the run, as if the user had clicked "Allow all for website" earlier in the session (seeds `Run.approvedDomains`) — a `web_fetch` to a listed host raises no approval gate. The set starts empty every run; Cowork itself has no persistent pre-approval across runs. `web_fetch`'s real gate is the URL provenance set, seeded from URLs in the prompt — see [boundary.md](./boundary.md). |
 
 ## Path expansion
 

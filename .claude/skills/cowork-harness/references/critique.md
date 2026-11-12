@@ -97,6 +97,9 @@ messages, never from the flag. So `graded model(s): unknown` means no assistant 
 (crash, kill, or a gate before the first reply); passing `--model` does not change that line. Past runs
 can be checked without re-running: the same ids are in each kept run dir's `turns/1/result.json`.
 
+`gradedOutcome`: `delivered_clean | delivered_with_verdict_fail | no_deliverable | errored`; a verdict fail there is
+the graded run's own asserts, not the findings.
+
 ## A repaired evaluator reply — `evaluatorRepair`
 
 When an evaluator reply was complete except for its final closing `}`, critique appends that one brace and

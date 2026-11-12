@@ -305,6 +305,77 @@ describe("doctor — runDoctorChecks", () => {
   });
 });
 
+// With no credential found, the message says WHERE it looked (the environment, then each .env file the CLI read — an
+// explicit --dotenv, ./.env, the install's .env), then how to point at another file, and only then the Keychain note.
+// The sources come from the CLI's own loader (recorded in command-globals); a caller that recorded none (a library
+// user) gets no "looked in" claim at all.
+// A remedy holds shell commands people copy. The refusal built on it must never put sentence punctuation right after
+// one: "… >> .env." pasted as is writes a file named `.env.`, which nothing reads.
+describe("doctor — a credential refusal never ends a shell command with a period", () => {
+  const branches: [string, Partial<DoctorProbe>][] = [
+    ["keychain", { hasToken: () => false, hasKeychainToken: () => true }],
+    ["generic", { hasToken: () => false, hasKeychainToken: () => false }],
+    ["worktree", { hasToken: () => false, hasKeychainToken: () => false, worktreeEnv: () => "/main/repo/.env" }],
+    ["auth-token-only", { hasToken: () => true, authTokenOnly: () => true }],
+  ];
+  it.each(branches)("%s", async (_name, over) => {
+    const { credentialRefusal } = await import("../src/runtime/protocol.js");
+    for (const tier of ["protocol", "container"] as const) {
+      const tok = get(runDoctorChecks(tier, probe(over)), "token");
+      if (tok.status !== "fail") continue;
+      const text = credentialRefusal("s", tok, tier);
+      expect(text, text).not.toMatch(/\.env\.(\s|$)/);
+      expect(text, text).not.toMatch(/<cmd>\.(\s|$)/);
+    }
+  });
+});
+
+describe("doctor — a missing credential names the places it looked", () => {
+  const SOURCES = [
+    "the environment",
+    "--dotenv /x/creds.env",
+    "./.env (/w/.env, no such file)",
+    "the install's .env (/i/.env, no such file)",
+  ];
+
+  it("lists every source in order, then the --dotenv pointer, with the Keychain fallback last", () => {
+    const tok = get(
+      runDoctorChecks("container", probe({ hasToken: () => false, hasKeychainToken: () => true, envSources: () => SOURCES })),
+      "token",
+    );
+    expect(tok.status).toBe("fail");
+    const text = `${tok.detail} ${tok.remedy}`;
+    expect(text).toContain(`looked in: ${SOURCES.join("; ")}`);
+    const looked = text.indexOf("looked in:");
+    const pointer = text.indexOf("--dotenv <path> <cmd>");
+    const keychain = text.indexOf("Keychain token into ./.env");
+    expect(looked).toBeGreaterThanOrEqual(0);
+    expect(pointer).toBeGreaterThan(looked);
+    expect(keychain).toBeGreaterThan(pointer);
+    // last: nothing after the fallback clause but its own explanation
+    expect(tok.remedy!.lastIndexOf(";")).toBeLessThan(tok.remedy!.indexOf("Keychain token into ./.env"));
+  });
+
+  it("the generic branch lists the sources too, with no Keychain mention", () => {
+    const tok = get(runDoctorChecks("container", probe({ hasToken: () => false, envSources: () => SOURCES })), "token");
+    expect(tok.detail).toContain(`looked in: ${SOURCES.join("; ")}`);
+    expect(`${tok.detail} ${tok.remedy}`).not.toMatch(/Keychain/i);
+  });
+
+  it("claims no sources when none were recorded", () => {
+    for (const envSources of [undefined, () => []]) {
+      const tok = get(runDoctorChecks("container", probe({ hasToken: () => false, ...(envSources ? { envSources } : {}) })), "token");
+      expect(`${tok.detail} ${tok.remedy}`).not.toContain("looked in");
+    }
+  });
+
+  it("a found credential lists nothing", () => {
+    const tok = get(runDoctorChecks("container", probe({ hasToken: () => true, envSources: () => SOURCES })), "token");
+    expect(tok.status).toBe("ok");
+    expect(tok.detail).not.toContain("looked in");
+  });
+});
+
 describe("doctor — agent image freshness (advisory, network best-effort)", () => {
   const withFreshness = (f: ImageFreshness, over: Partial<DoctorProbe> = {}) => probe({ imageFreshness: () => f, ...over });
 

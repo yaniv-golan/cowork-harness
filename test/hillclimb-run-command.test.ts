@@ -1617,7 +1617,7 @@ describe("credentials: refused before spend when no source resolves; an auth fai
     const r = await runHillclimbCommand(args("--dry-run"), deps({ tokenCheck: (tier) => tokenCheck(tier, keychainOnlyProbe) }));
     expect(r.exitCode).toBe(2);
     expect(r.error?.message).toContain(
-      "no usable agent credential for fidelity protocol (case alpha): found a 'Claude Code-credentials' Keychain entry, but cowork-harness does not pass a Keychain credential to the agent",
+      "no usable agent credential for fidelity protocol (case alpha): no CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN; found a 'Claude Code-credentials' Keychain entry, but cowork-harness does not pass a Keychain credential to the agent",
     );
     expect(r.error?.message).toContain("cowork-harness doctor --tier protocol");
   });
