@@ -67,8 +67,9 @@ lint-skill flags (skill bodies + any sibling hooks.json):
                                path, which the host-loop bash tool rewrites to the VM mount (its own word only)
   W  `plugin-root-forwarded-from-vm-bash`  the whole `${CLAUDE_PLUGIN_ROOT}` as the value of a location option
                                (root/dir/path/plugin/base): a program that passes it on hands a host-side
-                               reader a VM path it refuses at host-loop (a standalone skill's braced form, with
-                               no plugin.json above it, is the `plugin-root-in-vm-bash` WARN: nothing replaces it)
+                               reader a VM path it refuses at host-loop (the braced form with no plugin
+                               manifest above the skill is the `plugin-root-in-vm-bash` WARN: installed as a
+                               standalone skill nothing replaces it; loaded as a manifest-less plugin it is)
   W  `hook-host-side-write`    a hook command that exports a var or writes /tmp for the in-VM agent
   W  `skill-body-over-reattach-cap`   SKILL.md body (frontmatter excluded) over 19,000 B — after a
                                compaction the agent re-attaches only the first ~19,900 chars (INFO from 80%)
@@ -3133,12 +3134,16 @@ def _findings_plugin_root(path, line, ctx_label, text, in_plugin=True):
             Finding(
                 "WARN",
                 "plugin-root-in-vm-bash",
-                f"`${{CLAUDE_PLUGIN_ROOT}}` in an in-VM bash context ({ctx_label}) in a skill outside a plugin (no "
-                "plugin.json above it): nothing replaces the token in a standalone skill's text, so the VM shell "
-                "reads the environment variable, which is empty at host-loop (Cowork's default); a path built from "
-                "it points nowhere.",
-                "Ship the skill inside a plugin, or resolve its files at run time (see the plugin-root guide), for "
-                "example by finding this skill's SKILL.md under /sessions.",
+                f"`${{CLAUDE_PLUGIN_ROOT}}` in an in-VM bash context ({ctx_label}) in a skill with no plugin manifest "
+                "(.claude-plugin/plugin.json or plugin.json) above it, so the linter cannot tell how it is installed. "
+                "Installed as a standalone skill, nothing replaces the token in its text, so the VM shell reads the "
+                "environment variable, which is empty at host-loop (Cowork's default), and a path built from it points "
+                "nowhere. If a folder above it is instead loaded as a plugin, the agent names that plugin after its "
+                "folder and does replace the token.",
+                "If the skill ships in a plugin, add `.claude-plugin/plugin.json` at the plugin root (Desktop's "
+                "plugin zip install path refuses a plugin without one), and the linter then checks it as a plugin skill. "
+                "Otherwise resolve its files at run time (see the plugin-root guide), for example by finding this "
+                "skill's SKILL.md under /sessions.",
                 path,
                 line,
             )
@@ -3635,16 +3640,20 @@ def _resolve_corpus_agents(skill_dir):
     # where the TS side still enumerates agents because it is handed the root explicitly; layout-only
     # diverged for a skill that is not under `skills/` but does have a manifest above it, which the
     # packager sizes and this sized as ZERO. Neither rule alone matches; the union does.
+    # The layout test and the folder-name fallback read the RESOLVED path: `Path(".").name` is empty.
+    real = skill_dir.resolve()
     plugin_dir = _find_enclosing_plugin_dir(skill_dir / "SKILL.md") or (
-        skill_dir.parent.parent if skill_dir.parent.name == "skills" else None
+        real.parent.parent if real.parent.name == "skills" else None
     )
     if plugin_dir is None or not (plugin_dir / "agents").is_dir():
         return []
     all_agents = _enumerate_plugin_agents(plugin_dir)
     if not all_agents:
         return []
-    plugin_name = _read_plugin_name(plugin_dir)
-    skill_name = skill_dir.name
+    # No manifest: the agent names a plugin after its folder, so a `<folder>:<agent>` literal dispatches this
+    # plugin's agent. Mirrors `readPluginName(pluginRoot) ?? basename(pluginRoot)` in resolve-agents.ts.
+    plugin_name = _read_plugin_name(plugin_dir) or Path(plugin_dir).resolve().name
+    skill_name = real.name
     picked = {}
     sources = []  # declared before `add`: every picked agent is itself a dispatch SOURCE
 
@@ -3905,6 +3914,23 @@ def cmd_resolve_agent_types(args):
     else:
         for t in types:
             print(t)
+    if not types:
+        # Never a silent empty result: say why on stderr (stdout keeps its shape for a script reading it).
+        agents = sorted(name for name, _ in _enumerate_plugin_agents(args.plugin_dir))
+        if not _read_plugin_name(args.plugin_dir):
+            msg = (
+                f"resolve-agent-types: 0 types: {args.plugin_dir} has no plugin manifest naming it "
+                "(.claude-plugin/plugin.json or plugin.json), so no `<plugin>:<agent>` type resolves"
+            )
+            if agents:
+                folder = Path(args.plugin_dir).resolve().name
+                msg += (
+                    f". Loaded as a plugin, a folder with no manifest is named after the folder, so its "
+                    f"{len(agents)} agent(s) would load as: " + ", ".join(f"{folder}:{a}" for a in agents)
+                )
+        else:
+            msg = f"resolve-agent-types: 0 types: no agents/**/*.md under {args.plugin_dir}"
+        print(msg, file=sys.stderr)
     return 0
 
 
@@ -3926,6 +3952,20 @@ def _finding_subagent_unresolvable(path, line, value):
         f"pinned type `{value}` belongs to another plugin — can't confirm it resolves from here",
         "Verify it resolves in that plugin's own agents/ dir (e.g. `scenario.py resolve-agent-types "
         "<that-plugin-dir>`), or dispatch without pinning a cross-plugin type.",
+        path,
+        line,
+    )
+
+
+def _finding_subagent_unresolvable_no_manifest(path, line, value):
+    return Finding(
+        "INFO",
+        "subagent-type-unresolvable",
+        f"pinned type `{value}` names a plugin, but this skill has no plugin manifest above it, so the linter "
+        "cannot tell whether that is this skill's own plugin (loaded as a plugin, a folder with no manifest is "
+        "named after the folder) — can't confirm it resolves from here",
+        "Add `.claude-plugin/plugin.json` naming the plugin at its root to let the linter check the type, or "
+        "confirm it with `scenario.py resolve-agent-types <plugin-dir>`.",
         path,
         line,
     )
@@ -4024,6 +4064,9 @@ def _lint_subagent_types(path, raw_lines):
     findings = []
     for line_no, value in matches:
         builder = _classify_subagent_type(value, plugin_name, plugin_agent_types)
+        if builder is _finding_subagent_unresolvable and plugin_dir is None:
+            # No manifest at all: whose namespace the prefix is cannot be told, so "another plugin" would overclaim.
+            builder = _finding_subagent_unresolvable_no_manifest
         if builder is not None:
             findings.append(builder(path, line_no, value))
     return findings
@@ -4917,8 +4960,8 @@ def main(argv=None):
             "bash to a host-side file tool arrives as a VM path (WARN plugin-root-forwarded-from-vm-bash, for "
             "the whole root as the value of an option named root/dir/path/plugin/base, not inside an open quoted "
             "string (such as an echo'd sentence) and not for `claude` itself). The braced form glued to other "
-            "text (${CLAUDE_PLUGIN_ROOT}-v2, x${CLAUDE_PLUGIN_ROOT}) is not rewritten, and in a standalone skill "
-            "(no plugin.json above it) nothing replaces it, so both are the WARN plugin-root-in-vm-bash too. A fully commented-out line is skipped. Suppress a reviewed site with a "
+            "text (${CLAUDE_PLUGIN_ROOT}-v2, x${CLAUDE_PLUGIN_ROOT}) is not rewritten, and with no plugin manifest above "
+            "the skill it is replaced only if a folder above it is loaded as a plugin, never in a standalone skill, so both are the WARN plugin-root-in-vm-bash too. A fully commented-out line is skipped. Suppress a reviewed site with a "
             "marker (below);\n"
             "  (b) a hook command that exports an env var or writes into /tmp for the in-VM agent — a "
             "host-side hook write is not VM-visible (works in the CLI, silently no-ops in Cowork).\n\n"

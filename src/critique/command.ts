@@ -149,13 +149,14 @@ function usage(): string {
   <skill-folder> may be git:<ref>:<path> (repo-relative, from the current repository): critique the
   skill as it is at that commit, from a snapshot, so an edit or a moved HEAD during the run changes
   nothing. A path at <plugin>/skills/<name> grades that skill of the plugin, as <plugin> --skill
-  <name> does, but only when <plugin> has .claude-plugin/plugin.json; the report records the resolved
-  commit in source.commit.
+  <name> does, but only when <plugin> has a manifest (.claude-plugin/plugin.json or a root plugin.json);
+  the report records the resolved commit in source.commit.
 
   <skill-folder> is a skill folder, a plugin folder (.claude-plugin/plugin.json optional — the plugin
   name falls back to the folder name), or an Agent Skills repo root with skills/<name>/SKILL.md. For a
   repo root with no manifest, pass the root (with --skill <name> when it has several skills), not
-  <root>/skills/<name>: that path is graded as a bare folder, without the root's agents/.
+  <root>/skills/<name>: that path is graded as a bare folder, without the root's agents/ (a notice
+  says so).
 
   critique --compare <report.json | summary.json …> [--strict] [--cluster none|lexical] [--out <path>] [--output-format json]
   lines up several critiques of one skill side by side (no spend, no model): one group, or two by
@@ -667,13 +668,34 @@ export function promoteSkillDirTarget(skillFolder: string, skillSelector: string
   return { kind: "promoted", enclosing, name };
 }
 
+/** `critique <dir>/skills/<name>` with no plugin manifest at or above the skill: not promoted, because a `skills/<name>`
+ *  layout alone does not make a plugin (`~/.claude/skills/x` has it too). The skill is mounted and graded on its
+ *  own, which drops whatever the folder above `skills/` would contribute as a plugin (a root `agents/`, shared
+ *  references). Said once, with the spelling that mounts that folder instead; nothing about the run changes. */
+function noteManifestlessSkillsLayout(opts: ParsedArgs): void {
+  if (opts.skillSelector !== undefined || !existsSync(join(opts.skillFolder, "SKILL.md"))) return;
+  const positional = resolve(opts.skillFolder);
+  const parent = dirname(positional);
+  if (basename(parent) !== "skills" || findEnclosingPluginDir(positional) !== null) return;
+  const name = basename(positional);
+  const root = dirname(parent);
+  const shown = isAbsolute(opts.skillFolder) ? root : relative(process.cwd(), root) || ".";
+  process.stderr.write(
+    `::notice:: [critique] ${tildeify(opts.skillFolder)} has no plugin manifest (.claude-plugin/plugin.json or a root plugin.json) at or above it, so it is mounted and graded on its own, as a standalone skill: nothing outside this folder (a root agents/ or references/) is in the graded run. ` +
+      `To mount ${tildeify(shown)} as a plugin (named after its folder) and grade this skill in it, run critique ${tildeify(shown)} --skill ${name}\n`,
+  );
+}
+
 /** Apply `promoteSkillDirTarget` to the ONE `opts` binding `main` hands to every consumer — the resolver,
  *  the preview, both turns' argv (and so the mount, the resume identity and `skillHash`), and every report
  *  field. Written as a reassignment on purpose: a second binding would let the preview show the promotion
  *  while a paid turn mounted the original folder. Announces the decision on stderr. */
 export function applyTargetPromotion(opts: ParsedArgs): ParsedArgs {
   const p = promoteSkillDirTarget(opts.skillFolder, opts.skillSelector);
-  if (p === null) return opts;
+  if (p === null) {
+    noteManifestlessSkillsLayout(opts);
+    return opts;
+  }
   if (p.kind === "promoted") {
     process.stderr.write(
       `::notice:: [critique] ${p.name} is a skill inside plugin ${tildeify(p.enclosing)} — mounting the plugin as Cowork does, grading skill '${p.name}'\n`,
@@ -772,6 +794,16 @@ export interface ResolvedCritiqueTarget {
   hashBasis?: HashBasis;
 }
 
+/** The name the agent registers a folder's ROOT `SKILL.md` under when the folder is mounted as a plugin: the skill's
+ *  frontmatter `name` (minus a leading "<plugin>:", the plugin being this folder), else `fallback`, rewritten by
+ *  `sanitizeSkillName`. `fallback` is the folder's own name as the caller knows it — the mount's, or for an eval arm
+ *  snapshotted under another name, its source's. */
+export function rootSkillRegisteredName(folder: string, fallback: string): string {
+  const plugin = binaryPluginIdentity(folder).name;
+  const fm = readSkillFrontmatterName(join(folder, "SKILL.md")) ?? "";
+  return sanitizeSkillName((fm.startsWith(`${plugin}:`) ? fm.slice(plugin.length + 1) : fm) || fallback);
+}
+
 export function resolveCritiquedSkillDir(skillFolder: string, skillSelector: string | undefined): ResolvedCritiqueTarget {
   // Fail-fast on a typo'd / absent path BEFORE the caller mints a session and spawns the task turn — a
   // missing folder otherwise only surfaces as a mid-run mount failure that leaves a stray run dir behind.
@@ -848,12 +880,13 @@ export function resolveCritiquedSkillDir(skillFolder: string, skillSelector: str
     // its frontmatter `name` (minus a leading "<plugin>:", the plugin being this folder), else the
     // directory's, rewritten by `sanitizeSkillName`.
     if (enclosing !== null && enclosing !== mountRoot) {
-      const plugin = binaryPluginIdentity(skillFolder).name;
-      const fm = readSkillFrontmatterName(join(skillFolder, "SKILL.md")) ?? "";
-      const registered = sanitizeSkillName((fm.startsWith(`${plugin}:`) ? fm.slice(plugin.length + 1) : fm) || basename(mountRoot));
+      const registered = rootSkillRegisteredName(skillFolder, basename(mountRoot));
       return { skillDir: skillFolder, ...agentsFor(skillFolder, skillFolder, basename(mountRoot)), gradedSkillName: registered };
     }
-    return { skillDir: skillFolder, ...agentsFor(skillFolder, skillFolder, readPluginName(skillFolder)) };
+    // Shape 1, or a plain skill folder with no manifest anywhere: mounted alone, the agent names it after its
+    // manifest, else after the folder (`<folder>:<skill>` measured), so the skill-named agent is looked up under
+    // that name. Invocation stays ungraded on this route, with or without a manifest.
+    return { skillDir: skillFolder, ...agentsFor(skillFolder, skillFolder, readPluginName(skillFolder) ?? basename(mountRoot)) };
   }
   const skills = listPluginSkills();
   if (skills.length === 1)

@@ -6,7 +6,8 @@
     "The expectations are hand-written on purpose: if either side derived them by calling its own resolver",
     "the pin would be a tautology that passes while the two disagree. Every case uses the",
     "<root>/skills/<name>/ layout, the only shape the Python sizing path resolves a plugin root from.",
-    "NOTE: the Python half runs only in CI's `python` job -- `npm run ci` is typecheck+build+test, no pytest."
+    "NOTE: the Python half runs only in CI's `python` job -- `npm run ci` is typecheck+build+test, no pytest.",
+    "A case may set `rootName`: both sides then materialize the tree in a directory of that name, so a manifest-less plugin's folder-name fallback is testable (a random temp name never matches a literal)."
   ],
   "cases": [
     {
@@ -140,6 +141,40 @@
         "agents/ms-redteam.md": "red team\n"
       },
       "expected": ["agents/ms.md"]
+    },
+    {
+      "name": "no manifest: a literal namespaced by the root folder's name resolves (the agent names such a plugin after its folder)",
+      "skill": "demo-skill",
+      "rootName": "my-skills-repo",
+      "tree": {
+        "skills/demo-skill/SKILL.md": "# demo-skill\nDispatch with subagent_type: \"my-skills-repo:helper\".\n",
+        "agents/helper.md": "helper prompt\n",
+        "agents/unrelated.md": "never dispatched\n"
+      },
+      "expected": ["agents/helper.md"]
+    },
+    {
+      "name": "control: with a manifest naming the plugin after the same folder, the same literal resolves the same way",
+      "skill": "demo-skill",
+      "rootName": "my-skills-repo",
+      "tree": {
+        ".claude-plugin/plugin.json": "{\"name\": \"my-skills-repo\"}",
+        "skills/demo-skill/SKILL.md": "# demo-skill\nDispatch with subagent_type: \"my-skills-repo:helper\".\n",
+        "agents/helper.md": "helper prompt\n",
+        "agents/unrelated.md": "never dispatched\n"
+      },
+      "expected": ["agents/helper.md"]
+    },
+    {
+      "name": "control: a manifest naming the plugin differently wins, so a folder-name literal does not resolve",
+      "skill": "demo-skill",
+      "rootName": "my-skills-repo",
+      "tree": {
+        ".claude-plugin/plugin.json": "{\"name\": \"declared-name\"}",
+        "skills/demo-skill/SKILL.md": "# demo-skill\nDispatch with subagent_type: \"my-skills-repo:helper\".\n",
+        "agents/helper.md": "helper prompt\n"
+      },
+      "expected": []
     }
   ]
 }

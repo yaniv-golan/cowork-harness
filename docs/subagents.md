@@ -71,7 +71,8 @@ top-level-`SKILL.md` dir AND a plugin root):
 
 - a top-level `SKILL.md` present → that file, plus every markdown file recursively under top-level
   `references/`;
-- a `.claude-plugin/plugin.json` or bare `plugin.json` present (a plugin root) → every markdown file
+- a `.claude-plugin/plugin.json` or bare `plugin.json` present, or — for the named directory itself, never walked
+  up to — no manifest and no top-level `SKILL.md` but some `skills/<name>/SKILL.md` (a plugin root) → every markdown file
   RECURSIVELY under root `agents/`, `references/`, and `commands/` — Claude Code discovers namespaced
   commands/agents in subdirectories (`commands/tasks/build.md`, `agents/sub/x.md`), so these are `**`
   walks, not a single-level listing — and each `skills/<name>/SKILL.md` (plus every markdown file
@@ -332,7 +333,9 @@ agent frontmatter:
   back to the filename stem — `foo.md` → `foo` — when a file has no `name:`). Prints the resulting
   `{plugin}:{agent}` set, one per line or as a JSON array with `--json`. A dir with no plugin.json
   prints an empty set (exit 0) — a bare SKILL.md dir with no plugin manifest has nothing to resolve
-  against, and this never crashes.
+  against, and this never crashes. An empty result is never silent: stderr says why (no manifest naming the
+  plugin, or no `agents/**/*.md`), and for a folder with no manifest lists the `<folder>:<agent>` ids its agents
+  would load as when the folder is loaded as a plugin (the agent names such a plugin after its folder).
 - **Folded into `scenario.py lint-skill`** — the SKILL.md body scan also extracts every pinned
   `subagent_type` value (`subagent_type: <value>` YAML, `subagent_type="<value>"` /
   `subagent_type: "<value>"` dispatch-prose forms — not limited to fenced blocks), resolves the
@@ -344,7 +347,9 @@ agent frontmatter:
     — "names this plugin but that agent doesn't exist — likely a typo";
   - a `<other-plugin>:<agent>` (colon-qualified, prefix isn't this plugin's name) →
     **`subagent-type-unresolvable`** — "belongs to another plugin, can't confirm it resolves from
-    here";
+    here". With no plugin manifest above the skill at all, the same INFO says instead that the linter cannot
+    tell whether the prefix is this skill's own plugin (a folder with no manifest, loaded as a plugin, is named
+    after the folder); the typo WARN below needs a manifest;
   - any other unresolved value → **`subagent-type-unknown`** — "not defined in this plugin and not
     the `general-purpose` built-in, can't confirm statically (may be an agent-binary built-in)".
 

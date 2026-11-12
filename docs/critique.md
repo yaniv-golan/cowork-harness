@@ -217,7 +217,10 @@ adjudicable". So:
   repo the plugin's index never descends into, or its spelling's case differs from the tracked path. A
   fallback run lacks everything the plugin provides outside that folder (agents, shared references), and
   its corpus lacks them too. A skill folder that carries its **own** plugin manifest is a plugin in its own
-  right: it is mounted as one, never promoted, and a notice says the plugin around it is not mounted.
+  right: it is mounted as one, never promoted, and a notice says the plugin around it is not mounted. A
+  `<dir>/skills/<name>` with **no** plugin manifest at or above it is not promoted either (a `skills/<name>`
+  layout alone does not make a plugin): it is mounted and graded on its own, and a notice says so and gives
+  `critique <dir> --skill <name>`, which mounts `<dir>` as a plugin named after its folder.
 - **Selection only:** with a plugin-root positional, `--skill` does not change what both turns mount
   (session identity is unchanged), and **`fingerprint.skillHash` is unchanged by `--skill`** — it keys the
   *mounted plugin* (for a promoted `<plugin>/skills/<name>` spelling too), so it pairs generations

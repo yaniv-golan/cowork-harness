@@ -48,11 +48,22 @@ function makeFixturePlugin(): string {
   return dir;
 }
 
-function resolveAgentTypes(pluginDir: string, json: boolean): { status: number | null; stdout: string } {
+function resolveAgentTypes(pluginDir: string, json: boolean): { status: number | null; stdout: string; stderr: string } {
   const args = ["resolve-agent-types", pluginDir];
   if (json) args.push("--json");
   const r = spawnSync(py, [SCRIPT, ...args], { encoding: "utf8" });
-  return { status: r.status, stdout: r.stdout || "" };
+  return { status: r.status, stdout: r.stdout || "", stderr: r.stderr || "" };
+}
+
+/** A skills repo with root agents and NO plugin manifest, in a folder named `my-skills-repo`. */
+function makeManifestlessRepo(subagentTypeLine: string): { root: string; skillMd: string } {
+  const root = join(mkdtempSync(join(tmpdir(), "cwh-subagent-mless-")), "my-skills-repo");
+  mkdirSync(join(root, "agents"), { recursive: true });
+  writeFileSync(join(root, "agents", "helper.md"), ["---", "name: helper", "---", "helper", ""].join("\n"));
+  mkdirSync(join(root, "skills", "demo-skill"), { recursive: true });
+  const skillMd = join(root, "skills", "demo-skill", "SKILL.md");
+  writeFileSync(skillMd, ["---", "name: demo-skill", "description: d", "---", "", subagentTypeLine, ""].join("\n"));
+  return { root, skillMd };
 }
 
 function lintSkill(skillMdPath: string): { status: number | null; findings: Finding[] } {
@@ -91,6 +102,21 @@ describe.skipIf(!havePython)("scenario.py resolve-agent-types", () => {
     const { status, stdout } = resolveAgentTypes(dir, true);
     expect(status).toBe(0);
     expect(JSON.parse(stdout)).toEqual([]);
+  });
+
+  it("an empty result is never silent: stderr says why, and what a folder with no manifest would load as", () => {
+    const { root } = makeManifestlessRepo("");
+    for (const json of [false, true]) {
+      const { status, stdout, stderr } = resolveAgentTypes(root, json);
+      expect(status).toBe(0);
+      expect(json ? JSON.parse(stdout) : stdout).toEqual(json ? [] : "");
+      expect(stderr).toMatch(/no plugin manifest/);
+      expect(stderr).toContain("my-skills-repo:helper");
+    }
+  });
+
+  it("control: a resolved set prints nothing on stderr", () => {
+    expect(resolveAgentTypes(makeFixturePlugin(), false).stderr).toBe("");
   });
 });
 
@@ -151,6 +177,16 @@ describe.skipIf(!havePython)("scenario.py lint-skill — subagent_type static re
     expect(hit?.severity).toBe("INFO");
     expect(hit?.message).toMatch(/belongs to another plugin/i);
     expect(status).toBe(0); // INFO never fails lint-skill without --strict
+  });
+
+  it("INFO subagent-type-unresolvable with NO manifest above the skill: says it cannot tell whose plugin, not 'another plugin'", () => {
+    const { skillMd } = makeManifestlessRepo('subagent_type="my-skills-repo:helper"');
+    const { status, findings } = lintSkill(skillMd);
+    const hits = findings.filter((f) => f.rule.startsWith("subagent-type"));
+    expect(hits.map((f) => [f.rule, f.severity])).toEqual([["subagent-type-unresolvable", "INFO"]]);
+    expect(hits[0]!.message).not.toMatch(/belongs to another plugin/i);
+    expect(hits[0]!.message).toMatch(/no plugin manifest/);
+    expect(status).toBe(0);
   });
 
   it("INFO subagent-type-unresolvable stays scoped-INFO: `--strict` still exits 0 (unconfirmable, not promoted)", () => {

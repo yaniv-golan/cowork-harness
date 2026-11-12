@@ -1719,10 +1719,26 @@ def test_fixture_is_non_trivial():
 
 @pytest.mark.parametrize("case", _fixture_cases(), ids=lambda c: c["name"])
 def test_resolve_corpus_agents_matches_shared_fixture(case, tmp_path):
-    root = _materialize(case["tree"], tmp_path / "plugin")
+    # `rootName`: a manifest-less plugin is named after its folder, so such a case fixes the folder's name.
+    root = _materialize(case["tree"], tmp_path / case.get("rootName", "plugin"))
     resolved = scenario._resolve_corpus_agents(root / "skills" / case["skill"])
     got = sorted(p.relative_to(root).as_posix() for p in resolved)
     assert got == sorted(case["expected"])
+
+
+def test_corpus_agents_manifestless_root_relative_skill_dir(tmp_path, monkeypatch):
+    """No manifest, and the skill dir given relative (`.` from inside it): the root folder's REAL name still
+    namespaces its agents. `Path(".").name` is empty, so the name must come from the resolved path."""
+    root = _materialize(
+        {
+            "skills/demo-skill/SKILL.md": '# demo-skill\nsubagent_type: "my-skills-repo:helper"\n',
+            "agents/helper.md": "helper\n",
+        },
+        tmp_path / "my-skills-repo",
+    )
+    monkeypatch.chdir(root / "skills" / "demo-skill")
+    resolved = scenario._resolve_corpus_agents(".")
+    assert sorted(p.resolve().relative_to(root.resolve()).as_posix() for p in resolved) == ["agents/helper.md"]
 
 
 def test_corpus_sizing_counts_every_dispatchable_agent(tmp_path):

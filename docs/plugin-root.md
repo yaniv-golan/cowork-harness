@@ -150,8 +150,12 @@ cowork-harness lint-skill path/to/skill/
 
 It reports the plugin root in an in-VM bash context (fenced `bash`/`sh` blocks and `Bash(...)`
 directives): a bare `$CLAUDE_PLUGIN_ROOT`, a braced root glued to other text (`${CLAUDE_PLUGIN_ROOT}-v2`,
-`x${CLAUDE_PLUGIN_ROOT}`, which the bash tool does not rewrite), or any form in a standalone skill with no
-`plugin.json` above it (nothing replaces the token there), as the WARN `plugin-root-in-vm-bash`; the whole braced root passed as
+`x${CLAUDE_PLUGIN_ROOT}`, which the bash tool does not rewrite), or any form in a skill with no plugin
+manifest above it, as the WARN `plugin-root-in-vm-bash`. For that last case the linter cannot tell how the skill
+is installed, so the message names both routes: as a standalone skill nothing replaces the token, while a folder
+above it loaded as a plugin with no manifest is named after its folder and the agent does replace it; adding
+`.claude-plugin/plugin.json` at the plugin root makes it a plugin skill to the linter (and Claude Desktop's plugin
+zip upload refuses a plugin without one); the whole braced root passed as
 the value of an option named for a location (`root`, `dir`, `path`, `plugin` or `base` in its name), not inside an open quoted string (such as an echo'd sentence) and not to `claude` itself, as the WARN
 `plugin-root-forwarded-from-vm-bash`, the forwarding shape above;
 and any other braced use as the INFO `plugin-root-braced-in-vm-bash`, whose message says when the rewrite

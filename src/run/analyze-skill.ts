@@ -984,7 +984,8 @@ function listSubdirs(dir: string, failures: AnalysisFailure[] = []): string[] {
  *    simultaneously a top-level-SKILL.md dir AND a plugin root):
  *      1. top-level "SKILL.md" present → add it + every markdown file RECURSIVELY under top-level
  *         "references/";
- *      2. ".claude-plugin/plugin.json" or bare "plugin.json" present (a plugin root) → add every
+ *      2. ".claude-plugin/plugin.json" or bare "plugin.json" present, or no manifest and no top-level SKILL.md but
+ *         some "skills/<name>/SKILL.md" (a plugin root; the named target only, never walked up to) → add every
  *         markdown file RECURSIVELY under root "agents/", "references/", and "commands/" — Claude Code
  *         discovers namespaced commands/agents in subdirectories (`commands/tasks/build.md`,
  *         `agents/sub/x.md`), so these are `**` walks, not a single-level listing (see
@@ -1009,6 +1010,19 @@ function listSubdirs(dir: string, failures: AnalysisFailure[] = []): string[] {
  *  hooks/MCP-only plugin with `agents/`/`references/`/`commands/`/`skills/` all absent or empty) —
  *  conflating the two produced a confusing "looked for plugin.json" message even for a dir that plainly
  *  HAD one. */
+/** Whether `dir/skills/<name>/SKILL.md` exists for some `<name>`. Best-effort: an unreadable `skills/` is "no", so the
+ *  dir is not recognized as a manifest-less plugin root and resolves as it did before (the usage error). */
+function hasSkillsSubdirSkill(dir: string): boolean {
+  try {
+    return readdirSync(join(dir, "skills"), { withFileTypes: true }).some(
+      (e) => e.isDirectory() && existsSync(join(dir, "skills", e.name, "SKILL.md")),
+    );
+  } catch (e) {
+    rethrowIfExit(e);
+    return false;
+  }
+}
+
 export function resolveSkillTarget(target: string): SkillTargetResolution | { error: string } {
   if (!existsSync(target)) return { error: `path not found: ${target}` };
   if (!statSync(target).isDirectory()) return { files: [target], unscanned: [], failures: [] };
@@ -1027,7 +1041,11 @@ export function resolveSkillTarget(target: string): SkillTargetResolution | { er
     for (const f of walkMarkdownDeep(join(dir, "references"), new Set(), failures)) files.add(f);
   }
 
-  const isPluginRoot = isPluginManifestDir(dir);
+  // A root with no manifest but `skills/*/SKILL.md` is a plugin too when loaded as one (named after its folder, its
+  // root agents/ and commands/ included), so it is scanned as one — but only as the NAMED target: a skill dir below it
+  // does not walk up to it (`findEnclosingPluginDir` still requires a manifest), since a `skills/<name>` layout alone
+  // does not make a plugin (`~/.claude/skills/x` has it too).
+  const isPluginRoot = isPluginManifestDir(dir) || (!hasTopSkillMd && hasSkillsSubdirSkill(dir));
   if (isPluginRoot) {
     for (const f of walkMarkdownDeep(join(dir, "agents"), new Set(), failures)) files.add(f);
     for (const f of walkMarkdownDeep(join(dir, "references"), new Set(), failures)) files.add(f);
@@ -1066,7 +1084,8 @@ export function resolveSkillTarget(target: string): SkillTargetResolution | { er
       return {
         error:
           `no contract-bearing markdown found under ${target} — looked for: a top-level SKILL.md ` +
-          "(+ references/**/*.md); a plugin root (.claude-plugin/plugin.json or plugin.json, pulling in " +
+          "(+ references/**/*.md); a plugin root (.claude-plugin/plugin.json or plugin.json, or no manifest " +
+          "but a skills/*/SKILL.md, pulling in " +
           "agents/**/*.md, references/**/*.md, commands/**/*.md, and skills/*/SKILL.md + " +
           "skills/*/references/**/*.md); or a skill dir whose SKILL.md sits somewhere inside an enclosing " +
           "plugin (pulling in that plugin's agents/**/*.md, references/**/*.md, and commands/**/*.md)",

@@ -15,12 +15,15 @@ import { snapshotTurnBoundary } from "../src/critique/evidence.js";
 interface Case {
   name: string;
   skill: string;
+  /** The plugin root's directory name, when a case depends on it (a manifest-less plugin is named after it). */
+  rootName?: string;
   tree: Record<string, string>;
   expected: string[];
 }
 
-function materialize(tree: Record<string, string>): string {
-  const root = mkdtempSync(join(tmpdir(), "cwh-agents-"));
+function materialize(tree: Record<string, string>, rootName?: string): string {
+  const tmp = mkdtempSync(join(tmpdir(), "cwh-agents-"));
+  const root = rootName === undefined ? tmp : join(tmp, rootName);
   for (const [rel, content] of Object.entries(tree)) {
     const abs = join(root, rel);
     mkdirSync(dirname(abs), { recursive: true });
@@ -37,11 +40,25 @@ describe("resolveDispatchableAgents — shared cross-language fixture", () => {
   // previous oracle-from-the-implementation test in this repo fell into.
   for (const c of fixture.cases) {
     it(c.name, () => {
-      const root = materialize(c.tree);
+      const root = materialize(c.tree, c.rootName);
       const got = resolveDispatchableAgents(root, join(root, "skills", c.skill), c.skill).map((a) => a.rel);
       expect(got).toEqual([...c.expected].sort());
     });
   }
+
+  it("no manifest, root given RELATIVE (`critique .`): the folder's real name still namespaces its agents", () => {
+    const root = materialize(
+      { "skills/demo-skill/SKILL.md": '# demo-skill\nsubagent_type: "my-skills-repo:helper"\n', "agents/helper.md": "helper\n" },
+      "my-skills-repo",
+    );
+    const cwd = process.cwd();
+    process.chdir(root);
+    try {
+      expect(resolveDispatchableAgents(".", join("skills", "demo-skill"), "demo-skill").map((a) => a.rel)).toEqual(["agents/helper.md"]);
+    } finally {
+      process.chdir(cwd);
+    }
+  });
 
   it("the fixture is non-trivial (a fixture that lost its cases must not read as a clean pass)", () => {
     expect(fixture.cases.length).toBeGreaterThanOrEqual(10);
@@ -95,6 +112,26 @@ describe("resolveCritiquedSkillDir — agents across all four branches", () => {
     const unpromoted = resolveCritiquedSkillDir(join(root, "skills", "ms"), undefined);
     expect(unpromoted.agents).toEqual([]);
     expect(unpromoted.pluginRoot).toBe(join(root, "skills", "ms"));
+  });
+
+  it("a plain skill folder with NO manifest resolves agents under the folder's name, as it does with a manifest naming it so", () => {
+    // Mounted on its own, the agent names this folder's plugin after the folder, so its skill-named agent and a
+    // `<folder>:<agent>` literal are what it dispatches. Invocation stays ungraded on this route either way.
+    const tree = {
+      "SKILL.md": '# demo-skill\nsubagent_type: "demo-skill:helper"\n',
+      "agents/demo-skill.md": "primary\n",
+      "agents/helper.md": "helper\n",
+      "agents/unrelated.md": "never dispatched\n",
+    };
+    const bare = resolveCritiquedSkillDir(materialize(tree, "demo-skill"), undefined);
+    const control = resolveCritiquedSkillDir(
+      materialize({ ...tree, ".claude-plugin/plugin.json": '{"name": "demo-skill"}' }, "demo-skill"),
+      undefined,
+    );
+    expect(control.agents.map((a) => a.rel)).toEqual(["agents/demo-skill.md", "agents/helper.md"]);
+    expect(bare.agents.map((a) => a.rel)).toEqual(control.agents.map((a) => a.rel));
+    expect(bare.gradedSkillName).toBeUndefined();
+    expect(control.gradedSkillName).toBeUndefined();
   });
 
   it("a dir with no SKILL.md anywhere resolves no agents", () => {

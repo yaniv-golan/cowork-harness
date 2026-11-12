@@ -21,6 +21,22 @@ All notable changes to this project are documented here. The format is based on
   recorded what its judge read. There is no hint for an unreadable file, on `skill`, legs, `eval`/`hillclimb` arms,
   replay, or inside `regrade`. An unscoped truncated-prefix message also says the cut file may be a generated file
   beside the deliverable that the rubric is not about. Only the message text changes; verdicts do not.
+- **A `remote_plugins` folder with no `.claude-plugin/plugin.json` now loads under its folder name, not its mount id.**
+  Its staged copy gets a manifest (`{"name": "<folder name>"}`), as Claude Desktop writes one into a plugin it syncs
+  without one; the source folder is never written to, an existing manifest is never replaced, and a `::notice::` says
+  when one was written. The agent's skill id for such a plugin changes from `plugin_<id>:<skill>` to
+  `<folder>:<skill>`, which is the id the harness already advertised in `list_plugins` and used to attach
+  `availableSkills[].whenToUse` (both were wrong before for this case). A folder name holding whitespace, `@`, `:`,
+  `/` or `\` cannot be a manifest name: nothing is written, a WARN says so, and the plugin keeps `plugin_<id>`, which
+  the harness now reports too. A local-marketplace plugin with no manifest gets none written (its staged folder
+  already carries its entry name), and the harness's readers now use that name, not the source folder's.
+- `lint-skill`: `plugin-root-in-vm-bash` for a skill with no plugin manifest above it is still a WARN, but its message
+  now names both install routes (as a standalone skill nothing replaces the token; a folder above it loaded as a
+  plugin is named after the folder and the agent does replace it) and its fix suggests adding a manifest. A
+  namespaced `subagent_type` in such a skill is still the INFO `subagent-type-unresolvable`, now saying the linter
+  cannot tell whose plugin it is rather than "belongs to another plugin".
+- `scenario.py resolve-agent-types` explains an empty result on stderr (stdout and the exit code are unchanged), and
+  for a folder with no manifest lists the `<folder>:<agent>` ids its agents would load as.
 
 ### Documentation
 
@@ -36,7 +52,7 @@ All notable changes to this project are documented here. The format is based on
   findings.
 - **Testing an Agent Skills repo with no `plugin.json`.** A new section in the discovery guide, linked from the docs
   index and the companion skill: which mounting gives which skill id (`<folder>:<skill>` for the repo root as a
-  plugin, `plugin_<id>:<skill>` through `remote_plugins`, `skill:<skill>` under `chat --raw`, bare `<skill>` through
+  plugin, also through `remote_plugins`, `skill:<skill>` under `chat --raw`, bare `<skill>` through
   `skills.local`), that the whole root becomes plugin content, that only git-tracked files are staged, and why a
   minimal manifest is the faithful choice for Cowork: Claude Desktop's plugin zip install refuses a plugin without one. The
   chat guide now says `chat --raw` passes only `CLAUDE_CODE_OAUTH_TOKEN` to its container.
@@ -49,6 +65,27 @@ All notable changes to this project are documented here. The format is based on
   It applies wherever the web_fetch approval gate is on: `container` and `hostloop` (and `cowork`, which resolves to
   one of them) when the baseline's web_fetch-via-API gate is on; not `microvm` or `protocol`. Behaviour is unchanged;
   a test now pins the tier rule and the seeded/unseeded contrast.
+
+### Upgrade notes
+
+- **A manifest-less `remote_plugins` skill has a new id.** A scenario that asserts on `plugin_<id>:<skill>` for a
+  `remote_plugins` folder with no `.claude-plugin/plugin.json` now sees `<folder>:<skill>` (the harness writes the
+  manifest Claude Desktop writes for a synced plugin). Update the assertion, or add a manifest to the folder.
+
+### Fixed
+
+- **`critique` and the `lint-skill` corpus sizer resolve a manifest-less plugin's agents.** A `subagent_type`
+  namespaced by the plugin folder's name (`<folder>:<agent>`, the id the agent registers for a plugin with no manifest)
+  was dropped from the graded corpus. A plain skill folder with no manifest also looks up its skill-named agent under
+  its folder name, as it does with a manifest naming it so.
+- **`critique <dir>/skills/<name>` with no plugin manifest at or above it** is still graded alone, but now says so,
+  and gives `critique <dir> --skill <name>` to mount `<dir>` as a plugin instead.
+- **`eval` with a plugin-root arm and a skill-folder arm** no longer reports the skill as "not in both arms": the
+  skill-folder arm's skill is named by its frontmatter `name`, else its source folder's name, so the per-rep
+  invocation fact is recorded. eval also lists the files only the plugin-root arm ships.
+- **`analyze-skill <dir>` on a skills repo root with no manifest** (`skills/*/SKILL.md`, no top-level `SKILL.md`)
+  scanned no markdown and could pass clean; named directly, it is now scanned as a plugin root, the same file set
+  as with a manifest. A skill dir under it still does not walk up to it.
 
 ## [5.0.0] - 2026-11-09
 

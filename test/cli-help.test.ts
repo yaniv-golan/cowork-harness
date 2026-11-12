@@ -452,7 +452,7 @@ describe.skipIf(!can)("cli --help: the source folder's manifest is optional", ()
 
   it("`critique --help` says a skills/<name> path is promoted to its plugin only when the plugin has a manifest", () => {
     const { text } = help("critique");
-    expect(text).toMatch(/only when <plugin> has\s+\.claude-plugin\/plugin\.json/);
+    expect(text).toMatch(/only when <plugin> has a manifest\s+\(\.claude-plugin\/plugin\.json or a root plugin\.json\)/);
   });
 });
 
