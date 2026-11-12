@@ -729,6 +729,14 @@
           "rationale": {
             "type": "string"
           },
+          "decisionReason": {
+            "type": "string",
+            "description": "A tool permission's reason as the agent CLI sent it on the ask (decision_reason), e.g. why it judged a path sensitive. Absent when the request carried none."
+          },
+          "decisionReasonType": {
+            "type": "string",
+            "description": "The kind of that reason (decision_reason_type, e.g. safetyCheck). Absent when the request carried none."
+          },
           "questions": {
             "type": "array",
             "description": "Full AskUserQuestion option set as originally offered \u2014 present only on kind:'question' decisions.",
@@ -1716,7 +1724,7 @@
       "items": {
         "type": "string"
       },
-      "description": "#6: off-registry auto-allows (real Cowork blocks these); non-empty means NOT a faithful pass"
+      "description": "One tool name per permission the agent CLI asked for that nothing scripted answered and cowork parity auto-allowed; non-empty means NOT a faithful pass (nobody decided those asks). The matching decisions[] rows carry the CLI's reason (decisionReason). Decide them with a when_tool rule or permission_parity: strict."
     },
     "partlyScriptedGates": {
       "type": "array",

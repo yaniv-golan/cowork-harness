@@ -2684,6 +2684,11 @@ export interface RunResult {
     effort?: string;
     detail?: unknown;
     rationale?: string;
+    /** A tool permission's reason as the agent CLI sent it on the ask (`decision_reason`), e.g. why it judged a path
+     *  sensitive. Absent when the request carried none. */
+    decisionReason?: string;
+    /** The kind of that reason (`decision_reason_type`, e.g. `safetyCheck`). Absent when the request carried none. */
+    decisionReasonType?: string;
     // The full AskUserQuestion option set (label + description) as originally offered by the model —
     // present only on kind:"question" decisions. Additive to `detail` (which already carries the flat
     // {question: chosen-answer} map) so no existing detail-reading consumer needs to change.
@@ -3349,7 +3354,10 @@ export interface RunResult {
    *  non-deterministically — even if THIS run was fully scripted and didn't hit it. `nonDeterministic`
    *  stays execution-truth (what replay relies on); this is config-truth for audit consumers. */
   nonDeterministicTerminal?: boolean;
-  /** tools auto-allowed by cowork parity for unscripted, off-registry permission requests — real Cowork BLOCKS these for the user. A non-empty list means a green is NOT a faithful pass (pin with --answer or permission_parity: strict). */
+  /** One entry (the tool name) per permission the agent CLI asked for that nothing scripted answered and cowork parity
+   *  auto-allowed. A non-empty list means a green is NOT a faithful pass: nobody decided those asks. The matching
+   *  `decisions[]` rows carry the CLI's reason (`decisionReason`). Decide them with a `when_tool` rule (`answers:` or
+   *  `--answer-policy`) or `permission_parity: strict`; `--answer` cannot answer a tool permission. */
   permissiveAutoAllow?: string[];
   /** Question batches the scenario's scripted `answers:` matched only PART of. Answers are delivered
    *  atomically, so each such batch went WHOLE to the `on_unanswered` fallback and the matched answers were

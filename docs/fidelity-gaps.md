@@ -21,7 +21,7 @@ For how the harness *enforces* the limitations it does reproduce (sealed filesys
 
 ## On this page
 
-Every `##` below is one gap (or one scoping note). Grouped, since there are 44 of them.
+Every `##` below is one gap (or one scoping note). Grouped, since there are 45 of them.
 
 - **Read first** — [Which Cowork LANE this harness models](#which-cowork-lane-this-harness-models--read-first-it-scopes-everything-below) · [Fidelity tier differences](#fidelity-tier-differences)
 - **Session & workspace** — [Mid-session skill/plugin re-sync](#mid-session-skillplugin-re-sync) · [Mid-session folder addition](#mid-session-folder-addition) · [A workspace fixture starts with a fresh conversation](#a-workspace-fixture-starts-with-a-fresh-conversation) · [Deletes in `outputs/` follow the baseline's recorded mount mode](#deletes-in-outputs-follow-the-baselines-recorded-mount-mode) · [Folder access in `chat` sessions](#folder-access-in-chat-sessions) · [No session resume in `chat`](#no-session-resume-in-chat) · [Chat-lane session topology (scratchMode stays false)](#chat-lane-session-topology-scratchmode-stays-false)
@@ -30,7 +30,7 @@ Every `##` below is one gap (or one scoping note). Grouped, since there are 44 o
 - **Prompt & model** — [System-prompt reconstruction](#system-prompt-reconstruction) · [Server-driven system-prompt patches (`coworkSyspromptMap`)](#server-driven-system-prompt-patches-coworksyspromptmap) · [Model selection](#model-selection--the-harness-inherits-the-local-cli-default) · [Thinking forced on for managed-config models](#thinking-forced-on-for-managed-config-models-thinkingalwaysonmodels) · [Protocol-tier sub-agents get no Cowork environment append](#protocol-tier-sub-agents-get-no-cowork-environment-append) · [The silent-turn reminder is served by capability, and it lands in the graded corpus](#the-silent-turn-reminder-is-served-by-capability-and-it-lands-in-the-graded-corpus)
 - **Identity & environment** — [Auto-memory: the off switch is modeled, the memory keys are not](#auto-memory-the-off-switch-is-modeled-the-memory-keys-are-not) · [Background tasks are off on every tier](#background-tasks-are-off-on-every-tier) · [Host-derived identity env vars](#host-derived-identity-env-vars) · [Guest runtime identity](#guest-runtime-identity--per-session-unix-user-uidgid-and-home) · [Session slug shape](#session-slug-shape) · [Path-gate roots are frozen at spawn](#path-gate-roots-are-frozen-at-spawn) · [Host-loop outside-folder fence](#host-loop-outside-folder-fence-configured-behaviour-not-measured)
 - **Sandbox & egress** — [`--raw` mode bypasses the egress sandbox](#--raw-mode-bypasses-the-egress-sandbox) · [HIPAA restriction is a process-global latch](#hipaa-restriction-is-a-process-global-latch) · [Booting the real rootfs image under a generic VZ host](#booting-the-real-rootfs-image-under-a-generic-vz-host) · [Stopping a host-tier run stops the processes the agent started](#stopping-a-host-tier-run-stops-the-processes-the-agent-started)
-- **Permissions & limits** — [A frozen search corpus is not live search](#a-frozen-search-corpus-is-not-live-search) · [`answer_channel: none` has no Cowork counterpart](#answer_channel-none-has-no-cowork-counterpart) · [Auto-mode permission rubric is not modeled](#auto-mode-permission-rubric-is-not-modeled) · [Gate `1648655587` is the scheduled-task session limiter](#gate-1648655587-is-the-scheduled-task-session-limiter--distinct-from-the-agent-side-task-fan-out-cap)
+- **Permissions & limits** — [A frozen search corpus is not live search](#a-frozen-search-corpus-is-not-live-search) · [`answer_channel: none` has no Cowork counterpart](#answer_channel-none-has-no-cowork-counterpart) · [A `sed` substitution on a file in the agent's config directory asks for Bash](#a-sed-substitution-on-a-file-in-the-agents-config-directory-asks-for-bash) · [Auto-mode permission rubric is not modeled](#auto-mode-permission-rubric-is-not-modeled) · [Gate `1648655587` is the scheduled-task session limiter](#gate-1648655587-is-the-scheduled-task-session-limiter--distinct-from-the-agent-side-task-fan-out-cap)
 
 ## Which Cowork LANE this harness models — read first, it scopes everything below
 
@@ -1575,6 +1575,40 @@ deliberate departure from Cowork. Every surface labels such a run `[headless, no
 the flag also removes `AskUserQuestion`, `EnterPlanMode` and `ExitPlanMode` from the agent's toolset, so the model
 asks in prose. It is also not an emulation of any
 particular headless product. See [headless-no-answer.md](./headless-no-answer.md).
+
+## A `sed` substitution on a file in the agent's config directory asks for Bash
+
+**What the agent does (measured on agent 2.1.317):** Bash is pre-approved by the baseline's `--allowedTools`, so an
+ordinary shell command runs without a permission ask. The agent's own write-safety check still asks for one shape: a
+`sed` whose script is a substitution (`s/…/…/`), given a file inside the agent's config directory as its operand.
+The agent treats that as a possible edit of a sensitive file and sends a `can_use_tool` request for Bash. In Cowork
+that directory is `mnt/.claude` under the session, which is also where the agent saves large tool results, so a
+skill that post-processes a saved `web_fetch` result with `sed` meets it. The request carries the agent's reason in
+`decision_reason` (it names the file as sensitive) and its kind in `decision_reason_type`: `safetyCheck` for a
+standalone command, `subcommandResults` when the `sed` is one stage of a pipeline. Not asked, in the same
+measurement: a print-only `sed` (`sed -n …p`), `grep`, `cat`, a `sed` reading a pipe, and the same substitution on a
+file outside the config directory. No permission classifier ran: in the default permission mode the ask went
+straight to the permission prompt channel, even though the request is marked classifier-approvable.
+
+**Real Cowork (read in asar 4.23118.0):** Desktop never reads that classifier mark. On the local lane, an attended
+Bash ask reaches Desktop's permission handler and waits for the user's answer. In a scheduled task, a tool the task
+holds a stored approval for is approved without asking; otherwise the ask waits and is declined when the run is reaped
+(or superseded by a newer run) with nobody there. How long that takes is not established,
+and neither is whether attended local tasks are still offered to a given account (see
+[Which lane a session actually ran on](#which-lane-a-session-actually-ran-on)).
+
+**What the harness does:** the ask arrives like any other tool permission; at `container` the shell tool is Bash, so
+the ask reaches the run. (At `hostloop` shell commands go through `mcp__workspace__bash`; whether that path asks
+the same way was not measured.) Unscripted, `cowork` parity auto-allows it and the run fails the `permissive_auto_allow` verdict signal. The signal
+quotes the agent's reason (also kept on the matching `decisions[]` row as `decisionReason`) and, for a Bash ask in a
+`container` run on the local lane, says what an attended and a scheduled Cowork task would do; at `hostloop` it makes
+no Cowork claim. To decide the ask,
+script a `when_tool: Bash` rule ([scenario.md](scenario.md#tool-permissions)); to avoid it, read the file with a
+command that cannot edit it.
+
+**Residual:** the rule above was measured on the native macOS build of agent 2.1.317, not the Linux build Cowork
+stages in its VM, with no server-delivered feature flags. The check is part of the agent's JavaScript, so the two
+builds most likely agree, but that is not proven.
 
 ## Auto-mode permission rubric is not modeled
 

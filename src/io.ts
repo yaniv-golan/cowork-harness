@@ -1,4 +1,5 @@
 import { writeFileSync, renameSync, writeSync } from "node:fs";
+import { homedir } from "node:os";
 import { collectSecrets, scrub } from "./secrets.js";
 
 /**
@@ -27,6 +28,19 @@ export function tildeify(p: string): string {
   if (p === home) return "~";
   const prefix = home.endsWith("/") ? home : home + "/";
   return p.startsWith(prefix) ? "~/" + p.slice(prefix.length) : p;
+}
+
+/**
+ * `tildeify` over free text: every place the user's home directory starts a path (`os.homedir()`, followed by `/` or
+ * the end of the path) becomes `~`, for DISPLAY. Exact prefix only: a home of `/Users/a` leaves `/Users/ab/x` and
+ * `/x/Users/a/y` alone. Used where text the agent produced (a permission ask's reason) is printed or put in a verdict
+ * message, so a host path does not carry the username. A missing or root home returns the text unchanged.
+ */
+export function tildeifyText(text: string, home: string = homedir()): string {
+  const h = home.replace(/\/+$/, "");
+  if (!h || !text) return text;
+  const esc = h.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&");
+  return text.replace(new RegExp(`(?<![^\\s"'\`(=:,;<>\\[{])${esc}(?=/|$|[\\s"'\`),;:>\\]}])`, "g"), "~");
 }
 
 /**

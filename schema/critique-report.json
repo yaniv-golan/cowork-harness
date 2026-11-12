@@ -245,6 +245,19 @@
       "type": "string",
       "description": "the graded turn's result.json outcome (e.g. delivered_clean)"
     },
+    "gradedSignals": {
+      "type": "array",
+      "description": "the GRADED run's failing verdict signals (code + the message's first line), lifted from its own verdict; they concern the graded run, not the critique. Absent when none failed",
+      "items": {
+        "type": "object",
+        "required": ["code", "message"],
+        "additionalProperties": false,
+        "properties": {
+          "code": { "type": "string" },
+          "message": { "type": "string" }
+        }
+      }
+    },
     "gradedSkillHash": {
       "type": "string",
       "description": "content-exact hash of the MOUNTED folder — the cross-FIX pairing key (per-plugin under --skill); it keys the whole mounted plugin — for per-skill change detection use skillTreeHash (corpusHash is a floor)"

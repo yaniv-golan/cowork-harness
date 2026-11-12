@@ -182,16 +182,11 @@ hands `fn` exactly this dict.
 - `agent` is **retired** — `on_unanswered: agent` is rejected by the schema. The enum is
   `["fail", "prompt", "llm", "first"]`.
 
-### A script-running skill trips `permissive_auto_allow` — at `protocol` specifically
+### When `permissive_auto_allow` fires: the agent CLI asked, nothing scripted answered
 
-The default `permission_parity: cowork` auto-allows an unscripted, off-registry tool ask — and records
-it, because real Cowork would have BLOCKED for the user. `computeVerdict` then FAILS the run: a green
-carrying one would not be a faithful pass. Only `Read`, `Glob` and `Grep` are default-allow; **`Bash` is
-off-registry**.
-
-Two things decide whether you ever see it, and neither is obvious. The harness only decides how to
-ANSWER a permission ask; whether the agent ASKS is the agent binary's own logic, and that varies by
-both the command and the tier. All rows below are measured, same scenario shape, same session:
+The default `permission_parity: cowork` auto-allows an unscripted ask for any tool but `Read`, `Glob` and `Grep`,
+and `computeVerdict` FAILS the run: nobody decided the ask. The harness only answers asks; whether the agent ASKS is
+the agent's own logic, varying by command and tier. Measured (the last row on its own, in agent 2.1.317's macOS build):
 
 | Tier | Bash command | tool used | ask | verdict |
 |---|---|---|---|---|
@@ -199,21 +194,19 @@ both the command and the tier. All rows below are measured, same scenario shape,
 | `protocol` | `python3 -c "print(42)"` | `Bash` | **one** | ✗ `permissive_auto_allow` |
 | `container` | `python3 -c "print(42)"` | `Bash` | none | ✓ green |
 | `hostloop` | `python3 -c "print(42)"` | `mcp__workspace__bash` | none | ✓ green |
+| `container` | `sed 's/…/…/'` on a file under `mnt/.claude` | `Bash` | **one** | ✗ `permissive_auto_allow` |
 
-So the guard is **not** a general hazard for script-running skills — it is a `protocol` one. The host
-CLI that L0 spawns asks for a command like `python3 -c …` and not for `echo`; the staged agent at
-`container` asks for neither, and `hostloop` routes shell through `mcp__workspace__bash` and so is not
-even the same tool. A skill that runs `python3 ${CLAUDE_SKILL_DIR}/scripts/…` therefore goes red at
-`protocol` on an otherwise-correct run, while the same skill is green on the sandboxed tiers — and a
-hello-world probe is green everywhere and teaches the wrong expectation.
+So a hello-world probe teaches the wrong expectation: `python3 ${CLAUDE_SKILL_DIR}/scripts/…` asks at `protocol`
+only, and a `sed` substitution on a file in the agent's config dir (where saved tool results land) is a write-safety
+ask (seen at container; hostloop's shell is a different tool). The signal quotes the CLI's reason (`decisions[].decisionReason`) and, at container on the local
+lane, what Cowork would do.
 
-Three ways through, in preference order: script the gate (`--answer` / `answers:`), which is what the
-warning tells you and keeps the run deterministic; set `permission_parity: strict` to deny instead of
-allow, if refusal is what you want to test; or assert `allow_permissive_auto_allow: true` when the
-permissive behaviour is deliberately what the scenario is about.
+Decide it with a `when_tool: Bash` rule (`answers:`, or `--answer-policy` on `skill`/`critique`; `--answer` cannot
+answer a tool permission), `permission_parity: strict` to deny, or `allow_permissive_auto_allow: true` when
+permissive behaviour is the point.
 
-> **What is NOT established.** Why the host CLI asks for one command and not another was observed, not
-> traced — do not infer a rule for which commands ask from these rows. `microvm` was not measured.
+> **What is NOT established.** Why the host CLI asks for `python3 -c` and not `echo` was observed, not traced; `microvm`
+> was not measured.
 
 ### `baseline agent binary not found` — a Desktop update pruned the pinned ELF
 
