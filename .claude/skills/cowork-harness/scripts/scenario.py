@@ -3140,8 +3140,8 @@ def _findings_plugin_root(path, line, ctx_label, text, in_plugin=True):
                 "environment variable, which is empty at host-loop (Cowork's default), and a path built from it points "
                 "nowhere. If a folder above it is instead loaded as a plugin, the agent names that plugin after its "
                 "folder and does replace the token.",
-                "If the skill ships in a plugin, add `.claude-plugin/plugin.json` at the plugin root (Claude Desktop's "
-                "plugin zip upload refuses a plugin without one), and the linter then checks it as a plugin skill. "
+                "If the skill ships in a plugin, add `.claude-plugin/plugin.json` at the plugin root (Desktop's "
+                "plugin zip install path refuses a plugin without one), and the linter then checks it as a plugin skill. "
                 "Otherwise resolve its files at run time (see the plugin-root guide), for example by finding this "
                 "skill's SKILL.md under /sessions.",
                 path,
