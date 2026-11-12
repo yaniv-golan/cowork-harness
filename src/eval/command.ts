@@ -696,8 +696,12 @@ function prepareArms(args: EvalArgs, deps: EvalDeps, ctx: EvalContext, armsRoot:
   // name is its own (frontmatter, else the SOURCE folder's name — the snapshot's name is the plugin's). Read from the
   // snapshot, which is what is mounted (a git arm's `sourceDir` is the work tree, not the ref). critique's resolver is
   // not asked here: it refuses `--skill` on a skill folder, on purpose, for critique's own positional.
+  // A snapshot with its own `.claude-plugin/` is a plugin in its own right (critique's shape 1, kept ungraded there),
+  // not a skill folder, so it keeps critique's resolver.
   const isSkillFolderArm = (s: SnapshotInfo) =>
-    existsSync(join(s.dir, "SKILL.md")) && (args.skill === undefined || !existsSync(join(s.dir, "skills", args.skill, "SKILL.md")));
+    existsSync(join(s.dir, "SKILL.md")) &&
+    !existsSync(join(s.dir, ".claude-plugin")) &&
+    (args.skill === undefined || !existsSync(join(s.dir, "skills", args.skill, "SKILL.md")));
   const skillNames = snaps.map((s) => {
     if (isSkillFolderArm(s)) {
       const own = rootSkillRegisteredName(s.dir, basename(s.sourceDir ?? s.dir));
