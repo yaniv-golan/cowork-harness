@@ -853,7 +853,10 @@ export function resolveCritiquedSkillDir(skillFolder: string, skillSelector: str
       const registered = sanitizeSkillName((fm.startsWith(`${plugin}:`) ? fm.slice(plugin.length + 1) : fm) || basename(mountRoot));
       return { skillDir: skillFolder, ...agentsFor(skillFolder, skillFolder, basename(mountRoot)), gradedSkillName: registered };
     }
-    return { skillDir: skillFolder, ...agentsFor(skillFolder, skillFolder, readPluginName(skillFolder)) };
+    // Shape 1, or a plain skill folder with no manifest anywhere: mounted alone, the agent names it after its
+    // manifest, else after the folder (`<folder>:<skill>` measured), so the skill-named agent is looked up under
+    // that name. Invocation stays ungraded on this route, with or without a manifest.
+    return { skillDir: skillFolder, ...agentsFor(skillFolder, skillFolder, readPluginName(skillFolder) ?? basename(mountRoot)) };
   }
   const skills = listPluginSkills();
   if (skills.length === 1)
