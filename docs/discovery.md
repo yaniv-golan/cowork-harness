@@ -70,31 +70,34 @@ command accepts it as it is. What changes is how you mount it, and each mounting
 | You pass | What is mounted | Skill id the agent registers |
 |---|---|---|
 | `skill <root>`, `plugins.local_plugins: [<root>]`, `chat <root>` | the **whole root** as one plugin, named after the folder | `<folder>:<skill>` |
-| `plugins.remote_plugins: [<root>]` | the whole root, staged as `.remote-plugins/plugin_<id>` | `plugin_<id>:<skill>` (the staged directory's name, not the folder's) |
+| `plugins.remote_plugins: [<root>]` | the whole root, staged as `.remote-plugins/plugin_<id>`, with a `{"name": "<folder>"}` manifest written into the staged copy | `<folder>:<skill>` (`plugin_<id>:<skill>` when the folder name holds whitespace, `@`, `:`, `/` or `\`, which a manifest cannot carry; a WARN says so) |
 | `chat --raw <root>` | the whole root, staged under a fixed `skill` directory | `skill:<skill>` |
 | `skills.local: [<root>/skills/<name>]` | that one skill folder, standalone | `<skill>` |
 
 On the `local_plugins` routes (the first row), with no manifest the plugin name falls back to the folder name, as the
-staged agent's does; the other rows name it after their staged directory instead. On every plugin route the whole
-root is plugin content: `README.md` and `AGENTS.md` are staged with it, and the agents in a root
-`agents/` register under the same plugin name as that route's skills (`<folder>:<agent>` on the `local_plugins`
-routes).
+staged agent's does. On `remote_plugins` the harness writes a manifest naming the folder into its staged copy (never
+into your folder), as Claude Desktop does for a plugin it syncs without one, so the name is the folder's there too.
+`chat --raw` names it after its fixed staged directory. On every plugin route the whole root is plugin content:
+`README.md` and `AGENTS.md` are staged with it, and the agents in a root `agents/` register under the same plugin name
+as that route's skills (`<folder>:<agent>` on the `local_plugins` and `remote_plugins` routes).
 
 - **Commit first.** Inside a git repo the harness stages only git-tracked files (in the index: committed or
   `git add`-ed), so a new, untracked file is not in the run.
 - **For Cowork fidelity, add a minimal manifest.** Claude Desktop's plugin install path (its zip install, the one
   traced) refuses a plugin with no `.claude-plugin/plugin.json`, and Desktop writes one for a server-synced plugin
   that lacks it, so on those routes a plugin reaches Cowork's agent with a manifest. A one-line `{"name": "my-skills-repo"}`, with the folder's name, keeps
-  the `<folder>:<skill>` id; `remote_plugins` then registers `my-skills-repo:<skill>` as well. The alternative is to
-  test the skill standalone through `skills.local`.
-- **The static checkers expect the manifest too.** Without one they read the tree as a standalone skill:
-  - `lint-skill` warns that `${CLAUDE_PLUGIN_ROOT}` is never replaced (true on `skills.local`; on the plugin routes the
-    agent does replace it), calls the repo's own `<folder>:<agent>` another plugin's, and misses a mistyped agent id;
-  - `resolve-agent-types <root>` prints no agents;
-  - `analyze-skill <root>` scans no markdown file and reports a clean pass, and on `<root>/skills/<name>` it skips the
-    root's `agents/`;
-  - `critique` leaves an agent referenced as `<folder>:<agent>` out of the graded corpus, and grades a
-    `<root>/skills/<name>` path as a bare folder; pass the root instead (with `--skill <name>` when it has several).
+  the `<folder>:<skill>` id on every plugin route. The alternative is to test the skill standalone through
+  `skills.local`.
+- **The static checkers cannot tell how a tree with no manifest will be installed**, so some still need the manifest:
+  - `lint-skill` keeps the `${CLAUDE_PLUGIN_ROOT}` WARN, naming both routes (on `skills.local` nothing replaces the
+    token; on the plugin routes the agent does), says it cannot tell whose plugin a `<folder>:<agent>` is, and so
+    cannot catch a mistyped agent id; with a manifest it checks all three;
+  - `resolve-agent-types <root>` prints no types, and says on stderr why and what `<folder>:<agent>` ids the agents
+    would load as;
+  - `analyze-skill <root>` scans the root as a plugin (the same files as with a manifest); on `<root>/skills/<name>` it
+    still skips the root's `agents/`, since it does not walk up to a folder with no manifest;
+  - `critique <root>` keeps an agent referenced as `<folder>:<agent>` in the graded corpus; a `<root>/skills/<name>`
+    path is graded as a bare folder, with a notice; pass the root instead (with `--skill <name>` when it has several).
 
   Scenario `lint` is unaffected.
 

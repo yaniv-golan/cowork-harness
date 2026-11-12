@@ -26,10 +26,11 @@ All notable changes to this project are documented here. The format is based on
   without one; the source folder is never written to, an existing manifest is never replaced, and a `::notice::` says
   when one was written. The agent's skill id for such a plugin changes from `plugin_<id>:<skill>` to
   `<folder>:<skill>`, which is the id the harness already advertised in `list_plugins` and used to attach
-  `availableSkills[].whenToUse` (both were wrong before for this case). A local-marketplace plugin with no manifest
-  gets one naming its marketplace entry, and the harness's readers now use the entry name too, not the source
-  folder's name. A scenario asserting on the old `plugin_<id>:<skill>` id of a manifest-less remote plugin needs the
-  new id.
+  `availableSkills[].whenToUse` (both were wrong before for this case). A folder name holding whitespace, `@`, `:`,
+  `/` or `\` cannot be a manifest name: nothing is written, a WARN says so, and the plugin keeps `plugin_<id>`, which
+  the harness now reports too. A local-marketplace plugin with no manifest gets none written (its staged folder
+  already carries its entry name), and the harness's readers now use that name, not the source folder's. A scenario
+  asserting on the old `plugin_<id>:<skill>` id of a manifest-less remote plugin needs the new id.
 - `lint-skill`: `plugin-root-in-vm-bash` for a skill with no plugin manifest above it is still a WARN, but its message
   now names both install routes (as a standalone skill nothing replaces the token; a folder above it loaded as a
   plugin is named after the folder and the agent does replace it) and its fix suggests adding a manifest. A
@@ -52,7 +53,7 @@ All notable changes to this project are documented here. The format is based on
   findings.
 - **Testing an Agent Skills repo with no `plugin.json`.** A new section in the discovery guide, linked from the docs
   index and the companion skill: which mounting gives which skill id (`<folder>:<skill>` for the repo root as a
-  plugin, `plugin_<id>:<skill>` through `remote_plugins`, `skill:<skill>` under `chat --raw`, bare `<skill>` through
+  plugin, also through `remote_plugins`, `skill:<skill>` under `chat --raw`, bare `<skill>` through
   `skills.local`), that the whole root becomes plugin content, that only git-tracked files are staged, and why a
   minimal manifest is the faithful choice for Cowork: Claude Desktop's plugin zip install refuses a plugin without one. The
   chat guide now says `chat --raw` passes only `CLAUDE_CODE_OAUTH_TOKEN` to its container.
