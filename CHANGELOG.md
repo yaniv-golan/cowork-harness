@@ -8,6 +8,12 @@ All notable changes to this project are documented here. The format is based on
 
 ### Documentation
 
+- **Testing an Agent Skills repo with no `plugin.json`.** A new section in the discovery guide, linked from the docs
+  index and the companion skill: which mounting gives which skill id (`<folder>:<skill>` for the repo root as a
+  plugin, `plugin_<id>:<skill>` through `remote_plugins`, `skill:<skill>` under `chat --raw`, bare `<skill>` through
+  `skills.local`), that the whole root becomes plugin content, that only git-tracked files are staged, and why a
+  minimal manifest is the faithful choice for Cowork: Claude Desktop's zip upload refuses a plugin without one. The
+  chat guide now says `chat --raw` passes only `CLAUDE_CODE_OAUTH_TOKEN` to its container.
 - **`skill`, `probe-dispatch` and `critique` help no longer say the source folder needs `.claude-plugin/plugin.json`.**
   It is optional: the plugin name falls back to the folder name, and an Agent Skills repo root with
   `skills/<name>/SKILL.md` is accepted as is. `critique --help` adds that a `<plugin>/skills/<name>` path is graded
