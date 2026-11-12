@@ -166,6 +166,22 @@ describe("controls: what must NOT change", () => {
       expect(stderr).not.toMatch(/plugin\.json/);
     });
 
+    it(`${tier}: a marketplace plugin WITH a manifest naming it differently from its entry is staged byte-for-byte, and its name wins`, () => {
+      const body = '{\n  "name": "declared-name"\n}\n';
+      const mk = mkdtempSync(join(tmpdir(), "pms-mk-"));
+      write(mk, {
+        ".claude-plugin/marketplace.json": JSON.stringify({ name: "mymkt", plugins: [{ name: "demo-plugin", source: "./src-dir" }] }),
+      });
+      skillsRepo(mk, "src-dir", { ".claude-plugin/plugin.json": body });
+      const p = planFor({ local_marketplaces: [mk], enabled: ["demo-plugin@mymkt"] }, tier);
+      const m = pluginMount(p);
+      const { mnt, stderr } = stage(p, tier);
+      const staged = join(mnt, m.mountPath);
+      expect(readFileSync(join(staged, ".claude-plugin", "plugin.json"), "utf8")).toBe(body);
+      expect(readersAgree(p, staged)).toBe("declared-name");
+      expect(stderr).not.toMatch(/plugin\.json/);
+    });
+
     it(`${tier}: a manifest-less local_plugins mount gets nothing written (its staged leaf already is its name)`, () => {
       const src = skillsRepo(mkdtempSync(join(tmpdir(), "pms-src-")));
       const p = planFor({ local_plugins: [src] }, tier);
